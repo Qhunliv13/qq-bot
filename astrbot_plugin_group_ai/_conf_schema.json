@@ -1,0 +1,48 @@
+{
+  "owner_ids": {
+    "description": "管理员（主人）的 QQ 号列表。留空 = 不区分身份，所有发言人都按普通群友对待。",
+    "type": "list",
+    "hint": "填 QQ 号，可填多个。模型会被告知谁是管理员。",
+    "default": []
+  },
+  "bot_name": {
+    "description": "机器人在提示词里的自称。留空则使用内置默认名。",
+    "type": "string",
+    "default": ""
+  },
+  "persona": {
+    "description": "自定义人设正文（系统提示词主体）。留空则使用内置的通用默认人设。",
+    "type": "text",
+    "hint": "建议保持简短；很长的角色设定请改用 persona_file。",
+    "default": ""
+  },
+  "persona_file": {
+    "description": "人设文件路径（相对 AstrBot 工作目录）。存在则优先于 persona。",
+    "type": "string",
+    "default": ""
+  },
+  "target_groups": {
+    "description": "只在哪些群工作。留空 = 所有群都工作。",
+    "type": "list",
+    "hint": "填群号，可填多个。",
+    "default": []
+  },
+  "member_watch_groups": {
+    "description": "监听哪些群的成员变动（加群/退群）。留空 = 不监听。",
+    "type": "list",
+    "hint": "监听会每分钟拉一次群成员名单，大群数据量较大，建议只填必要的群。",
+    "default": []
+  },
+  "onebot_base": {
+    "description": "OneBot 实现（NapCat / Lagrange 等）的 HTTP 接口地址，用于拉群列表与成员名单。",
+    "type": "string",
+    "hint": "容器化部署时注意：容器内的 127.0.0.1 不是宿主机。",
+    "default": "http://127.0.0.1:3000"
+  },
+  "web_enabled": {
+    "description": "是否允许联网查询（搜索、打开网页、搜图）。",
+    "type": "bool",
+    "hint": "关掉后提示词不再引导模型联网；适合出网受限或不想让机器人上网的部署。",
+    "default": true
+  }
+}
