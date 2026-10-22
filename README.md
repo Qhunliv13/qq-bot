@@ -1,7 +1,5 @@
 # README 是 AI 写的
 
-
-
 # 群聊 AI 插件（AstrBot）
 
 一个让大模型**自己判断该不该在群里接话**的 AstrBot 插件。它不是"随机概率回复"，
@@ -12,6 +10,13 @@
 **群成员变动感知**（加群/退群）。
 
 > 只依赖 AstrBot 与一个 OpenAI 兼容的对话接口；不绑定任何特定厂商、角色或部署环境。
+
+本仓库含两个插件：**`astrbot_plugin_group_ai`**（轻量群聊对话）与
+**`astrbot_plugin_higan`**（完整人格 + 自带虚拟机，能截屏、上网、点页面、跑脚本、收发邮件与文件）。
+两者可独立使用，也可一起装；区别见[目录结构](#目录结构)下面的对比表。
+
+- 官网：<https://aiapi.qhunliv13.online>
+- 交流群：**146045691**（Q-API 中转站）
 
 ---
 
@@ -30,13 +35,30 @@
 │   ├── verify_qqbot_project.py    自检：脱敏 + 属性引用 + 配置驱动 + 语法/JSON
 │   ├── check_docs_consistency.py  自检：文档 / schema / 代码 三者一致
 │   └── lint_pyflakes.py           静态检查（不依赖 `python -m pyflakes` 入口）
-└── astrbot_plugin_group_ai/       ← 插件本体，整个目录拷进 AstrBot 的 data/plugins/
-    ├── main.py                    插件主体：事件接入、回复决策、各能力编排
-    ├── config.py                  实例配置（管理员/自称/人设/群范围/OneBot 地址）
-    ├── prompts.py                 提示词模板 + 通用默认人设
-    ├── _conf_schema.json          AstrBot 配置面板 schema
+├── astrbot_plugin_group_ai/       ← 插件一：群聊对话（配置说明见本文件）
+│   ├── main.py                    插件主体：事件接入、回复决策、各能力编排
+│   ├── config.py                  实例配置（管理员/自称/人设/群范围/OneBot 地址）
+│   ├── prompts.py                 提示词模板 + 通用默认人设
+│   ├── _conf_schema.json          AstrBot 配置面板 schema
+│   └── metadata.yaml              插件元信息
+└── astrbot_plugin_higan/          ← 插件二：带虚拟机的完整人格（详见该目录 README.md）
+    ├── main.py                    插件主体：决策 / 工具分发 / 发送
+    ├── agent_loop.py              工具回路（纯函数，可单测）
+    ├── prompts_v2.py              系统提示词与消息组装（缓存友好）
+    ├── memory.py / history.py     跨群共享记忆 / 聊天历史落盘与检索
+    ├── tasks.py                   后台任务
+    ├── slang.py                   俚语学习（可选，默认未启用）
     └── metadata.yaml              插件元信息
 ```
+
+**两个插件的区别**
+
+| | `astrbot_plugin_group_ai` | `astrbot_plugin_higan` |
+|---|---|---|
+| 定位 | 通用群聊对话插件，轻量 | 完整人格 + 自带虚拟机（截屏/上网/点击/执行） |
+| 依赖 | 只需 AstrBot + OpenAI 兼容接口 | 另需一个虚拟机侧的 HTTP 服务（默认 `127.0.0.1:18003`） |
+| 适合 | 想快速上手、只在群里聊天 | 想让她真的动手做事（看屏幕、点网页、收发文件） |
+
 
 **自检**（改完跑一遍，确认没有把具体值写回代码、也没混入真实数据）：
 
