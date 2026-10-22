@@ -1,6 +1,0 @@
-name: astrbot_plugin_group_ai
-display_name: 群聊 AI（自主回复 · 看图 · 表情包 · 联网）
-desc: 让模型自己判断该不该在群里接话（不是随机概率），能看图、收发与自管理表情包、联网查资料、认人与感知群成员变动
-version: 1.0.0
-author: Qhunliv13
-repo: ""
