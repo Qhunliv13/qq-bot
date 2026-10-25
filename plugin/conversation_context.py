@@ -78,8 +78,10 @@ def system_prompt(persona: str) -> str:
             "response": {
                 "options": ["text", "SILENT"],
                 "selection": (
-                    "The model may choose which messages to address, whether to respond, "
-                    "and whether an available tool is relevant. SILENT denotes no user-facing reply."
+                    "For a current batch, the model may choose a positive subset with a JSON object "
+                    "{\"reply_to\":[message_id,...],\"text\":\"...\"}; reply_to identifies "
+                    "the messages being answered. An empty text and empty reply_to means silence. "
+                    "The model may address multiple messages in one reply. SILENT denotes no user-facing reply."
                 ),
             },
             "transport": {

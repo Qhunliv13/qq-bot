@@ -1259,14 +1259,12 @@ class HiganPlugin(Star):
             self._busy[group] = True
             try:
                 while self._pending.get(group):
-                    # Short bounded collection window; not a debounce reset by every new message.
-                    delay = max(0.0, min(5.0, float(os.environ.get("HIGAN_BATCH_WINDOW", "2"))))
-                    if delay:
-                        await asyncio.sleep(delay)
                     if not hasattr(self, "_execution_lock"):
                         self._execution_lock = asyncio.Lock()
                     async with self._execution_lock:
-                        # Drain only after acquiring the shared lock: waiting chat forms one turn.
+                        # Drain only after the previous model/tool/send turn is complete.
+                        # Messages arriving while that turn runs remain the next batch; no timer
+                        # decides whether they belong to the current decision.
                         entries = list(self._pending.get(group, []))
                         self._pending[group] = []
                         entries = [entry for entry in entries if self._policy_allows(entry[0], group)]
@@ -1394,8 +1392,17 @@ class HiganPlugin(Star):
             return
         # [wire-loop-v2] 两条通路都走"工具优先"（失败自动回退原裁决 ✓）
         reply = await self._decide_tools_first(event, group, text, has_image)
+        from .reply_selection import decode_reply
+        turn_records = ((getattr(self, "_turn_context", {}) or {}).get(group, {}).get("messages") or [])
+        selection = decode_reply(reply, turn_records)
+        if selection["error"]:
+            logger.warning("[higan] 模型回复目标无效，跳过发送")
+            return
+        reply = selection["text"]
         if not reply:
             return
+        self._last_reply_selection = selection
+        self._last_quote = selection.get("quote_id")
         # 模型要求联网搜索 → 先搜，再把结果喂回让它作答（工具调用）
         if SEARCH_MARKER.search(reply):
             provider = self.context.get_using_provider(event.unified_msg_origin)

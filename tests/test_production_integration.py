@@ -167,8 +167,6 @@ def production(tmp_path, monkeypatch):
         raise AssertionError("real network forbidden in production integration tests")
 
     monkeypatch.setattr(urllib.request, "urlopen", deny_network)
-    # Baseline contracts exercise immediate dispatch; batch-specific tests opt into a short window.
-    monkeypatch.setenv("HIGAN_BATCH_WINDOW", "0")
     klass = _load_production(tmp_path)
 
     def make_instance():

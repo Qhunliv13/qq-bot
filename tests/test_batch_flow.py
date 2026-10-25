@@ -7,6 +7,7 @@ collection, attribution, history, probability, silence, and consumption remain r
 import asyncio
 import copy
 import json
+import os
 
 import pytest
 
@@ -39,27 +40,123 @@ def _sent(events):
     return [chain for event in events for chain in event.sent]
 
 
+async def _arrive_while_model_active(plugin, events):
+    """Freeze the first real model result while later arrivals queue for one follow-up."""
+    started, release = asyncio.Event(), asyncio.Event()
+    original = plugin._llm_tools
+    calls = 0
+
+    async def model(*args, **kwargs):
+        """Retain real request construction and hold only the first model I/O boundary."""
+        nonlocal calls
+        calls += 1
+        result = await original(*args, **kwargs)
+        if calls == 1:
+            started.set()
+            await release.wait()
+        return result
+
+    plugin._llm_tools = model
+    active = asyncio.create_task(plugin.on_message(events[0]))
+    try:
+        await asyncio.wait_for(started.wait(), 2)
+        for event in events[1:]:
+            await plugin.on_message(event)
+        assert not active.done()
+        assert len(plugin._pending["42"]) == len(events) - 1
+    finally:
+        release.set()
+        await asyncio.wait_for(active, 2)
+
+
+async def _arrive_while_execution_locked(plugin, events):
+    """Collect a batch behind the existing execution lock, not a timer window."""
+    plugin._execution_lock = asyncio.Lock()
+    await plugin._execution_lock.acquire()
+    active = asyncio.create_task(plugin.on_message(events[0]))
+    try:
+        # A scheduler yield lets the first entry queue behind the held lock.
+        await asyncio.sleep(0)
+        for event in events[1:]:
+            await plugin.on_message(event)
+        assert len(plugin._pending["42"]) == len(events)
+    finally:
+        plugin._execution_lock.release()
+        await asyncio.wait_for(active, 2)
+
+
 @pytest.mark.parametrize("answer", ["One reply covers weather and lunch.", "SILENT"])
-def test_short_window_collects_three_messages_once_including_whole_batch_silence(production, monkeypatch, answer):
-    """A real short collection window gives three arrivals one model and at most one send."""
+def test_active_model_collects_later_messages_once_including_whole_batch_silence(production, monkeypatch, answer):
+    """First arrival starts immediately; two arrivals during its model form one next batch."""
     plugin = production()
     _entry(plugin)
-    monkeypatch.setenv("HIGAN_BATCH_WINDOW", "0.02")
     events = [Event("weather question", "101"), Event("lunch question", "102"), Event("third subject", "103")]
-    requests = _provider(monkeypatch, [(answer, [])])
+    requests = _provider(monkeypatch, [(answer, []), (answer, [])])
+
+    asyncio.run(_arrive_while_model_active(plugin, events))
+    assert len(requests) == 2
+    assert [record["id"] for record in _envelope(requests[0])["messages"]] == ["101"]
+    assert [record["id"] for record in _envelope(requests[1])["messages"]] == ["102", "103"]
+    assert len(_sent(events)) == (0 if answer == "SILENT" else 2)
+    assert len(plugin._hist().load("42")) == (3 if answer == "SILENT" else 5)
+    assert all(event.stopped for event in events)
+    assert not any(plugin._pending.values()) and plugin._turn_context == {}
+    assert plugin._busy == {"42": False}
+
+
+def test_arrivals_during_awaited_send_join_next_batch_without_window(production, monkeypatch):
+    """Busy state extends through confirmed send; neither sleep nor a window setting is used."""
+    plugin = production()
+    _entry(plugin)
+    first, second, third = Event("first send", "111"), Event("during send two", "112"), Event("during send three", "113")
+    requests = _provider(monkeypatch, [("First reply.", []), ("Both later messages.", [])])
+    original_get = os.environ.get
+    window_reads, sleeps = [], []
+
+    def environment_get(key, *args):
+        """Record forbidden legacy-window reads without changing unrelated environment lookups."""
+        if key == "HIGAN_BATCH_WINDOW":
+            window_reads.append(key)
+            raise AssertionError("batching must not consult a timer setting")
+        return original_get(key, *args)
+
+    async def no_sleep(delay, *args, **kwargs):
+        """Expose any fixed batching wait, including one swallowed by entry error handling."""
+        sleeps.append(delay)
+        raise AssertionError("batching must not sleep")
+
+    monkeypatch.setattr(os.environ, "get", environment_get)
+    monkeypatch.setattr(asyncio, "sleep", no_sleep)
 
     async def scenario():
-        """Submit concurrently so arrivals land inside the bounded, non-resetting window."""
-        await asyncio.wait_for(asyncio.gather(*(plugin.on_message(event) for event in events)), 2)
-        # Yield after consumption to expose any accidentally scheduled second response.
-        await asyncio.sleep(0)
+        """Queue two messages after the first send starts but before it confirms delivery."""
+        started, release = asyncio.Event(), asyncio.Event()
+        original_send = first.send
+
+        async def blocked_send(chain):
+            """Hold the real framework send boundary, not model or handler completion."""
+            started.set()
+            await release.wait()
+            return await original_send(chain)
+
+        first.send = blocked_send
+        active = asyncio.create_task(plugin.on_message(first))
+        try:
+            await asyncio.wait_for(started.wait(), 2)
+            await plugin.on_message(second)
+            await plugin.on_message(third)
+            assert len(requests) == 1 and _sent([first, second, third]) == []
+            assert len(plugin._pending["42"]) == 2 and plugin._busy["42"]
+            assert not active.done()
+        finally:
+            release.set()
+            await asyncio.wait_for(active, 2)
 
     asyncio.run(scenario())
-    assert len(requests) == 1
-    assert [record["body"] for record in _envelope(requests[0])["messages"]] == [event.text for event in events]
-    assert len(_sent(events)) == (0 if answer == "SILENT" else 1)
-    assert len(plugin._hist().load("42")) == (3 if answer == "SILENT" else 4)
-    assert all(event.stopped for event in events)
+    assert window_reads == sleeps == []
+    assert len(requests) == len(_sent([first, second, third])) == 2
+    assert [record["id"] for record in _envelope(requests[0])["messages"]] == ["111"]
+    assert [record["id"] for record in _envelope(requests[1])["messages"]] == ["112", "113"]
     assert not any(plugin._pending.values()) and plugin._turn_context == {}
     assert plugin._busy == {"42": False}
 
@@ -96,7 +193,6 @@ def test_metadata_stays_out_of_body_and_multiple_subjects_share_one_reply(produc
     """Sender/mention commerce-like names are metadata, not invented advertising prose."""
     plugin = production()
     _entry(plugin)
-    monkeypatch.setenv("HIGAN_BATCH_WINDOW", "0.02")
     first = Event("@sale.example(80001) Is the weather clear?", "301", components=[
         At(qq="80001", name="sale.example"),
         Reply(id="old-1", sender_id="70001", sender_nickname="Quoted seller", message_str="quoted offer"),
@@ -108,11 +204,8 @@ def test_metadata_stays_out_of_body_and_multiple_subjects_share_one_reply(produc
     second.get_sender_name = lambda: "Lunch speaker"
     requests = _provider(monkeypatch, [("The sky is clear; lunch can be later.", [])])
 
-    async def scenario():
-        """Collect two distinct speakers without replacing the actual attribution parser."""
-        await asyncio.gather(plugin.on_message(first), plugin.on_message(second))
-
-    asyncio.run(scenario())
+    # Attribution is a queued-batch contract; preserve the actual parser and lock drain.
+    asyncio.run(_arrive_while_execution_locked(plugin, [first, second]))
     assert len(requests) == len(_sent([first, second])) == 1
     records = _envelope(requests[0])["messages"]
     assert [record["body"] for record in records] == ["Is the weather clear?", "What about lunch?"]
@@ -133,7 +226,6 @@ def test_probability_is_applied_once_to_collected_batch(production, monkeypatch,
     """Reply percentage is a single batch admission decision, not three per-entry gates."""
     plugin = production()
     _entry(plugin)
-    monkeypatch.setenv("HIGAN_BATCH_WINDOW", "0.02")
     (tmp_path / "groups.json").write_text(json.dumps({"reply_pct": {"42": 50}}), encoding="utf-8")
     draws = []
 
@@ -146,11 +238,8 @@ def test_probability_is_applied_once_to_collected_batch(production, monkeypatch,
     events = [Event("unwoken subject %s" % index, str(400 + index)) for index in range(3)]
     requests = _provider(monkeypatch, [("One probabilistic reply.", [])])
 
-    async def scenario():
-        """Feed three unwoken inputs through the actual persisted percentage setting."""
-        await asyncio.gather(*(plugin.on_message(event) for event in events))
-
-    asyncio.run(scenario())
+    # A held execution lock defines this one admission batch without arbitrary waiting.
+    asyncio.run(_arrive_while_execution_locked(plugin, events))
     assert len(draws) == len(requests) == len(_sent(events)) == 1
     assert len(_envelope(requests[0])["messages"]) == 3
 
