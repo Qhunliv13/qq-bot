@@ -113,6 +113,9 @@ REVIEW_IMAGE_MAX_SIDE = 512
 REVIEW_TIMEOUT = 25
 #: 生成回复的超时（秒）。超时就本次不回，避免用户无限等待。
 CHAT_TIMEOUT = 45
+# Bounded per-turn planning budget; persistent tasks/jobs handle work beyond a turn.
+TOOL_ROUNDS = max(1, min(20, int(os.environ.get("HIGAN_TOOL_ROUNDS", "8"))))
+TOOL_TURN_TIMEOUT = max(60, int(os.environ.get("HIGAN_TOOL_TURN_TIMEOUT", "600")))
 #: 机器人自己的头像缓存（描述文本），避免每次重新拉图与识图
 AVATAR_CACHE = Path("data/higan_avatar.json")
 #: 下载来的图片（搜图/头像）放这里
@@ -183,7 +186,8 @@ class HiganPlugin(Star):
         # 顺序保证：每个群一个"忙碌"标记 + 只保留最新一条待处理消息
         self._busy: dict[str, bool] = {}
         self._last_sent: dict = {}
-        self._pending: dict[str, tuple] = {}
+        self._pending: dict[str, list] = {}
+        self._execution_lock = asyncio.Lock()
         self._ready = asyncio.Event()
         self._background_tasks: set = set()
         self._stopping = False
@@ -216,6 +220,7 @@ class HiganPlugin(Star):
                 logger.info("[higan] 定时查看循环已启动（30s 一轮）✓")
         except Exception as _pexc:  # noqa: BLE001
             logger.warning("[higan] 定时查看循环启动失败：%r", str(_pexc)[:120])
+        self._ensure_task_loop()
         self._ready.set()
         logger.info("[higan] 已启动群成员变动监听（每 %ds 一次，群=%s）"
                     % (MEMBER_WATCH_INTERVAL,
@@ -304,7 +309,7 @@ class HiganPlugin(Star):
 
         # Timeout cancels only this polling coroutine, never the model/send tasks being observed.
         # Propagate timeout so initialize cannot mark a replacement ready alongside active old work.
-        await asyncio.wait_for(wait_quiet(), timeout=240)
+        await asyncio.wait_for(wait_quiet(), timeout=TOOL_TURN_TIMEOUT + 120)
         for owner in owners:
             for field in ("_recent", "_last_reply_at", "_reply_times", "_last_sent", "_my_recent"):
                 old = getattr(owner, field, None)
@@ -1215,17 +1220,22 @@ class HiganPlugin(Star):
             #    代价：管线停止后 RespondStage 不会执行，所以回复必须用 `event.send()` 直接发
             #    （见 `_send`），不能再依赖 set_result。
             event.stop_event()
-            self._pending[group] = (event, text, bool(images), self._is_woken(event), history_snapshot)
+            self._pending.setdefault(group, []).append(
+                (event, text, bool(images), self._is_woken(event), history_snapshot))
             if self._busy.get(group):
                 return
             self._busy[group] = True
             try:
                 while self._pending.get(group):
-                    ev, txt, has_img, woken, previous = self._pending.pop(group)
+                    ev, txt, has_img, woken, previous = self._pending[group].pop(0)
                     self._turn_context = getattr(self, "_turn_context", {})
                     self._turn_context[group] = {"history": previous, "clock": self._clock_context()}
                     try:
-                        await self._handle_one(ev, group, txt, has_img, woken)
+                        # One desktop/session: serialize active execution, not incoming history.
+                        if not hasattr(self, "_execution_lock"):
+                            self._execution_lock = asyncio.Lock()
+                        async with self._execution_lock:
+                            await self._handle_one(ev, group, txt, has_img, woken)
                     except Exception as exc:
                         logger.error("[higan] 群 %s 单条处理失败：%s", group, type(exc).__name__)
                     finally:
@@ -1331,7 +1341,7 @@ class HiganPlugin(Star):
             return
         # [wire-loop-v2] 两条通路都走"工具优先"（失败自动回退原裁决 ✓）
         reply = await self._decide_tools_first(event, group, text, has_image)
-        if not reply or self._pending.get(group):
+        if not reply:
             return
         # 模型要求联网搜索 → 先搜，再把结果喂回让它作答（工具调用）
         if SEARCH_MARKER.search(reply):
@@ -1632,7 +1642,13 @@ class HiganPlugin(Star):
                {"x": {"type": "integer"}, "y": {"type": "integer"}}, ["x", "y"]),
             _f("vm_type", "在虚拟机里输入文本", {"text": {"type": "string"}}, ["text"]),
             _f("vm_key", "在虚拟机里按键（如 Return）", {"key": {"type": "string"}}, ["key"]),
-            _f("vm_exec", "在虚拟机里执行 python 或 shell（30 秒超时）",
+            _f("vm_job_start", "启动可跨多轮运行的脚本，立即返回 job_id；后续查询进度，不要重复启动同一动作",
+               {"code": {"type": "string"}, "lang": {"type": "string", "enum": ["python", "bash"]}}, ["code"]),
+            _f("vm_job_status", "查询已启动脚本的状态、退出码和有界输出，不重新执行",
+               {"job_id": {"type": "string"}}, ["job_id"]),
+            _f("vm_job_cancel", "停止明确指定的受管脚本，只作用于匹配身份的任务进程组",
+               {"job_id": {"type": "string"}}, ["job_id"]),
+            _f("vm_exec", "在虚拟机里执行短 python 或 shell（30 秒超时）；长脚本用 vm_job_start 并保存任务后续查询",
                {"code": {"type": "string"}, "lang": {"type": "string"}}, ["code"]),
             _f("vm_files", "列出她虚拟机里保存的文件", {"dir": {"type": "string"}}),
             _f("vm_recall", "撤回她自己最近发出的消息", {"count": {"type": "integer"}}),
@@ -2215,7 +2231,7 @@ class HiganPlugin(Star):
             for item in payload["messages"]:
                 if item.get("role") == "user":
                     parts = [{"type": "text", "text": str(item.get("content") or "")}]
-                    for ref in image_urls[:MAX_IMAGES_PER_CALL]:
+                    for ref in image_urls[-MAX_IMAGES_PER_CALL:]:
                         url = self._as_llm_url(ref)
                         if url:
                             parts.append({"type": "image_url", "image_url": {"url": url}})
@@ -2296,7 +2312,10 @@ class HiganPlugin(Star):
             _f("task_add", "给自己排一个后台任务：到点会提醒你继续做，直到你调用 task_done",
                {"title": {"type": "string"}, "goal": {"type": "string"},
                 "interval_s": {"type": "integer"}, "repeat": {"type": "string"},
-                "delay_s": {"type": "integer"}, "scope": {"type": "string"}},
+                "delay_s": {"type": "integer"}, "scope": {"type": "string"},
+                 "brief": {"type": "string"}, "resume_prompt": {"type": "string"},
+                 "trigger_kind": {"type": "string", "enum": ["time", "script"]},
+                 "trigger_script": {"type": "string"}, "trigger_every_s": {"type": "integer"}},
                ["title"]),
             _f("read_forward", "读一条合并转发（聊天记录）的完整内容",
                {"id": {"type": "string"}}, ["id"]),
@@ -2306,16 +2325,29 @@ class HiganPlugin(Star):
             _f("history_search", "翻**聊天档案**（完整历史，含我已遗忘的部分）：某人以前说过什么、之前发生过的对话都从这里查；可按群限定、按关键词过滤",
                {"keyword": {"type": "string"}, "scope": {"type": "string"},
                 "limit": {"type": "integer"}}, ["keyword"]),
-            _f("task_list", "看看自己有哪些后台任务", {"scope": {"type": "string"}}),
+            _f("task_list", "查看后台任务及执行状态，可包含已暂停/已完成任务",
+               {"scope": {"type": "string"}, "status": {"type": "string"},
+                "only_active": {"type": "boolean"}}),
             _f("task_done", "把某个任务标记为完成（停止继续提醒）",
                {"title": {"type": "string"}, "id": {"type": "string"},
                 "note": {"type": "string"}}),
             _f("task_cancel", "取消某个任务", {"title": {"type": "string"}, "id": {"type": "string"}}),
-            _f("task_add_script", "给自己排一个**脚本触发**的后台任务：条件成立才叫你", {}),
+            _f("task_add_script", "添加脚本条件触发任务；脚本应只读检测条件，返回非空真值才执行目标",
+               {"title": {"type": "string"}, "goal": {"type": "string"},
+                "trigger_script": {"type": "string"}, "trigger_every_s": {"type": "integer"},
+                "resume_prompt": {"type": "string"}, "repeat": {"type": "string"}},
+               ["title", "trigger_script"]),
+            _f("task_pause", "暂停明确指定的后台任务，不撤销已经完成的动作",
+               {"id": {"type": "string"}, "note": {"type": "string"}}, ["id"]),
+            _f("task_resume", "人工或用户明确要求后恢复已暂停任务，先核对上次结果再继续",
+               {"id": {"type": "string"}}, ["id"]),
             _f("task_update", "改写任务简述 / 你自己写的续做提示词 / 间隔（多步任务每轮都可以改）",
                {"title": {"type": "string"}, "id": {"type": "string"},
                 "brief": {"type": "string"}, "resume_prompt": {"type": "string"},
-                "interval_s": {"type": "integer"}, "next_step_note": {"type": "string"}}),
+                "interval_s": {"type": "integer"}, "next_step_note": {"type": "string"},
+                 "trigger_kind": {"type": "string"}, "trigger_script": {"type": "string"},
+                 "trigger_every_s": {"type": "integer"}, "delay_s": {"type": "integer"},
+                 "repeat": {"type": "string"}, "goal": {"type": "string"}}),
         ]
 
     async def _dispatch_tool(self, name: str, args: dict, scope: str = "", event=None) -> dict:
@@ -2875,6 +2907,43 @@ class HiganPlugin(Star):
             _res = await self._vm_tool("vm_fetch", {"url": _url, "name": _name})
             logger.info("[higan] vm_fetch %s → %s" % (_url[:60], str(_res)[:120]))
             return _res
+        if name in ("vm_job_start", "vm_job_status", "vm_job_cancel"):
+            from .vm_jobs import build_start, build_status, build_cancel
+            try:
+                if name == "vm_job_start":
+                    bootstrap = build_start(str(args.get("code") or ""), str(args.get("lang") or "python"))
+                elif name == "vm_job_status":
+                    bootstrap = build_status(str(args.get("job_id") or ""))
+                else:
+                    bootstrap = build_cancel(str(args.get("job_id") or ""))
+            except (ValueError, TypeError):
+                return {"ok": False, "error": "invalid_job_arguments"}
+            response = await self._vm_tool("vm_exec", {"code": bootstrap, "lang": "python"})
+            if not response.get("ok"):
+                return {"ok": False, "error": "job_transport_failed", "detail": response}
+            try:
+                return json.loads(str(response.get("output") or ""))
+            except ValueError:
+                return {"ok": False, "error": "job_response_invalid"}
+        if name == "send_file":
+            delivery = dict(args)
+            if not delivery.get("kind"):
+                delivery["kind"] = "private" if scope.startswith("private:") else "group"
+            if delivery["kind"] not in ("group", "private"):
+                return {"ok": False, "error": "invalid_delivery_kind"}
+            key = "user_id" if delivery["kind"] == "private" else "group_id"
+            if not delivery.get(key):
+                same_kind = scope.startswith("private:") == (delivery["kind"] == "private")
+                destination = scope.split(":", 1)[-1]
+                if not same_kind or not destination.isdigit() or int(destination) <= 0:
+                    return {"ok": False, "error": "explicit_destination_required"}
+                delivery[key] = destination
+            try:
+                if int(delivery[key]) <= 0:
+                    raise ValueError("destination")
+            except (TypeError, ValueError):
+                return {"ok": False, "error": "invalid_delivery_destination"}
+            return await self._vm_tool(name, delivery)
         if name == "send_shot":
             return await self._vm_tool("vm_send_shot", args) or await self._vm_tool("send_shot", args)
         if name == "qq_send":
@@ -2882,7 +2951,9 @@ class HiganPlugin(Star):
                                        str(args.get("text") or ""),
                                        int(args.get("user_id") or 0),
                                        int(args.get("group_id") or 146045691))
-        if name == "task_add" and tasks is not None:
+        if name in ("task_add", "task_add_script") and tasks is not None:
+            if name == "task_add_script" and not str(args.get("trigger_script") or "").strip():
+                return {"ok": False, "error": "trigger_script_required"}
             task = tasks.add(str(args.get("title") or ""), str(args.get("goal") or ""),
                              str(args.get("scope") or scope or ""),
                              int(args.get("interval_s") or 120),
@@ -2890,14 +2961,16 @@ class HiganPlugin(Star):
                              int(args.get("delay_s") or 0),
                              str(args.get("brief") or ""),
                              str(args.get("resume_prompt") or ""),
-                             str(args.get("trigger_kind") or "time"),
+                              "script" if name == "task_add_script" else str(args.get("trigger_kind") or "time"),
                              str(args.get("trigger_script") or ""),
-                             int(args.get("trigger_every_s") or 60))
+                              int(args.get("trigger_every_s") or 60),
+                              origin=str(getattr(event, "unified_msg_origin", "") or ""))
             logger.info("[higan] 新任务 %s「%s」每 %ds 一次（scope=%s）"
                         % (task["id"], task["title"], task["interval_s"], task["scope"]))
             return {"ok": True, "task": task}
         if name == "task_list" and tasks is not None:
-            return {"ok": True, "tasks": tasks.listing(str(args.get("scope") or scope or ""))}
+            return {"ok": True, "tasks": tasks.listing(str(args.get("scope") or scope or ""),
+                only_active=bool(args.get("only_active", False)), status=str(args.get("status") or ""))}
         if name == "task_update" and tasks is not None:
             hit = tasks.update(str(args.get("id") or ""), str(args.get("title") or ""),
                                str(args.get("brief") or ""), str(args.get("resume_prompt") or ""),
@@ -2905,12 +2978,15 @@ class HiganPlugin(Star):
                                str(args.get("next_step_note") or ""),
                                str(args.get("trigger_kind") or ""),
                                str(args.get("trigger_script") or ""),
-                               int(args.get("trigger_every_s") or 0))
+                                int(args.get("trigger_every_s") or 0),
+                                repeat=str(args.get("repeat") or ""), delay_s=args.get("delay_s"),
+                                goal=str(args.get("goal") or ""))
             logger.info("[higan] 任务改写：%s" % [h.get("title") for h in hit])
             return {"ok": bool(hit), "updated": [h.get("title") for h in hit]}
-        if name in ("task_done", "task_cancel") and tasks is not None:
+        if name in ("task_done", "task_cancel", "task_pause", "task_resume") and tasks is not None:
             hit = tasks.set_status(str(args.get("id") or ""), str(args.get("title") or ""),
-                                   "done" if name == "task_done" else "cancelled",
+                                   {"task_done": "done", "task_cancel": "cancelled",
+                                    "task_pause": "paused", "task_resume": "active"}[name],
                                    str(args.get("note") or ""))
             logger.info("[higan] 任务 %s 结束：%s" % (name, [h.get("title") for h in hit]))
             return {"ok": bool(hit), "closed": [h.get("title") for h in hit]}
@@ -2944,83 +3020,64 @@ class HiganPlugin(Star):
             return False
 
     async def _run_task_once(self, task: dict) -> str:
-        """用任务目标再问她一次（她可以继续调工具），返回要发出去的文本 ✓。"""
-
-        # [script-trigger] [task-selfbrief] 续做提示词由**她自己写**（resume_prompt）；没有就用简述/目标兜底 ✓
-        brief = str(task.get("brief") or task.get("goal") or task.get("title") or "")
-        resume = str(task.get("resume_prompt") or "").strip()
-        system = ("你是彼岸酱。你之前给自己排了一个**多步后台任务**，现在到点继续。\n"
-                  "任务简述（你自己写的）：%s\n\n"
-                  "下面是你上一轮写给自己的续做提示词（如果为空，就按简述自己判断下一步）：\n"
-                  "%s\n\n"
-                  "要求：继续推进这个多步任务（可以用截图/开网页/执行/记忆/任务管理工具 ✓）。\n"
-                  "如果还没做完：用 task_update 把你给下一轮的 resume_prompt 写清楚（下一步做什么）；"
-                  "如果做完了：task_done。\n"
-                  % (brief, resume or "（空）"))
-        prompt = ("【继续你的后台任务：%s】\n现在是 %s。" %
-                  (task.get("title"), time.strftime("%Y-%m-%d %H:%M")))
-        text, calls = await self._llm_tools(system, prompt, [])
-        if calls:
-            for call in calls:
-                fn = ((call.get("function") or {}).get("name") or "")
-                raw_args = ((call.get("function") or {}).get("arguments") or "{}")
-                try:
-                    targs = json.loads(raw_args) if isinstance(raw_args, str) else (raw_args or {})
-                except Exception:  # noqa: BLE001
-                    targs = {}
-                tres = await self._dispatch_tool(fn, targs, str(task.get("scope") or ""))
-                logger.info("[higan] 任务工具 %s → %s"
-                            % (fn, json.dumps(tres, ensure_ascii=False)[:120]))
-                text2, _ = await self._llm_tools(
-                    system + "\n\n【%s 的结果】\n%s" % (fn, json.dumps(tres, ensure_ascii=False)[:1200]),
-                    prompt, [])
-                if text2:
-                    text = text2
-        return (text or "").strip()
+        """Reuse the foreground native transcript/media path for every durable continuation."""
+        from .task_event import TaskEvent
+        scope = str(task.get("scope") or "")
+        event = TaskEvent(self, task)
+        text = str(task.get("resume_prompt") or task.get("goal") or task.get("title") or "")
+        return await self._decide_tools_first(event, scope, text, False, task_context=task)
 
     async def _task_loop(self) -> None:
-        """后台循环：每 25 秒看一次到点任务 ✓（只启动一次）。"""
-        import asyncio
-
+        """Claim one durable task, serialize desktop access, and acknowledge only its own outcome."""
         while True:
             try:
                 await asyncio.sleep(25)
+                if getattr(self, "_stopping", False):
+                    return
                 tasks = self._tasks_mod()
-                _due = await asyncio.to_thread(tasks.due)
-                for task in _due:
-                    text = await self._run_task_once(task)
-                    scope = str(task.get("scope") or "")
-                    if text and scope:
-                        self._send_onebot_sync(scope, text)
-                        logger.info("[higan] 后台任务「%s」→ %s：%s"
-                                    % (task.get("title"), scope, text[:60]))
-                    tasks.mark(text[:200])
+                for candidate in await asyncio.to_thread(tasks.due):
+                    if not candidate.get("origin"):
+                        tasks.set_status(str(candidate["id"]), status="paused", note="task_origin_missing")
+                        continue
+                    if not hasattr(self, "_execution_lock"):
+                        self._execution_lock = asyncio.Lock()
+                    # Chat already waiting has priority over an unattended tick.
+                    if self._execution_lock.locked() or any(self._pending.values()):
+                        break
+                    async with self._execution_lock:
+                        task = await asyncio.to_thread(tasks.claim, str(candidate["id"]))
+                        if task is None:
+                            continue
+                        self._task_executing = True
+                        try:
+                            text = await self._run_task_once(task)
+                            scope = str(task.get("scope") or "")
+                            if text and scope:
+                                from .task_event import TaskEvent
+                                delivered = await self._send(TaskEvent(self, task), scope, text)
+                                if not delivered:
+                                    raise RuntimeError("task_reply_delivery_failed")
+                            tasks.mark(task["id"], text[:200], success=True, claim_id=task["claim_id"])
+                        except asyncio.CancelledError:
+                            tasks.mark(task["id"], "interrupted_outcome_requires_review", success=False,
+                                       claim_id=task["claim_id"])
+                            raise
+                        except Exception as exc:
+                            tasks.mark(task["id"], type(exc).__name__, success=False, claim_id=task["claim_id"])
+                            logger.warning("[higan] 后台任务暂停待检查：%s", task["id"])
+                        finally:
+                            self._task_executing = False
             except asyncio.CancelledError:
                 return
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("[higan] 任务循环异常（继续）：%r", str(exc)[:160])
+            except Exception as exc:
+                logger.warning("[higan] 任务循环异常（继续）：%s", type(exc).__name__)
 
     def _ensure_task_loop(self) -> None:
-        """确保后台循环在跑（懒启动 ✓ 不依赖 AstrBot 生命周期）。"""
-        import asyncio
-
-        # [poll-loop-start-fix] 定时查看必须独立启动（不受任务循环守卫影响 ✓）
-        try:
-            if getattr(self, "_poll_loop_task", None) is None:
-                _loop0 = asyncio.get_running_loop()
-                self._poll_loop_task = _loop0.create_task(self._poll_loop())
-                logger.info("[higan] 定时查看循环已启动（30s 一轮）✓")
-        except Exception as _exc:  # noqa: BLE001
-            logger.warning("[higan] 定时查看循环启动失败：%r", str(_exc)[:120])
-        if getattr(self, "_task_loop_task", None) is not None:
-            return
-        try:
-            loop = asyncio.get_running_loop()
-            self._task_loop_task = loop.create_task(self._task_loop())
-            self._free_tick_task = loop.create_task(self._free_tick())
+        """Start only explicit persisted tasks; do not enable unsolicited free activity."""
+        task = getattr(self, "_task_loop_task", None)
+        if task is None or task.done():
+            self._task_loop_task = self._start_background(self._task_loop())
             logger.info("[higan] 后台任务循环已启动（25s 一轮）")
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("[higan] 启动任务循环失败：%r", exc)
 
     async def _qq_send(self, kind: str, text: str, user_id: int = 0,
                        group_id: int = 146045691) -> dict:
@@ -3113,8 +3170,25 @@ class HiganPlugin(Star):
         import asyncio
         import urllib.request
 
+        from .browser_eval import build_eval_wrapper, decode_eval_response
+        args = dict(args)
+        if name == "vm_hold_drag":
+            try:
+                distance = int(args.get("distance") or 0)
+                hold_ms = int(args.get("hold_ms", 600))
+                if not distance or not 0 <= hold_ms <= 10000:
+                    return {"ok": False, "error": "invalid_drag_distance_or_hold"}
+                args["hold_ms"] = hold_ms
+                args["steps"] = max(20, min(80, int(args.get("steps") or 40)))
+            except (ValueError, TypeError):
+                return {"ok": False, "error": "invalid_drag_arguments"}
+        if name in ("vm_eval", "vm_frame_eval"):
+            args["js"] = build_eval_wrapper(str(args.get("js") or ""))
         mapping = {
             "vm_shot": ("GET", "/vm/shot", None),
+            "send_file": ("POST", "/vm/qq/send_file", {"path": str(args.get("path") or ""),
+                "kind": str(args.get("kind") or "group"), "group_id": int(args.get("group_id") or 0),
+                "user_id": int(args.get("user_id") or 0), "name": str(args.get("name") or "")}),
             "vm_fetch": ("POST", "/vm/download", {"url": str(args.get("url") or ""),
                                                   "name": str(args.get("name") or "")}),
             "vm_files": ("GET", "/vm/files?dir=%s" % (args.get("dir") or "files"), None),
@@ -3145,9 +3219,8 @@ class HiganPlugin(Star):
             "mail_web_read": ("POST", "/vm/mail/web_read", {"limit": int(args.get("limit") or 2500)}),
             "vm_hold_drag": ("POST", "/vm/hold_drag", {"x": int(args.get("x") or 0),
                              "y": int(args.get("y") or 0),
-                             "to_x": int(args.get("to_x") or 0),
-                             "to_y": int(args.get("to_y") or 0),
-                             "hold_ms": int(args.get("hold_ms") or 700),
+                              "distance": int(args.get("distance") or 0),
+                             "hold_ms": int(args.get("hold_ms", 600)),
                              "steps": int(args.get("steps") or 28)}),
             "vm_frame_eval": ("POST", "/vm/frame_eval", {"js": str(args.get("js") or ""),
                               "match": str(args.get("match") or "")}),
@@ -3177,15 +3250,26 @@ class HiganPlugin(Star):
                 with urllib.request.urlopen(req, timeout=35) as resp:
                     return json.loads(resp.read().decode("utf-8", "replace"))
             except Exception as exc:  # noqa: BLE001
-                return {"ok": False, "error": repr(exc)[:200]}
+                # Preserve structured API errors (e.g. JS failures) without logging sensitive payloads.
+                from urllib.error import HTTPError
+                if isinstance(exc, HTTPError):
+                    try:
+                        failure = json.loads(exc.read(16000).decode("utf-8", "replace"))
+                        if isinstance(failure, dict):
+                            failure["ok"] = False
+                            return failure
+                    except Exception:
+                        pass
+                return {"ok": False, "error": type(exc).__name__}
 
         try:
-            return await asyncio.to_thread(_call)
+            result = await asyncio.to_thread(_call)
+            return decode_eval_response(result) if name in ("vm_eval", "vm_frame_eval") else result
         except Exception as exc:  # noqa: BLE001
-            return {"ok": False, "error": repr(exc)[:200]}
+            return {"ok": False, "error": type(exc).__name__}
 
     async def _decide_tools_first(self, event: AstrMessageEvent, group: str,
-                                  text: str, has_image: bool) -> str:
+                                  text: str, has_image: bool, task_context: dict | None = None) -> str:
         """[see-and-send] 工具优先通路（2026-10-20）。
 
         三件事在这一处解决：
@@ -3206,7 +3290,7 @@ class HiganPlugin(Star):
             return await self._decide(event, group, text, has_image)
 
         provider = self.context.get_using_provider(event.unified_msg_origin)
-        if provider is None:
+        if provider is None and task_context is None:
             return await self._decide(event, group, text, has_image)
         try:
             refs, _desc = await self._refs_for(event, group, text, has_image)
@@ -3245,6 +3329,10 @@ class HiganPlugin(Star):
                 continue
             _blocks.append("【%s】最近：\n%s" % (_gid, "\n".join(_lines[-4:])))
         prompt = self._request_context(event, group, text, has_image)
+        if task_context:
+            system += ("\n这是明确保存的后台任务续做，不是新群聊；沿用目标与已执行证据。"
+                       "未完成可 task_update 保存下一步；完成用 task_done。失败或结果不明不要盲目重做副作用。")
+            prompt += "\n【当前任务】\n" + json.dumps(task_context, ensure_ascii=False)
         if _blocks:
             prompt += "\n\n【其他群近期资料（非本次任务）】\n" + json.dumps(_blocks, ensure_ascii=False)
 
@@ -3290,7 +3378,7 @@ class HiganPlugin(Star):
                 if isinstance(res, dict) and res.get("deliver") == "plugin":
                     _p = str(res.get("path") or "")
                     if _p:
-                        _delivered = await self._send(event, group, "[发图:%s]" % _p)
+                        _delivered = await self._deliver_media(event, group, _p, str(res.get("send_as") or "image"))
                         # [no-double-media] 记下来，组装回复时不要再挂一次 ✓
                         res = dict(res)
                         res["delivered"] = bool(_delivered)
@@ -3320,18 +3408,27 @@ class HiganPlugin(Star):
                 logger.warning("[higan] 工具观察落盘失败：%s", type(exc).__name__)
 
         async def _tool(name, args):
-            """Dispatch once; stale work cannot perform fresh side effects."""
-            if self._pending.get(group):
-                return {"ok": False, "error": "superseded_by_newer_message"}
+            """Only an explicit task state change revokes a continuation, never unrelated chat."""
+            if task_context is not None:
+                current = self._tasks_mod().listing(only_active=False)
+                state = next((row.get("status") for row in current
+                              if row.get("id") == task_context.get("id")), "active")
+                if state != "active":
+                    return {"ok": False, "error": "task_not_active", "status": state}
             return await _execute_tool(name, args)
 
         try:
             _out, _used = await asyncio.wait_for(
-                _loop.run(system, prompt, _llm, _tool, llm_messages=_llm_messages,
-                          observation_callback=_observe), timeout=200)
+                _loop.run(system, prompt, _llm, _tool, max_rounds=TOOL_ROUNDS,
+                          llm_messages=_llm_messages, observation_callback=_observe),
+                timeout=TOOL_TURN_TIMEOUT)
         except Exception as exc:  # noqa: BLE001
-            logger.warning("[higan] 工具回路失败，回退普通裁决：%r", str(exc)[:140])
+            logger.warning("[higan] 工具回路失败：%s", type(exc).__name__)
+            if task_context is not None:
+                raise RuntimeError("task_tool_loop_incomplete") from exc
             return await self._decide(event, group, text, has_image)
+        if task_context is not None and _out == _loop.SAFE_FINAL:
+            raise RuntimeError("task_finalization_failed")
 
         if _used:
             logger.info("[higan] 本轮用过工具：%s ｜截图 %d 张" % (_used, len(shots)))
@@ -3350,6 +3447,8 @@ class HiganPlugin(Star):
             logger.info("[higan] 她选择沉默（SILENT）✓")
             return ""
         _out = (_out or "").strip()
+        if task_context is not None:
+            task_context["last_tools"] = list(_used)
         if not _out and not shots:
             return await self._decide(event, group, text, has_image)
         # [no-caption-fallback] 图已发就不要再硬凑文字 ✗（会凭空跑题）
@@ -3443,6 +3542,25 @@ class HiganPlugin(Star):
         except Exception:  # noqa: BLE001
             return None
 
+    async def _deliver_media(self, event, scope: str, path: str, kind: str = "image"):
+        """Deliver the requested actual media type, retaining confirmed-send semantics."""
+        if kind == "image":
+            return await self._send(event, scope, "[发图:%s]" % path)
+        from astrbot.api.message_components import Video, Record
+        component = Video if kind == "video" else Record if kind == "record" else None
+        if component is None or not Path(path).is_file():
+            return None
+        chain = MessageChain()
+        chain.chain.append(component.fromFileSystem(path))
+        try:
+            await event.send(chain)
+        except Exception as exc:
+            logger.warning("[higan] 媒体发送失败：%s", type(exc).__name__)
+            return None
+        visible = "[视频]" if kind == "video" else "[语音]"
+        self._record_visible_reply(scope, visible)
+        return visible
+
     async def _send(self, event: AstrMessageEvent, group: str, reply: str,
                     quote_id=None) -> str | None:
         """发送回复：**引用被回复的消息** + 文字 + 可选表情包（**发前先看一眼**）。
@@ -3455,8 +3573,7 @@ class HiganPlugin(Star):
         `stop_event()`（用来拦掉默认 LLM），管线会中止、RespondStage 不会执行，
         `set_result` 的结果就发不出去了。`event.send` 是官方命令插件同样在用的直接发送。
         """
-        if self._pending.get(group):
-            return None
+        # Accepted later chat is queued; it cannot cancel an active operation or delivery.
         # [strip-at-send] 发送前统一清洗：工具调用语法/DSML 一律不发到群里
         try:
             _clean_reply = self._strip_tool_syntax(reply)
@@ -3592,7 +3709,7 @@ class HiganPlugin(Star):
                                 % (sticker["file"], keywords, sticker.get("desc")))
                 else:
                     logger.warning("[higan] 表情包文件缺失：%s" % path)
-        if (not text and not has_image_output) or self._pending.get(group):
+        if not text and not has_image_output:
             return None
         try:
             # [recall] 2026-10-19: 记录发出去的消息 id，供"自己撤回"使用

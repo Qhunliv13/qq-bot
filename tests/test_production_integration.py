@@ -20,6 +20,7 @@ import sys
 import time
 from types import SimpleNamespace
 import urllib.request
+from urllib.error import HTTPError
 
 import pytest
 
@@ -126,8 +127,8 @@ def _load_production(root):
         "_quoted_text", "_ref_of", "_image_refs", "_record_visible_reply", "_mark_replied",
         "_to_plain", "_strip_tool_syntax", "_strip_internal", "_tool_schemas",
         "_task_tool_schemas", "_llm_tools", "_dispatch_tool", "_decide_tools_first",
-        "_send", "_at_components", "on_message", "_drain_previous_instances",
-        "_web_search", "_search_queries",
+        "_send", "_deliver_media", "_at_components", "on_message", "_drain_previous_instances",
+        "_web_search", "_search_queries", "_run_task_once", "_task_loop", "_ensure_task_loop", "_vm_tool",
     }
     original = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "HiganPlugin")
     methods = [copy.deepcopy(node) for node in original.body
@@ -391,8 +392,8 @@ def test_plugin_media_failure_never_marks_delivered(production, monkeypatch, tmp
     assert plugin._recent == {} and event.sent == []
 
 
-def test_on_message_snapshot_excludes_current_and_latest_wins(production):
-    """Actual entry freezes prior history, serializes turns, and drops only superseded work."""
+def test_on_message_snapshot_excludes_current_and_executes_every_accepted_turn_fifo(production):
+    """Actual entry freezes history and serializes all three accepted turns without revocation."""
     plugin = production()
     plugin._hist().append("42", "persisted prior line")
     plugin._forward_to_text = _empty_forward
@@ -411,14 +412,99 @@ def test_on_message_snapshot_excludes_current_and_latest_wins(production):
 
     plugin._handle_one = handle
     asyncio.run(plugin.on_message(first))
-    assert [item[0] for item in snapshots] == ["first-nonce", "third-nonce"]
+    assert [item[0] for item in snapshots] == ["first-nonce", "second-nonce", "third-nonce"]
     assert snapshots[0][1]["history"] == ("persisted prior line",)
-    assert snapshots[0][2].count("first-nonce") == 1
+    for text, snapshot, prompt in snapshots:
+        # Each admitted event retains its arrival snapshot, not later queued chat.
+        assert prompt.count(text) == 1
+        assert text not in json.dumps(snapshot["history"])
+    assert "first-nonce" in json.dumps(snapshots[1][1]["history"])
     assert "third-nonce" not in json.dumps(snapshots[1][1]["history"])
-    assert "second-nonce" in json.dumps(snapshots[1][1]["history"])
+    assert "second-nonce" in json.dumps(snapshots[2][1]["history"])
     assert len(plugin._hist().load("42")) == 4
     assert all(event.stopped for event in (first, second, third))
-    assert plugin._pending == {} and plugin._busy == {"42": False} and plugin._turn_context == {}
+    assert not any(plugin._pending.values())
+    assert plugin._busy == {"42": False} and plugin._turn_context == {}
+
+
+def test_pending_chat_does_not_cancel_foreground_tools_media_or_final_send(production, monkeypatch, tmp_path):
+    """A newly queued chat cannot revoke accepted native calls or their confirmed delivery."""
+    plugin, event = production(), Event()
+    media = tmp_path / "accepted-media.png"
+    media.write_bytes(b"offline accepted media")
+    executed = []
+    pending = [(Event("later chat"), "later chat", False, True, ())]
+
+    async def dispatch(name, args, scope="", event=None):
+        """Inject a later arrival after the first effect, retaining both accepted calls."""
+        executed.append(name)
+        plugin._pending[scope] = pending
+        return ({"ok": True, "deliver": "plugin", "path": str(media)}
+                if name == "accepted_media" else {"ok": True, "nonce": "effect-confirmed"})
+
+    plugin._dispatch_tool = dispatch
+    requests = _provider(monkeypatch, [
+        ("draft", [_call("accepted_effect"), _call("accepted_media")]),
+        ("Both actions completed.", []),
+    ])
+
+    async def scenario():
+        """Finish native work and the normal final send while the later chat stays queued."""
+        answer = await plugin._decide_tools_first(event, "42", event.text, False)
+        assert answer == "Both actions completed."
+        assert await plugin._send(event, "42", answer) == answer
+
+    asyncio.run(scenario())
+    assert executed == ["accepted_effect", "accepted_media"]
+    assert plugin._pending["42"] is pending
+    assert len(event.sent) == 2
+    assert len(plugin._hist().load("42")) == 2
+    records = plugin._tool_evidence().recent("42")
+    assert [record["tool_name"] for record in records] == executed
+    assert all(record["status"] == "success" for record in records)
+    assert records[1]["result"]["delivered"] is True
+    paired = [item for item in requests[-1]["messages"] if item["role"] == "tool"]
+    assert [item["tool_call_id"] for item in paired] == executed
+    assert not any("superseded" in item["content"] for item in paired)
+
+
+def test_screenshot_continuation_uses_last_three_images_and_newest_delivery(production, monkeypatch, tmp_path):
+    """Native screenshot feedback evicts stale attachments and sends the newest actual shot."""
+    plugin, event = production(), Event()
+    shots = [tmp_path / f"shot-{number}.png" for number in range(4)]
+    for shot in shots:
+        shot.write_bytes(b"offline screenshot")
+
+    async def refs(*args):
+        """Seed older attachments so an incorrect first-three slice loses every new shot."""
+        return ["old-image-1.png", "old-image-2.png", "old-image-3.png"], ""
+
+    async def dispatch(name, args, scope="", event=None):
+        """Use real production screenshot accumulation, replacing only VM execution."""
+        assert name == "vm_shot"
+        return {"ok": True, "path": str(shots[args["index"]])}
+
+    plugin._refs_for = refs
+    plugin._dispatch_tool = dispatch
+    requests = _provider(monkeypatch, [
+        ("draft", [_call("vm_shot", {"index": number}, f"shot-{number}") for number in range(4)]),
+        ("Here is the newest image. [发图]", []),
+    ])
+
+    async def scenario():
+        """Keep screenshot acquisition, native continuation, and final delivery together."""
+        answer = await plugin._decide_tools_first(event, "42", event.text, True)
+        assert f"[发图:{shots[-1]}]" in answer
+        await plugin._send(event, "42", answer)
+
+    asyncio.run(scenario())
+    user = next(item for item in requests[-1]["messages"] if item["role"] == "user")
+    image_urls = [part["image_url"]["url"] for part in user["content"] if part["type"] == "image_url"]
+    assert image_urls == [str(shot) for shot in shots[-3:]]
+    assert [item["tool_call_id"] for item in requests[-1]["messages"] if item["role"] == "tool"] == [
+        f"shot-{number}" for number in range(4)]
+    assert [component.file for component in event.sent[0].chain if isinstance(component, Image)] == [str(shots[-1])]
+    assert len(plugin._tool_evidence().recent("42")) == 4
 
 
 async def _empty_forward(event):
@@ -631,6 +717,202 @@ def test_web_search_source_errors_are_explicit_and_dispatch_reports_failure(prod
     result = asyncio.run(plugin._dispatch_tool("web_search", {"query": "generic query"}, "42"))
     assert result == {"ok": False, "query": "generic query", "error": "RuntimeError"}
     assert len(requests) == 4
+
+
+@pytest.mark.parametrize("name, path", [("vm_eval", "/vm/eval"), ("vm_frame_eval", "/vm/frame_eval")])
+def test_vm_eval_wraps_once_and_decodes_browser_error_without_retry(production, monkeypatch, name, path):
+    """Production VM transport returns diagnostic JS failures, not successful null observations."""
+    plugin, requests = production(), []
+    source = "throw new Error('offline-js-nonce')"
+    exception = {"name": "Error", "message": "offline-js-nonce", "stack": "fixture stack"}
+
+    def urlopen(request, timeout):
+        """Return a wrapper diagnostic with the same successful outer VM envelope as CDP."""
+        body = json.loads(request.data.decode("utf-8"))
+        requests.append((request.full_url, body))
+        assert timeout > 0 and request.get_method() == "POST"
+        return io.BytesIO(json.dumps({"ok": True, "frame": "offline-frame", "value": json.dumps({
+            "marker": "higan.browser_eval.v1", "ok": False,
+            "error_type": "evaluation_error", "exception": exception})}).encode("utf-8"))
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    result = asyncio.run(plugin._vm_tool(name, {"js": source, "match": "fixture-frame"}))
+    assert result["ok"] is False and result["error_type"] == "evaluation_error"
+    assert result["exception"] == exception and result["frame"] == "offline-frame"
+    assert len(requests) == 1 and requests[0][0] == "http://127.0.0.1:18003" + path
+    assert requests[0][1]["js"].count(source) == 1
+    assert "await (0, eval)" in requests[0][1]["js"]
+    if name == "vm_frame_eval":
+        assert requests[0][1]["match"] == "fixture-frame"
+
+
+def test_vm_eval_http_failure_preserves_structured_error_without_retry(production, monkeypatch):
+    """HTTP failure details remain explicit error evidence and cannot trigger another side effect."""
+    plugin, requests = production(), []
+
+    def urlopen(request, timeout):
+        """Raise a local HTTP error carrying structured VM diagnostics, never opening a socket."""
+        requests.append(request.full_url)
+        raise HTTPError(request.full_url, 400, "offline failure", {}, io.BytesIO(
+            b'{"ok":true,"error_type":"vm_rejected","error":"offline-invalid-js"}'))
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    assert asyncio.run(plugin._vm_tool("vm_eval", {"js": "1 + 1"})) == {
+        "ok": False, "error_type": "vm_rejected", "error": "offline-invalid-js"}
+    assert len(requests) == 1
+
+
+@pytest.mark.parametrize("name, endpoint", [("vm_hold_drag", "/vm/hold_drag"), ("vm_slider_drag", "/vm/slider/drag")])
+def test_vm_drag_uses_distance_payload_without_legacy_dx(production, monkeypatch, name, endpoint):
+    """Signed displacement reaches the actual endpoint as distance, not an ignored legacy dx key."""
+    plugin, requests = production(), []
+
+    def urlopen(request, timeout):
+        """Capture the real production JSON mapping and return a local accepted result."""
+        requests.append((request.full_url, json.loads(request.data.decode("utf-8"))))
+        return io.BytesIO(b'{"ok":true}')
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    assert asyncio.run(plugin._vm_tool(name, {"x": 100, "y": 200, "distance": -73, "hold_ms": 350})) == {"ok": True}
+    url, payload = requests[0]
+    assert url == "http://127.0.0.1:18003" + endpoint
+    assert payload["x"] == 100 and payload["y"] == 200 and payload["distance"] == -73
+    assert "dx" not in payload and len(requests) == 1
+    if name == "vm_hold_drag":
+        assert payload["hold_ms"] == 350
+
+
+@pytest.mark.parametrize("hold_ms", [-1, -300, 10001])
+def test_vm_negative_or_excessive_hold_rejected_before_transport(production, hold_ms):
+    """Invalid timing never gets as far as the fixture's fail-closed HTTP boundary."""
+    assert asyncio.run(production()._vm_tool("vm_hold_drag", {
+        "x": 100, "y": 200, "distance": 70, "hold_ms": hold_ms})) == {
+        "ok": False, "error": "invalid_drag_distance_or_hold"}
+
+
+@pytest.mark.parametrize("scope, args, expected", [
+    ("private:10001", {}, {"kind": "private", "user_id": 10001, "group_id": 0}),
+    ("42", {}, {"kind": "group", "group_id": 42, "user_id": 0}),
+    ("private:10001", {"kind": "group", "group_id": 77}, {"kind": "group", "group_id": 77, "user_id": 0}),
+    ("42", {"kind": "private", "user_id": 88}, {"kind": "private", "user_id": 88, "group_id": 0}),
+])
+def test_send_file_routes_only_to_inferred_same_kind_or_explicit_destination(production, monkeypatch, scope, args, expected):
+    """Actual VM payload keeps private/group targets separate without a hardcoded group fallback."""
+    plugin, requests = production(), []
+
+    def urlopen(request, timeout):
+        """Capture file-routing JSON at the local mocked transport boundary."""
+        assert request.full_url == "http://127.0.0.1:18003/vm/qq/send_file"
+        requests.append(json.loads(request.data.decode("utf-8")))
+        return io.BytesIO(b'{"ok":true}')
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    original = {"path": "offline-report.pdf", **args}
+    assert asyncio.run(plugin._dispatch_tool("send_file", original, scope)) == {"ok": True}
+    assert requests == [{"path": "offline-report.pdf", "name": "", **expected}]
+    assert original == {"path": "offline-report.pdf", **args}
+
+
+@pytest.mark.parametrize("scope, args, error", [
+    ("private:10001", {"kind": "group"}, "explicit_destination_required"),
+    ("42", {"kind": "private"}, "explicit_destination_required"),
+    ("private:not-a-number", {}, "explicit_destination_required"),
+    ("", {}, "explicit_destination_required"),
+    ("42", {"kind": "temporary"}, "invalid_delivery_kind"),
+    ("42", {"kind": "private", "user_id": -1}, "invalid_delivery_destination"),
+])
+def test_send_file_invalid_or_cross_kind_missing_target_never_transports(production, scope, args, error):
+    """Unsafe routes fail before HTTP instead of leaking a private file to the default group."""
+    result = asyncio.run(production()._dispatch_tool("send_file", {"path": "offline.pdf", **args}, scope))
+    assert result == {"ok": False, "error": error}
+
+
+def test_task_add_script_schema_and_dispatch_preserve_origin(production):
+    """A script-triggered task uses the one durable add implementation and original send origin."""
+    plugin, event, calls = production(), Event(), []
+    schemas = {item["function"]["name"]: item["function"] for item in plugin._task_tool_schemas()}
+    assert "task_add_script" in schemas
+    assert "trigger_script" in schemas["task_add_script"]["parameters"]["properties"]
+
+    def add(*args, **kwargs):
+        """Observe the persistence contract without touching a durable production store."""
+        calls.append((args, kwargs))
+        return {"id": "script-task", "title": args[0], "interval_s": args[3], "scope": args[2]}
+
+    plugin._tasks_mod = lambda: SimpleNamespace(add=add)
+    assert asyncio.run(plugin._dispatch_tool("task_add_script", {"title": "probe"}, "42", event)) == {
+        "ok": False, "error": "trigger_script_required"}
+    assert calls == []
+    result = asyncio.run(plugin._dispatch_tool("task_add_script", {
+        "title": "probe", "goal": "saved goal", "trigger_script": "print('ready')"}, "42", event))
+    assert result["ok"] is True
+    args, kwargs = calls[0]
+    assert args[2] == "42" and args[8:10] == ("script", "print('ready')")
+    assert kwargs == {"origin": event.unified_msg_origin}
+
+
+@pytest.mark.parametrize("name, args", [
+    ("vm_job_start", {"code": "printf 'offline-job'", "lang": "bash"}),
+    ("vm_job_status", {"job_id": "12345678-1234-4234-8234-123456789abc"}),
+    ("vm_job_cancel", {"job_id": "12345678-1234-4234-8234-123456789abc"}),
+])
+def test_vm_job_advertised_dispatch_builds_python_wrapper_and_decodes_json(production, name, args):
+    """All job tools use the single script builders and one mocked VM execution boundary."""
+    from plugin.vm_jobs import build_start, build_status, build_cancel
+
+    plugin, calls = production(), []
+    schemas = {item["function"]["name"] for item in plugin._tool_schemas()}
+    assert {"vm_job_start", "vm_job_status", "vm_job_cancel"} <= schemas
+    result = {"ok": True, "job_id": "12345678-1234-4234-8234-123456789abc", "status": "running"}
+
+    async def vm_tool(tool_name, payload):
+        """Inspect builders without executing generated scripts, subprocesses, or live VM calls."""
+        calls.append((tool_name, payload))
+        return {"ok": True, "output": json.dumps(result)}
+
+    plugin._vm_tool = vm_tool
+    expected = (build_start(args["code"], args["lang"]) if name == "vm_job_start" else
+                build_status(args["job_id"]) if name == "vm_job_status" else build_cancel(args["job_id"]))
+    assert asyncio.run(plugin._dispatch_tool(name, args, "42")) == result
+    assert calls == [("vm_exec", {"code": expected, "lang": "python"})]
+    ast.parse(calls[0][1]["code"])
+
+
+@pytest.mark.parametrize("name, args", [
+    ("vm_job_status", {"job_id": "../../foreign"}),
+    ("vm_job_cancel", {"job_id": "not-a-job-id"}),
+    ("vm_job_start", {"code": "", "lang": "python"}),
+    ("vm_job_start", {"code": "offline", "lang": "powershell"}),
+])
+def test_vm_job_invalid_arguments_never_dispatch_to_vm(production, name, args):
+    """Invalid identifiers and unsupported inputs fail before any remotely executed wrapper."""
+    plugin = production()
+
+    async def forbidden(*args):
+        """Reject even a mocked execution if validation fails to guard the VM boundary."""
+        pytest.fail("invalid job arguments reached VM execution")
+
+    plugin._vm_tool = forbidden
+    assert asyncio.run(plugin._dispatch_tool(name, args, "42")) == {
+        "ok": False, "error": "invalid_job_arguments"}
+
+
+@pytest.mark.parametrize("response, error", [
+    ({"ok": False, "error": "offline transport rejected"}, "job_transport_failed"),
+    ({"ok": True, "output": "not-json"}, "job_response_invalid"),
+])
+def test_vm_job_transport_and_invalid_json_never_report_success(production, response, error):
+    """Job management cannot silently manufacture success when transport or stdout is invalid."""
+    plugin = production()
+
+    async def vm_tool(*args):
+        """Return a deterministic failed transport or malformed response without external I/O."""
+        return response
+
+    plugin._vm_tool = vm_tool
+    result = asyncio.run(plugin._dispatch_tool("vm_job_status", {
+        "job_id": "12345678-1234-4234-8234-123456789abc"}, "42"))
+    assert result["ok"] is False and result["error"] == error
 
 
 def test_on_message_waits_readiness_and_rejects_stopping_instance(production):

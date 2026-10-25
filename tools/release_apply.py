@@ -46,7 +46,7 @@ def dashboard(path, credential_file, payload=None):
     request = urllib.request.Request("http://127.0.0.1:6185/api/v1" + path,
         data=json.dumps(payload).encode() if payload is not None else None,
         headers=headers, method="POST" if path.endswith("/reload") else "GET")
-    with urllib.request.urlopen(request, timeout=330) as response:
+    with urllib.request.urlopen(request, timeout=900) as response:
         result = json.load(response)
     if result.get("status") not in ("ok", "success", None):
         raise RuntimeError("dashboard_operation_failed")
