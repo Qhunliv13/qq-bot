@@ -1,0 +1,4187 @@
+"""彼岸酱 · 自主回复 + 表情包（AstrBot 插件）。
+
+用户 2026-09-19 要求：
+  1. **不要固定概率**：由**模型自己决定**要不要接话（不是随机掷骰子）。
+  2. **表情包**：能收（群友发的表情存成库）、能发（模型想发就发）。
+  3. **回复要短**：**尽量 20 字以内**。
+  4. **别太频繁**：默认沉默，且同群有间隔与频率上限。
+  5. **快速连发时回复不能乱序**：同群消息**串行处理**，且"只回最新一条"。
+
+设计要点：
+  · `on_message` 处理所有群消息；先让模型判断要不要接话（输出 `SILENT` 就不回）。
+  · **顺序保证**：每个群一个处理循环（`_busy`/`_pending`），同一时刻只处理一条，
+    处理期间新到的消息只保留**最后一条**（latest-wins）。这同时解决了
+    "先发的后回"乱序（并发调 LLM 导致）和积压后一次性刷屏两个问题。
+  · **表情包收集**：群友发图 → 存进 `data/stickers/`。注意 AstrBot 会把收到的图
+    **下载到 `data/temp/`**，此时组件里是**本地路径**而不是 http URL —— 两种都要处理
+    （2026-09-19 实测：只认 http 会一张都收不到）。
+  · **表情包扫描**：启动时扫描目录，把**手动放进去的**图也登记进索引（并异步补描述）。
+  · **表情包发送**：模型在回复里写 `[表情包:关键词]`，插件按描述匹配一张发出去。
+"""
+
+from __future__ import annotations
+
+# [basedir] 插件目录（wp_fact_* 按路径加载 memory.py 时用）
+BASE_DIR = str(__import__("pathlib").Path(__file__).resolve().parent)  # [basedir] 不依赖 os 是否已导入
+
+
+def _dedupe_tool_schemas(items: list) -> list:
+    """按 function.name 去重（保留最后一次定义；上游不接受重名）。"""
+    seen: dict = {}
+    order: list = []
+    for it in items or []:
+        try:
+            name = ((it.get("function") or {}).get("name") or "")
+        except Exception:                                  # noqa: BLE001
+            continue
+        if not name:
+            continue
+        if name not in seen:
+            order.append(name)
+        seen[name] = it
+    return [seen[n] for n in order]
+
+
+# [forget-not-compress] 不按条数限制；只在接近 100 万 token 时忘掉最早 60%
+# 中文近似：1 字符 ≈ 1 token，故用"累计字符数 > 1,000,000"作为触发条件
+FORGET_TOKEN_LIMIT = 1000000
+FORGET_RATIO = 0.6
+
+
+import asyncio
+import hashlib
+import json
+import os
+import re
+import time
+from pathlib import Path
+
+from astrbot.api import logger
+from astrbot.api.event import AstrMessageEvent, MessageEventResult, filter
+from astrbot.api.message_components import At, Image, Reply
+from astrbot.api.star import Context, Star, register
+from astrbot.core.message.message_event_result import MessageChain
+
+PLUGIN_ID = "astrbot_plugin_higan"
+STICKER_DIR = Path("data/stickers")
+MANIFEST = STICKER_DIR / "manifest.json"
+#: AstrBot 收到图片后会落到这个目录（本地路径形态）
+TEMP_DIR = Path("data/temp")
+
+#: 只在这些群里工作（留空 = 所有群）。填群号可避免影响其它群。
+TARGET_GROUPS: set[str] = set()
+#: **成员变动监听**只针对这些群（用户 2026-09-19 要求"只监听 146045691"）。
+#: 与 `TARGET_GROUPS` 分开：监听只是读名单，不必因此限制机器人在别的群也能聊天。
+#: 顺带省流量 —— 有个群 993 人，每分钟拉一次名单约 1MB。
+MEMBER_WATCH_GROUPS: set[str] = {"146045691"}
+#: 两条回复之间的最小间隔（秒）。用户 2026-09-19 反馈"非 @ 回复频率太低" → 90 降到 30。
+MIN_REPLY_INTERVAL = 0
+#: **被 @ 时**的最小间隔（秒）。对方明确叫你就该回，不该被间隔挡掉
+#: —— 2026-09-19 实测：群主 @ 了机器人却被限流静默丢弃，随后 AstrBot 默认流程
+#: 用人设里的 `[表情包:关键词]` 写法回了纯文本，看起来就是"表情包没发出来"。
+MIN_WOKEN_INTERVAL = 0
+#: 每群每分钟最多回复条数（用户 2026-09-19 反馈太少 → 1 提到 3）
+MAX_REPLY_PER_MIN = 1000000
+#: 被 @ 时每分钟允许多少条（明确呼叫不受"少回复"限制）
+MAX_WOKEN_PER_MIN = 1000000
+#: 表情包库上限（超过后按最久未用淘汰）
+MAX_STICKERS = 300
+#: 单张表情包体积上限（字节）
+MAX_STICKER_BYTES = 4 * 1024 * 1024
+#: **动图抽几帧**（用户 2026-09-19 要求"动图需要模型多看几帧"）
+GIF_MAX_FRAMES = 4
+#: 让模型能**主动丢掉没用的图**：写 `[删表情:关键词]`（只移出索引，不删文件）
+DELETE_STICKER_MARKER = re.compile(
+    r"[\[【（(［]\s*删(?:表情|图)\s*[:：]\s*([^\]】）)］]{1,60})\s*[\]】）)］]", re.I)
+#: 让模型能**下载图并发出**：`[下图:关键词]` 或 `[下图:图片直链]`
+#: 用户 2026-09-19 要求"可以下载搜到的图也可以下载群成员头像"。
+DOWNLOAD_IMG_MARKER = re.compile(
+    r"[\[【（(［]\s*下图\s*[:：]\s*([^\]】）)］]{1,120})\s*[\]】）)］]", re.I)
+#: 下载图片的体积上限（字节）
+MAX_DOWNLOAD_BYTES = 5 * 1024 * 1024
+#: 从搜索结果里找图片时，最多打开几个页面去找 <img>
+IMG_SEARCH_PAGES = 3
+#: 挑图时最多给模型看几张候选（看得多挑得准，但每张都费 token）
+MAX_CANDIDATES = 5
+#: 挑图时把图片压到多少像素（越大越慢；判断"合不合适"512 足够）
+REVIEW_IMAGE_MAX_SIDE = 512
+#: 单次挑图的超时（秒）。超时就跳过挑图直接发，不能让用户干等。
+REVIEW_TIMEOUT = 25
+#: 生成回复的超时（秒）。超时就本次不回，避免用户无限等待。
+CHAT_TIMEOUT = 45
+#: 机器人自己的头像缓存（描述文本），避免每次重新拉图与识图
+AVATAR_CACHE = Path("data/higan_avatar.json")
+#: 下载来的图片（搜图/头像）放这里
+DOWNLOAD_DIR = Path("data/downloads")
+#: 轮询群成员变动的间隔（秒）。用于感知"加群/退群"（用户 2026-09-19 要求）
+MEMBER_WATCH_INTERVAL = 60
+#: NapCat 的 OneBot HTTP 地址（同机，零跳转）
+ONEBOT_BASE = "http://127.0.0.1:13000"
+#: 每个群记住最近几张图（供"看看刚才那张图"这类请求）
+MAX_REMEMBER_IMAGES = 5
+#: 单次送给模型的图片上限（含被引用的图），避免 token 爆炸
+MAX_IMAGES_PER_CALL = 3
+
+#: 表情包标记：兼容半角/全角方括号、书名号、圆括号与全角冒号；
+#: 内容放宽到 60 字符，因为**允许给多个关键词**（用户 2026-09-19 要求）。
+#: （模型写法不统一，只认一种会让标记原样发出去 —— 2026-09-19 实测踩到。）
+STICKER_MARKER = re.compile(
+    r"[\[【（(［]\s*表情包\s*[:：]\s*([^\]】）)］]{1,60})\s*[\]】）)］]", re.I)
+#: 多关键词的分隔符（中英文逗号、顿号、竖线、斜杠、分号、空白）
+KEYWORD_SPLIT = re.compile(r"[,，、|/;；\s]+")
+#: 上网搜索标记：模型写 `[搜索:关键词]`，插件搜完把结果喂回模型再作答
+SEARCH_MARKER = re.compile(
+    r"[\[【（(［]\s*搜索\s*[:：]\s*([^\]】）)］]{1,80})\s*[\]】）)］]", re.I)
+#: 查看某人头像的标记：`[头像:QQ号]`
+AVATAR_MARKER = re.compile(
+    r"[\[【（(［]\s*头像\s*[:：]\s*(\d{5,12})\s*[\]】）)］]", re.I)
+#: 搜索结果最多取几条喂给模型
+SEARCH_TOP_N = 5
+#: 搜索后**打开**前几个网页读正文（用户 2026-09-19 要求"模型得打开网页"）
+PAGE_FETCH_TOP = 2
+#: 最多尝试打开几个网页（百度百科/知乎等会反爬 403，多试几个才有成功的）
+PAGE_FETCH_TRY = 4
+#: 单个网页正文最多取多少字符（避免 prompt 过长）
+PAGE_TEXT_LIMIT = 2500
+#: 搜索超时（秒）
+SEARCH_TIMEOUT = 20
+SILENT_MARKERS = ("SILENT", "silent", "（不回复）", "(不回复)", "不回复")
+
+#: 主人的 QQ（用户 2026-09-19 指定）：群主 qhunliv + 管理员 Qhunliv13。
+#: **必须在提示词里把身份标出来** —— 只给昵称的话模型分不清谁是主人
+#: （2026-09-19 用户反馈"现在不认人"）。
+OWNER_QQS = {"2084526117", "3974648486"}
+
+# 系统提示词单独放在 prompts.py（文案与逻辑分离，改文案不必碰逻辑）
+from .prompts import DECIDE_SYSTEM, DIRECT_SYSTEM, SEARCH_ANSWER_SYSTEM
+import random
+
+
+@register(PLUGIN_ID, "Q-API", "彼岸酱：模型自主决定是否接话 + 表情包收发", "1.1.0")
+class HiganPlugin(Star):
+    """彼岸酱的自主回复与表情包能力。"""
+
+    def __init__(self, context: Context) -> None:
+        super().__init__(context)
+        STICKER_DIR.mkdir(parents=True, exist_ok=True)
+        self.manifest: list[dict] = self._load_manifest()
+        # [cross-group-ears] 全局聊天缓冲（跨群只读视野 ✓ 最近 120 行）
+        self._all_recent: list = []
+        self._last_reply_at: dict[str, float] = {}
+        self._reply_times: dict[str, list[float]] = {}
+        self._recent: dict[str, list[str]] = {}
+        # 每个群最近出现过的图（供"看看刚才那张图"这类请求，用户 2026-09-19 要求）
+        self._recent_images: dict[str, list[str]] = {}
+        # 各群成员名单快照（用于 diff 出"加群/退群"，用户 2026-09-19 要求）
+        self._member_snapshot: dict[str, dict[str, str]] = {}
+        # 顺序保证：每个群一个"忙碌"标记 + 只保留最新一条待处理消息
+        self._busy: dict[str, bool] = {}
+        self._last_sent: dict = {}
+        self._pending: dict[str, tuple] = {}
+        # 人设文本：插件自己调 LLM 会**覆盖** AstrBot 的 system prompt，
+        # 所以必须把人设读进来拼在最前面，否则"人设就不牢靠"（2026-09-19 实测踩到）。
+        self.persona: str = self._load_persona()
+        scanned = self._scan_sticker_dir()
+        logger.info("[higan] 插件加载，表情包库 %d 张（新登记 %d），人设 %d 字"
+                    % (len(self.manifest), scanned, len(self.persona)))
+
+    async def initialize(self) -> None:
+        """启动后台任务：① 补表情包描述 ② 监听群成员变动（加群/退群）。
+
+        把**通用占位描述**（"表情包"）也算作"待补" —— 否则从 temp 导入或手动放进目录的
+        图会永远停在通用描述上，按关键词挑图时永远匹配不到。
+        """
+        missing = [s for s in self.manifest
+                   if (s.get("desc") or "").strip() in ("", "表情包")]
+        if missing:
+            logger.info("[higan] 待补描述的表情包 %d 张" % len(missing))
+            asyncio.create_task(self._describe_missing(missing))
+        # 成员变动监听：用户 2026-09-19 要求"模型能看到加群退群"
+        asyncio.create_task(self._watch_members())
+
+        # [poll-loop-in-init] 定时查看循环（initialize 里启动最可靠 ✓）
+        try:
+            if getattr(self, "_poll_loop_task", None) is None:
+                self._poll_loop_task = asyncio.create_task(self._poll_loop())
+                logger.info("[higan] 定时查看循环已启动（30s 一轮）✓")
+        except Exception as _pexc:  # noqa: BLE001
+            logger.warning("[higan] 定时查看循环启动失败：%r", str(_pexc)[:120])
+        logger.info("[higan] 已启动群成员变动监听（每 %ds 一次，群=%s）"
+                    % (MEMBER_WATCH_INTERVAL,
+                       ",".join(sorted(MEMBER_WATCH_GROUPS)) or "全部"))
+
+    # ------------------------------------------------------------------ 工具
+
+    @staticmethod
+    def _load_persona() -> str:
+        """从 AstrBot 的库里**只读**取出 higan 人设文本。
+
+        只读，不写：直接写 `personas` 表会导致 AstrBot 崩溃循环（字段类型不匹配），
+        所以这里只用 SELECT；取不到就返回空串（插件仍可工作，只是语气弱一些）。
+        """
+        import sqlite3
+        for db in ("data/data_v4.db", "/root/astrbot-src/data/data_v4.db"):
+            if not os.path.exists(db):
+                continue
+            try:
+                con = sqlite3.connect("file:%s?mode=ro" % db, uri=True, timeout=10)
+                row = con.execute(
+                    "SELECT system_prompt FROM personas WHERE persona_id='higan'"
+                ).fetchone()
+                con.close()
+                if row and row[0]:
+                    return row[0]
+            except Exception as exc:
+                logger.warning("[higan] 读取人设失败（%s）：%r", db, exc)
+        logger.warning("[higan] 未取到 higan 人设，将仅用决策提示词")
+        return ""
+
+    def _load_manifest(self) -> list[dict]:
+        """读表情包索引（`[{file, desc, ts, uses}]`）。"""
+        if MANIFEST.exists():
+            try:
+                with open(MANIFEST, encoding="utf-8") as fh:
+                    return json.load(fh)
+            except Exception as exc:
+                logger.warning("[higan] 表情包索引损坏，重建：%r", exc)
+        return []
+
+    def _save_manifest(self) -> None:
+        """写表情包索引。"""
+        try:
+            with open(MANIFEST, "w", encoding="utf-8") as fh:
+                json.dump(self.manifest, fh, ensure_ascii=False, indent=1)
+        except Exception as exc:
+            logger.warning("[higan] 表情包索引写入失败：%r", exc)
+
+    def _scan_sticker_dir(self) -> int:
+        """把目录里**未被索引登记**的图片补进索引（支持用户手动放进去的表情包）。"""
+        known = {s.get("file") for s in self.manifest}
+        added = 0
+        for path in sorted(STICKER_DIR.iterdir()):
+            if not path.is_file() or path.name == MANIFEST.name or path.name in known:
+                continue
+            if path.suffix.lower() not in (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"):
+                continue
+            self.manifest.append({"file": path.name, "desc": "", "ts": time.time(),
+                                  "uses": 0})
+            added += 1
+        if added:
+            self._save_manifest()
+        return added
+
+    async def _describe_missing(self, items: list[dict]) -> None:
+        """给还没有描述的表情包补一句中文描述（视觉模型），用于关键词匹配。"""
+        for item in items[:20]:
+            path = STICKER_DIR / item["file"]
+            if not path.exists():
+                continue
+            try:
+                desc = await self._describe(str(path))
+            except Exception as exc:
+                logger.warning("[higan] 补描述失败 %s：%r", item["file"], exc)
+                continue
+            item["desc"] = desc
+            logger.info("[higan] 表情包描述 %s → %s" % (item["file"], desc))
+        self._save_manifest()
+
+    def _load_avatar_cache(self) -> dict:
+        """读机器人头像的描述缓存（`{qq, desc}`）。"""
+        if AVATAR_CACHE.exists():
+            try:
+                return json.loads(AVATAR_CACHE.read_text(encoding="utf-8"))
+            except Exception as exc:
+                logger.warning("[higan] 头像缓存损坏：%r", exc)
+        return {}
+
+    def _avatar_path(self, qq: str) -> Path:
+        """机器人头像的本地文件路径。"""
+        return AVATAR_CACHE.parent / ("higan_avatar_%s.jpg" % qq)
+
+    async def _self_knowledge(self, event: AstrMessageEvent) -> str:
+        """机器人对**自己**的认知：它的 QQ 头像长什么样（带缓存）。
+
+        用户 2026-09-19 反馈"模型不知道自己的头像是什么样" —— 它此前完全不了解自己。
+        这里拉一次自己的 QQ 头像、用视觉模型描述一次并缓存，之后每次对话都带上，
+        这样被问"你头像是什么 / 你长什么样"时能答得出来。
+        """
+        qq = str(event.get_self_id() or "")
+        if not qq:
+            return ""
+        cache = self._load_avatar_cache()
+        if cache.get("qq") == qq and cache.get("desc"):
+            return cache["desc"]
+        path = self._avatar_path(qq)
+        try:
+            if not path.exists():
+                url = "https://q1.qlogo.cn/g?b=qq&nk=%s&s=640" % qq
+                raw = await asyncio.to_thread(self._read_image, url)
+                if raw:
+                    path.write_bytes(raw)
+            desc = await self._describe_image(
+                str(path),
+                "这是机器人自己的 QQ 头像。用不超过 20 个字描述它长什么样"
+                "（只输出描述，不要客套）。")
+            if desc:
+                AVATAR_CACHE.parent.mkdir(parents=True, exist_ok=True)
+                AVATAR_CACHE.write_text(
+                    json.dumps({"qq": qq, "desc": desc}, ensure_ascii=False),
+                    encoding="utf-8")
+                logger.info("[higan] 已记住自己的头像：%s" % desc)
+            return desc
+        except Exception as exc:
+            logger.warning("[higan] 获取/描述自己的头像失败：%r", exc)
+            return ""
+
+    def _avatar_target(self, event: AstrMessageEvent, text: str) -> tuple[str, str]:
+        """判断这句话在问**谁**的头像，返回 `(QQ, 这是谁的头像)`。
+
+        这是"头像老出错"的根治点（2026-09-19 实测）：
+        模型此前**看不到提问者的头像**，被问"我的头像是什么"时只能拿**自己的**头像描述
+        硬答（于是出现"主人的头像是银发猫耳女仆"这种把机器人自己当成对方的回答）。
+        现在插件先把**正确那个人的头像**找出来发给它，它照着看就行。
+
+        解析顺序：
+          1. 「你/彼岸酱 的头像」→ 机器人自己
+          2. 「我的头像」→ 说话人自己
+          3. 消息里 @ 了谁 → 那个人（用 At 组件的 qq）
+          4. 「XX 的头像」→ 按昵称在群成员名单里找
+        """
+        t = text or ""
+        if not any(k in t for k in ("头像", "长什么样", "长啥样", "样子", "自拍",
+                                    "看看你", "你可爱", "你是谁")):
+            return "", ""
+        self_id = str(event.get_self_id() or "")
+        sender = str(event.get_sender_id() or "")
+        # 1) 机器人自己
+        if re.search(r"你(的)?(头像|样子)|彼岸酱(的)?(头像|样子)|看看你|你长", t):
+            return self_id, "你自己（彼岸酱）的头像"
+        # 2) 说话人自己
+        if re.search(r"(我|咱|俺)(的)?(头像|样子)", t):
+            return sender, "提问者本人的头像"
+        # 3) @ 了谁
+        for comp in event.get_messages():
+            if isinstance(comp, At):
+                qq = str(getattr(comp, "qq", "") or "")
+                if qq.isdigit() and qq != self_id:
+                    return qq, "被 @ 那个人的头像"
+        # 4) 按昵称找群成员
+        snap = self._member_snapshot.get(str(event.get_group_id() or "")) or {}
+        for qq, name in snap.items():
+            if name and len(name) >= 2 and name in t:
+                return qq, "%s 的头像" % name
+        return "", ""
+
+    async def _avatar_ref(self, event: AstrMessageEvent, text: str) -> tuple[str, str]:
+        """按问题找出该看谁的头像，返回 `(本地路径, 说明)`；找不到返回 `("", "")`。"""
+        qq, desc = self._avatar_target(event, text)
+        if not qq:
+            return "", ""
+        path = await self._member_avatar(qq)
+        if not path:
+            return "", ""
+        return str(path), desc
+
+    @staticmethod
+    async def _file_url_of_message(self, msg_id: str) -> str:
+        """按消息号找到那条消息里的文件/语音/图片地址（用于 vm_fetch ✓）。
+
+        Args:
+            msg_id: OneBot 消息号（她上下文里看到的 #1234）。
+
+        Returns:
+            str: 可下载的 http 地址或本地路径；找不到返回空串。
+        """
+        try:
+            import urllib.request as _u
+            import json as _j
+            _payload = _j.dumps({"action": "get_msg",
+                                 "params": {"message_id": int(str(msg_id).lstrip("#"))}}).encode()
+            _req = _u.Request("http://127.0.0.1:3000/get_msg", data=_payload,
+                              headers={"Content-Type": "application/json"})
+            _resp = _u.urlopen(_req, timeout=10).read().decode("utf-8", "replace")
+            _data = (_j.loads(_resp) or {}).get("data") or {}
+            for _seg in (_data.get("message") or []):
+                _t = _seg.get("type")
+                _d = _seg.get("data") or {}
+                if _t in ("file", "record", "video", "image"):
+                    for _k in ("url", "file", "path"):
+                        _v = str(_d.get(_k) or "")
+                        if _v.startswith("http"):
+                            return _v
+        except Exception:                                  # noqa: BLE001
+            return ""
+        return ""
+
+    def _person_conf(self, qq: str) -> dict:
+        """取某个唤醒人的专属配置（回复率/专属词/时间段）。
+
+        Args:
+            qq: 对方 QQ 号。
+
+        Returns:
+            dict: {"pct": float, "words": list, "hours": list}（缺省为全开）。
+        """
+        try:
+            with open("/root/higan/groups.json", encoding="utf-8") as handle:
+                conf = json.load(handle)
+        except Exception:                                  # noqa: BLE001
+            return {"pct": 100.0, "words": [], "hours": []}
+        table = conf.get("wake_person_conf") or {}
+        item = table.get(str(qq)) or table.get(str(qq).strip()) or {}
+        try:
+            pct = float(item.get("pct", 100))
+        except Exception:                                  # noqa: BLE001
+            pct = 100.0
+        return {"pct": max(0.0, min(100.0, pct)),
+                "words": [str(x) for x in (item.get("words") or [])],
+                "hours": [int(x) for x in (item.get("hours") or [])][:2]}
+
+    @staticmethod
+    def _hours_ok(hours: list) -> bool:
+        """当前时间是否落在配置的小时区间内（支持跨零点；空列表=不限）。"""
+        if not hours or len(hours) < 2:
+            return True
+        start, end = hours[0], hours[1]
+        now = time.localtime().tm_hour
+        if start <= end:
+            return start <= now < end
+        return now >= start or now < end
+
+    def _wake_hit(self, event: AstrMessageEvent, text: str,
+                  group: str = "") -> str:
+        """命中唤醒词/唤醒人 ⇒ 返回命中原因（"person"/"word"/""）。
+
+        支持按群存储（wake_persons / wake_words 都是 {群号: [..]}）。
+
+        Args:
+            event: 当前消息事件。
+            text: 消息文本。
+            group: 当前群号。
+
+        Returns:
+            str: "person" / "word" / ""（未命中）。
+        """
+        try:
+            with open("/root/higan/groups.json", encoding="utf-8") as handle:
+                conf = json.load(handle)
+        except Exception:                                  # noqa: BLE001
+            return ""
+
+        _grp = str(group or "").strip()
+        _grp_num = "".join(ch for ch in _grp if ch.isdigit())
+
+        def _pick(table: dict) -> list:
+            """按群号取名单：先精确，再按数字后缀匹配（兼容 int 键 / 前缀键）。"""
+            if not isinstance(table, dict):
+                return []
+            for _k, _v in table.items():
+                _ks = str(_k).strip()
+                _kn = "".join(ch for ch in _ks if ch.isdigit())
+                if _ks == _grp or (_kn and _kn == _grp_num) or (
+                        _grp_num and _grp.endswith(_kn)):
+                    return [str(x) for x in (_v or [])]
+            return []
+
+        def _list_for(key: str) -> list:
+            """取本群的名单（兼容旧的 list 写法）。"""
+            val = conf.get(key) or {}
+            if isinstance(val, dict):
+                return _pick(val)
+            return [str(x) for x in val]
+
+        try:
+            sender = str(event.get_sender_id() or "")
+        except Exception:                                  # noqa: BLE001
+            sender = ""
+        _persons = _list_for("wake_persons")
+        if _persons:
+            logger.info("[higan] 唤醒人名单(group=%s)：%s ｜ 本条发言人=%s"
+                        % (_grp, ",".join(_persons[:6]), sender or "(空)"))
+        if sender and sender in _persons:
+            return "person"
+        for word in _list_for("wake_words"):
+            w = word.strip()
+            if w and w in (text or ""):
+                return "word"
+        return ""
+
+    @staticmethod
+    def _at_targets(event: AstrMessageEvent) -> list[str]:
+        """取本条消息里 @ 了哪些 QQ（用于判断"他是不是在跟别人说话"）。
+
+        这是"别插嘴"判断的关键线索（用户 2026-09-20 要求）：有人 @ 了别的群友时，
+        那条消息多半**不是对机器人说的**，机器人应当沉默。
+        """
+        out: list[str] = []
+        for comp in event.get_messages():
+            if isinstance(comp, At):
+                qq = str(getattr(comp, "qq", "") or "")
+                if qq.isdigit():
+                    out.append(qq)
+        return out
+
+    def _recent_others_talking(self, group: str, who: str, window: int = 4) -> bool:
+        """最近几条里，是否**正好两个人在一问一答**（真正的两人对话）。
+
+        **必须严格**（2026-09-20 踩坑）：早先只要最近几条出现 ≥2 个不同发言人就判为
+        "别人在交谈"，可群里本来就人多，于是几乎每次都给模型"别插嘴"的线索，
+        结果它什么都不说了（用户反馈"怎么不回复了"）。
+        现在只认**恰好 2 个人、且交替发言**（A→B→A→B）这种真正的两人对话。
+        """
+        history = self._recent.get(group) or []
+        seq: list[str] = []
+        for line in history[-window:]:
+            name = line.split("：", 1)[0]
+            if name and name != "彼岸酱":
+                seq.append(name)
+        if len(seq) < 3:
+            return False
+        uniq = set(seq)
+        if len(uniq) != 2:                       # 多于两人 = 多人闲聊，不算"两人对话"
+            return False
+        if any(seq[i] == seq[i + 1] for i in range(len(seq) - 1)):
+            return False                         # 没有交替 = 不是一问一答
+        me = who.split("（", 1)[0]
+        return me in uniq
+
+    @staticmethod
+    def _who(event: AstrMessageEvent) -> str:
+        """把发言人描述成"昵称（身份，QQ 号）"，让模型能认出主人与群友。
+
+        **只给昵称是不够的**：模型没法把昵称对应到主人名单上（用户反馈"不认人"）。
+        这里直接算好身份再交给模型，比让它自己比对 QQ 号更可靠。
+
+        **QQ 缺失时不要瞎标身份**（2026-09-19 实测）：掉线期间积压补推的消息
+        `get_sender_id()` 会是 0，那时若仍标"群友，QQ 0"，模型可能把主人当群友。
+        此时只给昵称、并注明身份未知。
+        """
+        qq = str(event.get_sender_id() or "")
+        name = event.get_sender_name() or ""
+        # [self-label+robust-pct] 她自己说的话要标清楚（否则她认不出自己 ✗）
+        try:
+            _self = str(event.get_self_id() or "")
+            if _self and qq and qq == _self:
+                return "你（彼岸酱）"
+        except Exception:  # noqa: BLE001
+            pass
+        if not qq or qq == "0":
+            return "%s（QQ 未知，身份无法确认）" % (name or "某人")
+        if not name:
+            name = qq
+        role = "主人" if qq in OWNER_QQS else "群友"
+        base = "%s（%s，QQ %s）" % (name, role, qq)
+        # [wake-marker] 只按 QQ 号判定该群唤醒人，带"我记了他几条"（2026-10-25）
+        try:
+            import json as _j
+            from pathlib import Path as _P
+            _conf = _j.loads(_P("/root/higan/groups.json").read_text(encoding="utf-8"))
+            _gid = str(event.get_group_id() or "")
+            _wl = [_ for _v in ((_conf.get("wake_persons") or {}).get(_gid) or [])
+                   for _ in [str(_v)]]
+            if qq in _wl:
+                _cnt = 0
+                try:
+                    import importlib.util as _ilu
+                    _sp = _ilu.spec_from_file_location(
+                        "wpcnt", str(_P(__file__).resolve().parent / "memory.py"))
+                    _m = _ilu.module_from_spec(_sp)
+                    _sp.loader.exec_module(_m)
+                    _cnt = _m.WakePersonFacts(
+                        "/root/higan/memory/wake_persons.json").load().count(qq)
+                except Exception:  # noqa: BLE001
+                    _cnt = 0
+                return "【唤醒人 QQ %s · 我记了他 %d 条】%s" % (qq, _cnt, base)
+        except Exception:  # noqa: BLE001
+            pass
+        return base
+
+    def _rate_ok(self, group: str, woken: bool = False) -> bool:
+        """防刷屏：间隔 + 每分钟条数。
+
+        **被 @ 时放宽**：对方明确叫你就该回，不该被"少回复"的 90 秒挡掉
+        （2026-09-19 实测：群主 @ 机器人却因限流被静默丢弃）。
+        """
+        now = time.time()
+        interval = MIN_WOKEN_INTERVAL if woken else MIN_REPLY_INTERVAL
+        limit = MAX_WOKEN_PER_MIN if woken else MAX_REPLY_PER_MIN
+        if now - self._last_reply_at.get(group, 0) < interval:
+            logger.info("[higan] 群 %s：限流跳过（距上次 %ds < %ds，woken=%s）"
+                        % (group, int(now - self._last_reply_at.get(group, 0)),
+                           interval, woken))
+            return False
+        times = [t for t in self._reply_times.get(group, []) if now - t < 60]
+        self._reply_times[group] = times
+        if len(times) >= limit:
+            logger.info("[higan] 群 %s：本分钟已达上限 %d 条，跳过（woken=%s）"
+                        % (group, limit, woken))
+            return False
+        return True
+
+    def _mark_replied(self, group: str) -> None:
+        """记录一次回复时间。"""
+        now = time.time()
+        self._last_reply_at[group] = now
+        self._reply_times.setdefault(group, []).append(now)
+
+    # --------------------------------------------------- 取图（含被引用的图）
+
+    @staticmethod
+    def _ref_of(comp) -> str:
+        """从一个 Image 组件取出可用的图片引用（http URL 或本地路径）。"""
+        for attr in ("url", "file", "path"):
+            val = getattr(comp, attr, None)
+            if val:
+                return str(val)
+        return ""
+
+    def _quoted_text(self, event: AstrMessageEvent) -> str:
+        """取**被引用消息的文字**（用户 2026-09-19 反馈"看不到群员引用的内容"）。
+
+        `Reply` 组件自带 `message_str`（被引用消息解析后的纯文本）与 `sender_nickname`，
+        直接用它们；没有的话再从 `chain` 里的 Plain 段拼一份兜底。
+        """
+        for comp in event.get_messages():
+            if not isinstance(comp, Reply):
+                continue
+            text = (getattr(comp, "message_str", "") or "").strip()
+            if not text:
+                parts = [getattr(sub, "text", "") for sub in (getattr(comp, "chain", None) or [])
+                         if getattr(sub, "text", None)]
+                text = "".join(parts).strip()
+            if text:
+                who = getattr(comp, "sender_nickname", "") or getattr(comp, "sender_id", "")
+                return "%s：%s" % (who, text[:200]) if who else text[:200]
+        return ""
+
+    def _image_refs(self, event: AstrMessageEvent) -> list[str]:
+        """取本条消息里的图 + **被引用消息里的图**。
+
+        用户 2026-09-19 要求"可以主动看某个图"：群里常见用法是**引用一张图**再问
+        "这是什么"，此时本条消息里没有图，只看本条就什么都看不见（之前的缺陷）。
+        """
+        refs: list[str] = []
+        for comp in event.get_messages():
+            if isinstance(comp, Image):
+                ref = self._ref_of(comp)
+                if ref:
+                    refs.append(ref)
+            elif isinstance(comp, Reply):
+                # 被引用消息的完整消息段列表就在 Reply.chain 里（含图片）
+                for sub in (getattr(comp, "chain", None) or []):
+                    if isinstance(sub, Image):
+                        ref = self._ref_of(sub)
+                        if ref:
+                            refs.append(ref)
+        return refs
+
+    def _remember_images(self, group: str, refs: list[str]) -> None:
+        """记住群里最近出现过的图，供"看看刚才那张图"这类请求使用。"""
+        if not refs:
+            return
+        cache = self._recent_images.setdefault(group, [])
+        for ref in refs:
+            if ref not in cache:
+                cache.append(ref)
+        del cache[:-MAX_REMEMBER_IMAGES]
+
+    @staticmethod
+    def _looks_like_asking_image(text: str) -> bool:
+        """这句话是不是在问一张图（用于决定要不要带上"最近那张图"）。"""
+        return any(k in (text or "") for k in
+                   ("图", "图片", "照片", "表情", "这个", "这张", "看看", "看的"))
+
+    @staticmethod
+    def _data_urls(path: Path, max_side: int = REVIEW_IMAGE_MAX_SIDE,
+                   max_frames: int = GIF_MAX_FRAMES) -> list[str]:
+        """把图片转成 data URL **列表**：静图 1 张，**动图抽多帧**。
+
+        用户 2026-09-19 要求"动图需要模型多看几帧" —— 只取第一帧根本看不懂动图在演什么
+        （例如"先是得意、然后翻车"这种）。这里对 GIF/WebP 动图等间隔抽 `max_frames` 帧，
+        横向拼成一张长条图再发：既让模型看到过程，又只占一张图的 token。
+        """
+        import base64
+        import io
+        import mimetypes
+        raw = path.read_bytes()
+        try:
+            from PIL import Image as PILImage
+            img = PILImage.open(io.BytesIO(raw))
+            frames: list = []
+            total = int(getattr(img, "n_frames", 1) or 1)
+            if total > 1:
+                step = max(1, total // max_frames)
+                for i in range(0, total, step):
+                    img.seek(i)
+                    frames.append(img.convert("RGB").copy())
+                    if len(frames) >= max_frames:
+                        break
+            else:
+                frames = [img.convert("RGB")]
+
+            # 逐帧缩放到 max_side，再横向拼成一条（帧间留 4px 白缝，便于区分）
+            scaled = []
+            for fr in frames:
+                if max(fr.size) > max_side:
+                    fr.thumbnail((max_side, max_side))
+                scaled.append(fr)
+            if len(scaled) == 1:
+                out = scaled[0]
+            else:
+                gap = 4
+                width = sum(f.width for f in scaled) + gap * (len(scaled) - 1)
+                height = max(f.height for f in scaled)
+                out = PILImage.new("RGB", (width, height), (255, 255, 255))
+                x = 0
+                for fr in scaled:
+                    out.paste(fr, (x, 0))
+                    x += fr.width + gap
+            buf = io.BytesIO()
+            out.save(buf, format="JPEG", quality=80)
+            return ["data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()]
+        except Exception as exc:                      # 压缩失败就退回原图
+            logger.warning("[higan] 图片处理失败，改用原图：%r", exc)
+            mime = mimetypes.guess_type(str(path))[0] or "image/jpeg"
+            return ["data:%s;base64,%s" % (mime, base64.b64encode(raw).decode())]
+
+    @staticmethod
+    def _data_url(path: Path, max_side: int = REVIEW_IMAGE_MAX_SIDE) -> str:
+        """单张 data URL（静图用；动图请用 `_data_urls` 取多帧）。
+
+        会**先压缩到 `max_side` 像素**：判断"这张表情合不合适"不需要原图，
+        而群里表情包常有 1~2MB，base64 后 2.7MB，上传+视觉推理要 100 秒以上
+        （2026-09-19 实测：一次复核耗时 108s）。压到 512px/JPEG 后通常几十 KB。
+        """
+        return HiganPlugin._data_urls(path, max_side=max_side, max_frames=1)[0]
+
+    async def _pick_by_looking(self, keywords: list[str], context: str) -> dict | None:
+        """把候选表情包**直接给模型看**，让它自己挑一张（用户 2026-09-19 要求）。
+
+        为什么这样改：之前模型只看到**文字标签**，挑图等于盲选，再靠"复核"补救；
+        用户反馈"模型不知道自己的图长什么样"。现在把候选图连图带标签一起给它，
+        它**看得见**再挑 —— 一次调用同时完成"挑图 + 判断合不合适"，
+        比"盲选 + 复核"又快又准（少一次往返）。
+
+        @returns 选中的表情包条目；返回 None 表示"都不合适/没搜到"。
+        """
+        if not self.manifest:
+            return None
+        pool = self._search_stickers(keywords)[:MAX_CANDIDATES]
+        if not pool:
+            logger.info("[higan] 关键词 %s 没搜到任何表情包" % keywords)
+            return None
+        refs: list[str] = []
+        labels: list[str] = []
+        for item in pool:
+            path = STICKER_DIR / item["file"]
+            if not path.exists():
+                continue
+            # 动图会返回"多帧拼成的一张长条图"，模型就能看懂过程
+            for url in self._data_urls(path):
+                refs.append(url)
+                labels.append("图%d：%s" % (len(refs), (item.get("desc") or "（无标签）")[:24]))
+        if not refs:
+            return None
+        provider = self.context.get_using_provider()
+        if provider is None:
+            return pool[0]
+        prompt = ("【当前对话】\n%s\n\n【候选表情包】下面按顺序给你看了 %d 张图"
+                  "（**动图是多帧拼成的长条图，从左到右就是它播放的顺序**）：\n%s\n\n"
+                  "请挑一张最适合现在发的，**只回答序号**（例如 `2`）；"
+                  "如果都不合适，只回答 `0`。\n"
+                  "另外可选的第二行：\n"
+                  "· 某张图的标签明显不准 → `标签N：更准的关键词`\n"
+                  "· 某张图明显是废图/乱码/无意义（该丢掉）→ `删N`\n"
+                  "（不需要就省略这些行）"
+                  % (context or "（无上下文）", len(refs), "\n".join(labels)))
+        try:
+            resp = await asyncio.wait_for(
+                provider.text_chat(
+                    prompt=prompt,
+                    system_prompt="你是表情包挑选助手，看得见每张图，严格按要求回答。",
+                    image_urls=refs),
+                timeout=REVIEW_TIMEOUT)
+        except asyncio.TimeoutError:
+            logger.warning("[higan] 挑图超时（>%ds），用第一张候选" % REVIEW_TIMEOUT)
+            return pool[0]
+        except Exception as exc:
+            logger.warning("[higan] 挑图失败（用第一张候选）：%r", exc)
+            return pool[0]
+        text = (getattr(resp, "completion_text", "") or "").strip()
+        pick = 0
+        for line in text.splitlines():
+            line = line.strip()
+            if line.startswith("标签"):
+                self._apply_label_fix(line, pool)
+                continue
+            if line.startswith("删"):
+                self._apply_drop(line, pool)          # 模型主动丢掉没用的图
+                continue
+            if line.isdigit():
+                pick = int(line)
+                break
+        if pick == 0:
+            logger.info("[higan] 模型看了 %d 张候选，认为都不合适（原答：%s）"
+                        % (len(refs), text[:40].replace("\n", " ")))
+            return None
+        if 1 <= pick <= len(pool):
+            chosen = pool[pick - 1]
+            chosen["uses"] = int(chosen.get("uses", 0)) + 1
+            chosen["last_used"] = time.time()
+            self._save_manifest()
+            logger.info("[higan] 模型看图选中第 %d 张：%s（%s）"
+                        % (pick, chosen["file"], (chosen.get("desc") or "")[:20]))
+            return chosen
+        return pool[0]
+
+    def _apply_drop(self, line: str, pool: list[dict]) -> None:
+        """处理模型给的"丢掉这张"指令：`删2` 或 `删表情:关键词`。
+
+        用户 2026-09-19 要求"增加模型可以主动丢掉一些没用的图"。
+        **只移出索引、不删文件**（可随时恢复；也避免误删）。
+        """
+        try:
+            body = line[1:].strip()
+            if "：" in body or ":" in body:
+                body = re.split(r"[:：]", body, 1)[1].strip()
+            keys = self._split_keywords(body) if body else []
+            targets: list[dict] = []
+            if keys:
+                targets = [s for s in self.manifest
+                           if any(k and k in (s.get("desc") or "") for k in keys)]
+            else:
+                num = "".join(ch for ch in body if ch.isdigit())
+                if num and 1 <= int(num) <= len(pool):
+                    targets = [pool[int(num) - 1]]
+            removed = 0
+            for item in targets:
+                if item in self.manifest:
+                    self.manifest.remove(item)
+                    removed += 1
+                    logger.info("[higan] 模型主动丢掉表情包：%s（%s）"
+                                % (item["file"], (item.get("desc") or "")[:20]))
+            if removed:
+                self._save_manifest()
+        except Exception as exc:
+            logger.warning("[higan] 解析丢图指令失败（%s）：%r", line[:30], exc)
+
+    def _apply_label_fix(self, line: str, pool: list[dict]) -> None:
+        """处理模型给的标签修正行：`标签2：更准的关键词`。"""
+        try:
+            head, _, tail = line.partition("：") if "：" in line else line.partition(":")
+            num = "".join(ch for ch in head if ch.isdigit())
+            new = tail.strip()
+            if not num or not new or new in ("-", "—", "无", "无需修改"):
+                return
+            idx = int(num)
+            if not (1 <= idx <= len(pool)):
+                return
+            item = pool[idx - 1]
+            old = item.get("desc") or ""
+            item["desc"] = "、".join(self._split_keywords(new))[:60]
+            self._save_manifest()
+            logger.info("[higan] 模型改了关键词：%s 「%s」→「%s」"
+                        % (item["file"], old, item["desc"]))
+        except Exception as exc:
+            logger.warning("[higan] 解析标签修正失败（%s）：%r", line[:30], exc)
+
+    async def _pick_sticker_reviewed(self, keywords: list[str],
+                                     context: str) -> dict | None:
+        """兼容旧名：实际走 `_pick_by_looking`（看图挑一张）。"""
+        return await self._pick_by_looking(keywords, context)
+
+    def _register_sticker(self, path: Path, desc: str) -> None:
+        """把一张图登记进表情包库（超限时淘汰最久未用的）。"""
+        self.manifest.append({"file": path.name, "desc": desc[:60],
+                              "ts": time.time(), "uses": 0})
+        if len(self.manifest) > MAX_STICKERS:
+            self.manifest.sort(key=lambda s: (s.get("uses", 0), s.get("ts", 0)))
+            for old in self.manifest[:len(self.manifest) - MAX_STICKERS]:
+                try:
+                    (STICKER_DIR / old["file"]).unlink(missing_ok=True)
+                except OSError:
+                    pass
+            self.manifest = self.manifest[len(self.manifest) - MAX_STICKERS:]
+        self._save_manifest()
+
+    # ------------------------------------------------------------- 消息处理
+
+    @filter.event_message_type(filter.EventMessageType.ALL)
+    async def on_message(self, event: AstrMessageEvent) -> None:
+        """所有消息入口：串行化 + latest-wins，保证回复顺序且不积压。"""
+        try:
+            # [private-scope] 2026-10-19: 私聊也处理（用户要求「在哪对话都能回」）
+            group_raw = str(event.get_group_id() or "")
+            if group_raw:
+                if TARGET_GROUPS and group_raw not in TARGET_GROUPS:
+                    return
+                group = group_raw
+            else:
+                # 私聊：按 QQ 建独立作用域 => 独立的 _recent/_pending/_busy/限流桶 ✓
+                sender = str(event.get_sender_id() or "") or "unknown"
+                group = "private:" + sender
+
+            text = (event.get_message_str() or "").strip()
+            # [read-forward] 合并转发 ⇒ 把里面的聊天记录读出来给她看 ✓
+            try:
+                _fwd = await self._forward_to_text(event)
+                if _fwd:
+                    text = (text + "\n【转发聊天记录】\n" + _fwd).strip()
+                    logger.info("[higan] 已解析转发聊天记录（%d 行）" % len(_fwd.splitlines()))
+                elif any(k in text for k in ("[转发", "[聊天记录", "forward")):
+                    text = text + "\n【转发聊天记录】（内容读取失败）"
+            except Exception as _exc:  # noqa: BLE001
+                logger.warning("[higan] 转发解析异常（忽略）：%r", str(_exc)[:120])
+            images = [c for c in event.get_messages() if isinstance(c, Image)]
+
+            # ① 群友发图 → 收集进表情包库（后台跑，不影响回复时序）+ 记住最近几张图
+            if images:
+                self._remember_images(group, self._image_refs(event))
+                # [vm-archive] 2026-10-19: 收到的图也归进她的虚拟机，便于回看
+                try:
+                    await self._archive_images(event, group)
+                except Exception as _exc:  # noqa: BLE001
+                    logger.warning("[higan] 归档图片失败（忽略）：%r", _exc)
+                asyncio.create_task(self._collect_images(event, group, images))
+
+            # ② 命令（以唤醒前缀开头）交给 AstrBot 自己处理，插件不插手、也不拦事件
+            if text.startswith("/"):
+                return
+
+            _woken_flag = self._is_woken(event)
+            logger.info("[higan] 收到群 %s 消息：%s（%s）｜woken=%s"
+                        % (group, text[:40] or "[图片]", self._who(event), _woken_flag))
+            if "@" in (text or "") or _woken_flag:
+                try:
+                    _sid = str(event.get_self_id() or "")
+                    _ats = []
+                    for _seg in (getattr(getattr(event, "message_obj", None), "message", None) or []):
+                        if str(getattr(_seg, "type", "") or "") == "at":
+                            _ats.append(str(getattr(_seg, "qq", None) or "?"))
+                    logger.info("[higan] @ 诊断：self_id=%s ｜ @目标=%s ｜ woken=%s"
+                                % (_sid or "(空)", ",".join(_ats) or "(无)", _woken_flag))
+                except Exception:  # noqa: BLE001
+                    pass
+
+            # **每条群消息都进历史**（含发言人身份），这样模型看到的上下文才完整。
+            # 之前只有"决定要不要回"的消息才进历史，被限流/SILENT 的全丢了，
+            # 导致它接不上话题（用户 2026-09-19 反馈"看到内容不够全面"）。
+            quoted = self._quoted_text(event)
+            # [model-quote] 带消息号：`昵称（身份，QQ x）#1234：内容` ⇒ 模型可自己选引用哪条
+            _mid = getattr(getattr(event, "message_obj", None), "message_id", None)
+            _tag = ("#%s" % _mid) if _mid else ""
+            line = "%s%s：%s%s" % (self._who(event), _tag, ((text or "") if str(text or "").strip() else ("（这是 %s 发的图片/文件）" % self._who(event))),
+                                   "（引用 %s）" % quoted if quoted else "")
+            history = self._recent.setdefault(group, [])
+            # [history-persist] 首次见到该群 ⇒ 从磁盘恢复最近 200 行（重启不丢 ✓）
+            if not history:
+                try:
+                    _old = self._hist().load(group, 200)
+                    if _old:
+                        history.extend(_old)
+                        logger.info("[higan] 已从磁盘恢复 %s 的历史 %d 行 ✓" % (group, len(_old)))
+                except Exception as _exc:  # noqa: BLE001
+                    logger.warning("[higan] 恢复历史失败（忽略）：%r", _exc)
+            history.append(line)
+            del history[:-2000]
+            # [cross-group-ears] 同时进全局缓冲（带群标签 ✓）
+            try:
+                self._all_recent.append("[群%s] %s" % (group, line))
+                del self._all_recent[:-120]
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                self._hist().append(group, line)   # 落盘 ✓
+            except Exception:  # noqa: BLE001
+                pass
+
+            # [pct-at-entry] 概率门禁放在入口（去抖会覆盖消息，放后面会漏 ✗）
+            try:
+                _ppol = self._group_policy(group)
+                _ppct = float((_ppol.get("reply_pct") or {}).get(str(group), 100))
+                # [at-always-reply] @ 她 就一定回：直接比对 @ 目标与自己的 QQ
+                _self_qq = ""
+                try:
+                    _self_qq = str(event.get_self_id() or "")
+                except Exception:  # noqa: BLE001
+                    _self_qq = ""
+                _at_targets_now = []
+                try:
+                    _at_targets_now = [str(x) for x in (self._at_targets(event) or [])]
+                except Exception:  # noqa: BLE001
+                    _at_targets_now = []
+                _at_me_now = bool(_self_qq) and _self_qq in _at_targets_now
+                _wake_why = self._wake_hit(event, text, str(group))
+                _woken_e = bool(self._is_woken(event)) or _at_me_now or bool(_wake_why)
+                if _wake_why:
+                    logger.info("[higan] 命中唤醒%s ⇒ 直接进入回复判定"
+                                % ("人" if _wake_why == "person" else "词"))
+                # [wake-person-conf] 唤醒人可单独配 pct / 专属词 / 时间段
+                if _wake_why == "person":
+                    try:
+                        _sender = str(event.get_sender_id() or "")
+                        _pc = self._person_conf(_sender)
+                        _hit_word = any(w and w in (text or "") for w in _pc["words"])
+                        if _hit_word:
+                            logger.info("[higan] 命中他的专属唤醒词 ⇒ 必定进判定")
+                            _woken_e = True
+                        elif self._hours_ok(_pc["hours"]) and random.random() * 100 < _pc["pct"]:
+                            logger.info("[higan] 唤醒人 %s 命中（pct=%s，时段内）⇒ 进判定"
+                                        % (_sender, _pc["pct"]))
+                            _woken_e = True
+                        else:
+                            logger.info("[higan] 唤醒人 %s 本次不触发（pct=%s，时段=%s）"
+                                        % (_sender, _pc["pct"], _pc["hours"] or "不限"))
+                            _woken_e = False
+                    except Exception as _pexc:  # noqa: BLE001
+                        logger.warning("[higan] 唤醒人配置读取失败：%r", str(_pexc)[:100])
+                if _at_me_now:
+                    logger.info("[higan] 本条 @ 了她（self=%s）⇒ 直接进入回复判定"
+                                % _self_qq)
+                if not _woken_e and _ppct < 100:
+                    if random.random() * 100 >= _ppct:
+                        logger.info("[higan] 群 %s 未命中回复概率（%s%%）⇒ 本条跳过"
+                                    % (group, _ppct))
+                        return
+            except Exception as _pexc:  # noqa: BLE001
+                logger.warning("[higan] 概率判定异常（忽略）：%r", str(_pexc)[:100])
+
+            # ③ **单一回复通路**：@ 与非 @ 都由本插件处理，并**停止事件传播**，
+            #    从而阻止 AstrBot 默认 LLM 再回一条。
+            #
+            #    为什么必须 stop_event()：AstrBot 的判定是
+            #      `if (event.get_result() and not event.is_stopped()) or not event.get_result():`
+            #      → 只有"有结果 **且** 已停止"才会跳过默认 LLM。
+            #    而 `should_call_llm(False)` 的消费点在插件之前，**拦不住**（实测：@ 消息会
+            #    出现"一条带引用、一条不带引用"两条回复，2026-09-19 用户两次反馈）。
+            #    代价：管线停止后 RespondStage 不会执行，所以回复必须用 `event.send()` 直接发
+            #    （见 `_send`），不能再依赖 set_result。
+            event.stop_event()
+            self._pending[group] = (event, text, bool(images), self._is_woken(event))
+            if self._busy.get(group):
+                return
+            self._busy[group] = True
+            try:
+                while self._pending.get(group):
+                    ev, txt, has_img, woken = self._pending.pop(group)
+                    await self._handle_one(ev, group, txt, has_img, woken)
+            finally:
+                self._busy[group] = False
+        except Exception as exc:
+            logger.error("[higan] 处理消息出错：%r", exc)
+
+    @staticmethod
+    def _is_woken(event: AstrMessageEvent) -> bool:
+        """该消息是否已经唤醒机器人（被 @ 或以唤醒前缀开头）。
+
+        这类消息由 AstrBot 默认流程回复（带人设），插件不再插手，避免一次消息两条回复。
+        """
+        # [private-scope] 2026-10-19: 私聊里对方就是在跟我说话 => 直接算唤醒
+        # （这样私聊不受群聊 30 秒限流约束；群聊仍然受控）
+        try:
+            if not str(event.get_group_id() or ""):
+                return True
+        except Exception:
+            pass
+        for attr in ("is_at_or_wake_command", "is_wake_command", "is_at_command"):
+            value = getattr(event, attr, None)
+            if isinstance(value, bool) and value:
+                return True
+        # [at-self-fix] 2026-10-19: detect '@ self' from OneBot segments
+        self_id = ""
+        for name in ("get_self_id", "self_id", "selfId"):
+            raw = getattr(event, name, None)
+            value = raw() if callable(raw) else raw
+            if value:
+                self_id = str(value)
+                break
+        if not self_id:
+            try:
+                self_id = str(event.message_obj.self_id or "")
+            except Exception:
+                self_id = ""
+        try:
+            segments = getattr(getattr(event, "message_obj", None), "message", None) or []
+        except Exception:
+            segments = []
+        for seg in segments:
+            if str(getattr(seg, "type", "") or "") != "at":
+                continue
+            qq = (getattr(seg, "qq", None) or getattr(seg, "user_id", None)
+                  or getattr(seg, "target", None))
+            if qq is None:
+                continue
+            # [strict-woken] 必须精确匹配（self_id 取不到就不算唤醒 ✓ 不误判）
+            if self_id and str(qq) == self_id:
+                return True
+        if self_id is None or self_id == "":
+            # 取不到自己 QQ：记一次，便于排查（不误判成唤醒 ✓）
+            try:
+                logger.warning("[higan] 取不到 self_id，@ 判定降级为 False（消息=%s）"
+                               % (str(getattr(event, "message_str", ""))[:60],))
+            except Exception:  # noqa: BLE001
+                pass
+        return False
+
+    async def _handle_one(self, event: AstrMessageEvent, group: str, text: str,
+                          has_image: bool, woken: bool) -> None:
+        """处理单条消息：限流 → （被 @ 则直接回，否则让模型决定）→ 发送。
+
+        **被 @ 时空消息也要回**：群里很常见的用法就是"只 @ 一下"当戳猫，
+        之前 `if not text and not has_image: return` 会静默跳过，表现为"@ 了没反应"
+        （2026-09-19 用户反馈）。现在 woken=True 时即使没文字也回一句。
+        """
+        # [group-policy+at] 分群策略：muted 永不出声；mention_only 只在被 @ 时看 ✓
+        try:
+            _pol = self._group_policy(group)
+            # [poll-interval] 每 N 分钟看一次（@ 例外 ✓ 消息已落盘不会丢）
+            _mins = int((_pol.get("poll_minutes") or {}).get(str(group)) or 0)
+            if _mins > 0 and not woken:
+                _seen = getattr(self, "_poll_seen", None)
+                if _seen is None:
+                    self._poll_seen = {}
+                    _seen = self._poll_seen
+                _last = float(_seen.get(str(group)) or 0)
+                if time.time() - _last < _mins * 60:
+                    return
+                # [poll-seen-owner] 只跳过，不写时间戳（由定时器独占 ✓）
+                logger.info("[higan] 群 %s 未到查看间隔，跳过（%d 分钟一次）" % (group, _mins))
+            if str(group) in _pol["muted"]:
+                logger.info("[higan] 群 %s 在 muted 里 ⇒ 不说话（消息仍落盘 ✓）" % group)
+                return
+            if str(group) in _pol["mention_only"] and not woken:
+                return
+            # [pct+quote] 她自己设的回复概率（@ 不受限 ✓ 消息已落盘 ✓）
+            _pct = float((_pol.get("reply_pct") or {}).get(str(group), 100))
+            if not woken and _pct < 100:
+                if random.random() * 100 >= _pct:
+                    logger.info("[higan] 群 %s 未命中回复概率（%s%%）⇒ 跳过" % (group, _pct))
+                    return
+        except Exception:  # noqa: BLE001
+            pass
+        # [at-self-fix] 2026-10-19: an @-mention bypasses the cooldown
+        if not woken and not self._rate_ok(group, woken):
+            return
+        if not text and not has_image and not woken:
+            return
+        # [wire-loop-v2] 两条通路都走"工具优先"（失败自动回退原裁决 ✓）
+        reply = (await self._decide_tools_first(event, group, text, has_image) if woken
+                 else await self._decide_tools_first(event, group, text, has_image))
+        if not reply:
+            return
+        # 模型要求联网搜索 → 先搜，再把结果喂回让它作答（工具调用）
+        if SEARCH_MARKER.search(reply):
+            provider = self.context.get_using_provider(event.unified_msg_origin)
+            if provider is not None:
+                search_refs, _ = await self._refs_for(event, group, text, has_image)
+                reply = await self._handle_search(provider, reply, search_refs, event)
+                if not reply:
+                    return
+        self._mark_replied(group)
+        await self._send(event, group, reply,
+                            quote_id=getattr(self, "_last_quote", None))
+
+    @staticmethod
+    def _to_plain(reply: str) -> str:
+        """兜底：把任何**没被识别**的表情包标记整段去掉，绝不让它当文字发出去。
+
+        实测教训（2026-09-19）：模型可能写成 `【表情包：无语】`、`(表情包: 无语)` 等
+        变体；若正则没覆盖，标记就会原样出现在群里。这里再做一次宽松兜底。
+        """
+        return re.sub(r"[\[【（(［]?\s*表情包\s*[:：][^\]】）)］]{0,20}[\]】）)］]?", "", reply).strip()
+
+    @staticmethod
+    def _split_keywords(raw: str) -> list[str]:
+        """把 `[表情包:无语, 生无可恋]` 里的内容拆成多个关键词。
+
+        用户 2026-09-19 要求"可以给出多个关键词允许模型按关键词模糊搜索"。
+        """
+        return [k.strip() for k in KEYWORD_SPLIT.split(raw or "") if k.strip()]
+
+    def _search_stickers(self, keywords: list[str]) -> list[dict]:
+        """按多个关键词**模糊搜索**表情包，命中越多排越前。
+
+        匹配规则（从严到松）：
+          1. 双向包含（关键词 ⊆ 描述，或描述 ⊆ 关键词）→ +2
+          2. 关键词的任意**两字片段**出现在描述里 → +1
+        只要任一关键词有命中就入选；这样模型给几个近义词也能搜到。
+        """
+        scored: list[tuple[int, float, dict]] = []
+        for item in self.manifest:
+            desc = (item.get("desc") or "").strip()
+            if not desc:
+                continue
+            score = 0
+            for kw in keywords:
+                if not kw:
+                    continue
+                if kw in desc or desc in kw:
+                    score += 2
+                elif len(kw) >= 2 and any(
+                        kw[i:i + 2] in desc for i in range(len(kw) - 1)):
+                    score += 1
+            if score:
+                scored.append((score, -float(item.get("uses", 0)), item))
+        scored.sort(key=lambda x: (-x[0], -x[1]))
+        return [item for _, _, item in scored]
+
+    def _sticker_catalog(self, limit: int = 60) -> str:
+        """把**可用的表情包描述**列成一行，交给模型挑关键词。
+
+        用户 2026-09-19 要求"让模型看到自己有哪些图可以发"。
+        只给描述、不给图片：库里几十张图全塞进上下文会 token 爆炸，
+        而描述足够模型挑一个**真实存在**的关键词（之前它是盲猜，猜不中就发不出去）。
+        """
+        descs: list[str] = []
+        for item in self.manifest:
+            desc = (item.get("desc") or "").strip()
+            # 过滤空值与通用占位描述（"表情包"当关键词毫无区分度，列给模型只会误导）
+            if desc and desc != "表情包" and desc not in descs:
+                descs.append(desc)
+        if not descs:
+            return ""
+        return "、".join(descs[:limit])
+
+    def _with_catalog(self, prompt: str) -> str:
+        """在提示词末尾附上"能力清单 + 可发表情包清单"（没有库时只给能力清单）。"""
+        ability = ("【你可以用的标记】\n"
+                   "· 想上网查东西：写 `[搜索:关键词]`，我会联网搜到**并打开网页读正文**，"
+                   "再让你回答\n"
+                   "· 想看某个群成员的头像：写 `[头像:QQ号]`（你知道对方的 QQ 号）\n"
+                   "· 想发表情包：写 `[表情包:关键词]`（可给多个近义词，用、分隔）\n"
+                   "· 想上网找一张图并发出来：写 `[下图:关键词]`（我会搜图、下载、发出）；"
+                   "想看某人的头像原图也可以写 `[下图:头像 QQ号]`\n"
+                   "· 发现某张表情包是废图/没意义，想丢掉：写 `[删表情:关键词]`"
+                   "（只移出索引，不会真删文件）\n"
+                   "这些标记只在**真的需要**时用，不要为了用而用。")
+        catalog = self._sticker_catalog()
+        if not catalog:
+            return "%s\n\n%s" % (prompt, ability)
+        return ("%s\n\n%s\n\n【你可以发的表情包（共 %d 张，下面是可选关键词）】\n%s\n"
+                "（发表情包就从上面挑关键词；**可以给多个近义词，用、分隔**，"
+                "例如 `[表情包:无语、生无可恋]`，插件会按关键词模糊搜索并看图挑选；"
+                "不要自己编完全不存在的词）"
+                % (prompt, ability, len(self.manifest), catalog))
+
+    async def _with_self(self, prompt: str, event: AstrMessageEvent) -> str:
+        """在提示词里补上"机器人对自己的认知"（当前是它的 QQ 头像是什么样）。
+
+        用户 2026-09-19 反馈"模型不知道自己的头像是什么样"。头像描述取自
+        `_self_knowledge()`（有缓存，不会每次都识图）。
+        """
+        info = await self._self_knowledge(event)
+        now = time.strftime("%Y-%m-%d %H:%M:%S")
+        weekday = "一二三四五六日"[int(time.strftime("%w"))]
+        clock = ("\n\n【当前时间】%s（星期%s，北京时间）。"
+                 "有人问几点/今天几号，**直接按这个回答，不用搜索**。"
+                 % (now, weekday))
+        if not info:
+            return prompt + clock
+        return ("%s\n\n【你自己】你是 QQ 号 %s 的猫娘 bot，你的 QQ 头像是：%s\n"
+                "**注意**：这段信息只在对方明确问「你（彼岸酱）的头像/你长什么样」时才用；"
+                "别人说「我的头像」指的是**他自己**，不要拿这段去答。%s"
+                % (prompt, event.get_self_id(), info, clock))
+
+    async def _refs_for(self, event: AstrMessageEvent, group: str, text: str,
+                        has_image: bool) -> tuple[list[str], str]:
+        """决定这次调用要带上哪些图，以及"这张图是谁的"。
+
+        优先级：本条消息的图 → 被引用的图 → **被问到的那个人的头像** →
+        （若在问图）群里最近那张图。
+
+        @returns `(图片引用列表, 图片归属说明)`；说明会写进提示词，避免模型张冠李戴
+            （2026-09-19 实测：不说明归属时，它会把机器人自己的头像当成提问者的）。
+        """
+        refs = self._image_refs(event)
+        if refs:
+            return refs, "对方本条消息里发的图/引用的图"
+        if has_image:
+            return [], ""
+        # 被问头像 → 拉**正确那个人**的头像（这是"头像老出错"的根治点）
+        avatar, who_desc = await self._avatar_ref(event, text)
+        if avatar:
+            logger.info("[higan] 被问头像，带上「%s」给模型看" % who_desc)
+            return [avatar], who_desc
+        if self._looks_like_asking_image(text):
+            cache = self._recent_images.get(group) or []
+            if cache:
+                logger.info("[higan] 本条无图，带上群里最近那张图供查看")
+                return [cache[-1]], "群里最近发过的那张图"
+        return [], ""
+
+    async def _reply_direct(self, event: AstrMessageEvent, group: str, text: str,
+                            has_image: bool) -> str:
+        """[at-via-decide] 被 @ 时**也走自主裁决**（2026-10-19）。
+
+        为什么改：原实现是"被 @ 就直接回一句"，绕过了记忆（L2/L3）、自主判断与工具调用 ✗，
+        表现就是"她能聊但记不住、也不会用虚拟机" ✓。现在统一走 `_decide`，
+        @ 在提示词里是"必回"信号，所以回复行为不变 ✓，但多了记忆与工具能力 ✓。
+        """
+        return await self._decide(event, group, text, has_image)
+
+    async def _llm_chat(self, messages: list, tools: bool = True) -> str:
+        """按标准 messages 调她自己的模型（支持 tool 消息）。
+
+        Args:
+            messages: OpenAI/DSH 兼容的消息列表（可含 role="tool"）。
+            tools: 是否附带工具 schema。
+
+        Returns:
+            str: 模型输出的文本（没有就空串）。
+        """
+        import asyncio
+        import urllib.request
+
+        base, key, model = self._her_llm_config()
+        if not base or not key:
+            return ""
+        payload = {"model": model or "deepseek-v4.1-flash-1017",
+                   "messages": messages}
+        if tools:
+            payload["tools"] = _dedupe_tool_schemas(self._tool_schemas())
+            payload["tool_choice"] = "auto"
+        payload["tools"] = _dedupe_tool_schemas(payload.get("tools") or [])
+        payload.update(self._llm_extra())
+        body = json.dumps(payload).encode("utf-8")
+
+        def _call() -> dict:
+            req = urllib.request.Request(base + "/chat/completions",
+                                         data=body, method="POST")
+            req.add_header("Content-Type", "application/json")
+            req.add_header("Authorization", "Bearer " + key)
+            with urllib.request.urlopen(req, timeout=CHAT_TIMEOUT) as resp:
+                return json.loads(resp.read().decode("utf-8", "replace"))
+
+        try:
+            data = await asyncio.to_thread(_call)
+            msg = ((data.get("choices") or [{}])[0].get("message") or {})
+            return (msg.get("content") or "").strip()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[higan] _llm_chat 失败：%r", str(exc)[:140])
+            return ""
+
+
+    @staticmethod
+    def _strip_tool_syntax(text: str) -> str:
+        """清掉模型误输出的工具调用语法，别发到群里。
+
+        Args:
+            text: 待发文本。
+
+        Returns:
+            str: 清理结果（可能为空，调用方按沉默处理）。
+        """
+        out = str(text or "")
+        for pat in (r"<\|+\s*\|?DSML[\s\S]*", r"<\|[\s\S]*?\|>",
+                    r"<\s*/?\s*invoke[\s\S]*", r"<\s*/?\s*calls[\s\S]*"):
+            out = re.sub(pat, "", out)
+        return out.strip()
+
+    async def _call_llm(self, provider, prompt: str, extra_system: str,
+                        refs: list[str]) -> str:
+        """统一调用 LLM：**人设在前**（人设为核心），附加任务规则在后。
+
+        @param refs - 要一起送给模型的图片引用（http URL 或本地路径）。
+            本地路径会转成 **data URL**：实测把 `file://` 直接交给 provider 拿不到图，
+            而 base64 内联一定能看到（2026-09-19 踩过）。
+        """
+        image_urls: list[str] = []
+        for ref in refs[:MAX_IMAGES_PER_CALL]:
+            try:
+                if ref.startswith("http"):
+                    image_urls.append(ref)
+                else:
+                    path = Path(ref[7:] if ref.startswith("file://") else ref)
+                    if not path.is_absolute():
+                        path = Path.cwd() / path
+                    if path.exists() and path.stat().st_size <= MAX_STICKER_BYTES:
+                        image_urls.append(self._data_url(path))
+            except Exception as exc:
+                logger.warning("[higan] 处理图片引用失败（%s）：%r", str(ref)[:50], exc)
+        system_prompt = ("%s\n\n---\n\n%s" % (self.persona, extra_system)
+                         if self.persona else extra_system)
+        # [direct-plain] 先走直连（避开 provider 注入的思考参数 ⇒ 躲开 REASONING_CONFLICT ✓）
+        _direct = await self._llm_plain(system_prompt, prompt, image_urls or [])
+        if _direct:
+            self._last_resp = None
+            return _direct
+        _ft = None
+        try:
+            _ft = self.context.get_llm_tool_manager().get_full_tool_set()
+        except Exception:  # noqa: BLE001
+            _ft = None
+        try:
+            _kw = {"prompt": prompt, "system_prompt": system_prompt,
+                   "image_urls": image_urls or None}
+            if _ft is not None:
+                _kw["func_tool"] = _ft
+            resp = await asyncio.wait_for(
+                provider.text_chat(**_kw), timeout=CHAT_TIMEOUT)
+        except asyncio.TimeoutError:
+            logger.warning("[higan] 调用超时（>%ds），本次不回" % CHAT_TIMEOUT)
+            return ""
+        except Exception as exc:
+            logger.warning("[higan] 调用失败：%r", exc)
+            return ""
+        # [native-tools] 保存完整响应，供上层取 tools_call（模型原生工具调用 ✓）
+        self._last_resp = resp
+        return (getattr(resp, "completion_text", "") or "").strip()
+
+    def _her_llm_config(self) -> tuple:
+        """[direct-tools] 从 cmd_config 读她自己的上游（api_base / key / model）✓。"""
+        try:
+            cfg_path = "/root/astrbot-src/data/cmd_config.json"
+            with open(cfg_path, encoding="utf-8-sig") as fh:
+                cfg = json.load(fh)
+            base = ((cfg.get("provider_sources") or [{}])[0].get("api_base") or "").rstrip("/")
+            key = ((cfg.get("provider_sources") or [{}])[0].get("key") or [""])[0]
+            model = ""
+            for item in cfg.get("provider") or []:
+                if item.get("id") == "qapi-relay":
+                    model = item.get("model") or ""
+                    break
+            return base, key, model
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[higan] 读上游配置失败：%r", exc)
+            return "", "", ""
+
+    # [fix-static-self] 2026-10-19: 需要访问 self（合并任务工具），不能是 staticmethod
+    def _tool_schemas(self) -> list:
+        """[direct-tools] 她可用的工具（OpenAI tools schema ✓）。"""
+        def _f(name, desc, props=None, required=None):
+            return {"type": "function", "function": {
+                "name": name, "description": desc,
+                "parameters": {"type": "object", "properties": props or {},
+                               "required": required or []}}}
+        return [
+            _f("vm_shot", "给她自己的虚拟机屏幕截图，返回截图文件路径"),
+            _f("vm_browse", "在她的浏览器里打开一个网址", {"url": {"type": "string"}}, ["url"]),
+            _f("vm_click_confirm", "确认点击：真点上一次预预览过的那个点（先 preview 再 confirm）"),
+            _f("vm_click_preview", "预点击预览：截屏并在 (x,y) 画十字标记（不满意就再 preview 改点，满意就 confirm）",
+               {"x": {"type": "integer"}, "y": {"type": "integer"},
+                "label": {"type": "string"}}, ["x", "y"]),
+            _f("vm_click_text", "按文字点击页面元素（比坐标稳：'立即登录'/'下一集'/'搜索'）",
+               {"text": {"type": "string"}, "exact": {"type": "boolean"},
+                "index": {"type": "integer"}}, ["text"]),
+            _f("vm_click", "在虚拟机屏幕上点击坐标",
+               {"x": {"type": "integer"}, "y": {"type": "integer"}}, ["x", "y"]),
+            _f("vm_type", "在虚拟机里输入文本", {"text": {"type": "string"}}, ["text"]),
+            _f("vm_key", "在虚拟机里按键（如 Return）", {"key": {"type": "string"}}, ["key"]),
+            _f("vm_exec", "在虚拟机里执行 python 或 shell（30 秒超时）",
+               {"code": {"type": "string"}, "lang": {"type": "string"}}, ["code"]),
+            _f("vm_files", "列出她虚拟机里保存的文件", {"dir": {"type": "string"}}),
+            _f("vm_recall", "撤回她自己最近发出的消息", {"count": {"type": "integer"}}),
+            _f("vm_eval", "在她的浏览器当前页面里执行 JS 并返回结果（取图片 URL、元素坐标、判断状态）",
+               {"js": {"type": "string"}}, ["js"]),
+            _f("vm_slider_gap", "滑块缺口定位：传背景图与拼图 URL，返回缺口横坐标与置信度",
+               {"bg_url": {"type": "string"}, "piece_url": {"type": "string"}},
+               ["bg_url", "piece_url"]),
+            _f("mail_recent", "直接拿到最近 5 封邮件内容 + 验证码/链接（不用自己去网页扒）",
+               {"limit": {"type": "integer"}}),
+            _f("mail_list", "收件箱最近邮件（看有没有新验证码/通知）",
+               {"limit": {"type": "integer"}, "unseen_only": {"type": "boolean"}}),
+            _f("mail_web_login", "打开 Outlook 网页版并自动登录（凭据她自己有，不要外传）"),
+            _f("mail_web_read", "读当前网页的邮件列表文字（收件箱概览）",
+               {"limit": {"type": "integer"}}),
+            _f("mail_code", "从最近邮件里提取验证码和链接", {"limit": {"type": "integer"}}),
+            _f("group_files", "看群文件列表（文件名/大小/上传者/时间）",
+               {"limit": {"type": "integer"}}),
+            _f("group_file_download", "拿群文件的下载链接（需要文件的 id）",
+               {"id": {"type": "string"}}, ["id"]),
+            _f("group_policy", "设置某个群的处理方式：mention_only（只在被@时看）/poll（每N分钟看一次）/normal/muted/show",
+               {"mode": {"type": "string"}, "group": {"type": "string"},
+                "minutes": {"type": "integer"}, "pct": {"type": "integer"}}, ["mode"]),
+            _f("self_status", "查看我自己的当前状态：每个群的回复概率/是否只看@/轮询间隔/静音、"
+               "记忆里有多少条事实、用的什么模型、已运行多久。有人问"
+               "\"你现在是什么设置\"/\"你在哪些群\"/\"你记得多少\"时用它 ✓"),
+            _f("send_sticker", "从表情包库里挑一张发出去（按关键词找；也可以直接给文件名）",
+               {"keyword": {"type": "string"}, "file": {"type": "string"}}, []),
+            _f("send_file", "把虚拟机里的任意文件发出去（图片/视频/语音/文档都能发）",
+               {"path": {"type": "string"}, "kind": {"type": "string"},
+                "user_id": {"type": "integer"}, "group_id": {"type": "integer"},
+                "name": {"type": "string"}}, ["path"]),
+            _f("wake_person_info", "一次看某个唤醒人的全部信息：在哪些群唤醒我、"
+               "专属回复率/唤醒词、定点查看时间、我记了他什么", {"qq": {"type": "string"}}, ["qq"]),
+            _f("wake_person_set", "给某个唤醒人单独设回复率/专属唤醒词/唤醒时间段",
+               {"qq": {"type": "string"}, "pct": {"type": "number"},
+                "words": {"type": "array"}, "hours": {"type": "array"}}, ["qq"]),
+            _f("wake_person_show", "看某个唤醒人的专属配置", {"qq": {"type": "string"}}, ["qq"]),
+            _f("wake_list", "列出我设的唤醒词和唤醒人"),
+            _f("wake_add", "加一个唤醒词或唤醒人（我觉得重要的人/词可以随时加，不限数量）",
+               {"word": {"type": "string"}, "qq": {"type": "string"}}, []),
+            _f("wake_remove", "删掉一个唤醒词或唤醒人",
+               {"word": {"type": "string"}, "qq": {"type": "string"}}, []),
+            _f("wake_list", "看唤醒人/唤醒词：不传 group 只给各群数量；传 group 才列出该群名单",
+               {"mode": {"type": "string"}, "group": {"type": "string"}}, []),
+            _f("wake_search", "按关键词查唤醒人/唤醒词（不要直接要全量列表）",
+               {"query": {"type": "string"}}, ["query"]),
+            _f("wake_add", "加唤醒人或唤醒词（唤醒人必须用 QQ 号）",
+               {"qq": {"type": "string"}, "word": {"type": "string"},
+                "group": {"type": "string"}}, []),
+            _f("wake_remove", "删唤醒人或唤醒词", {"qq": {"type": "string"},
+                                                  "word": {"type": "string"},
+                                                  "group": {"type": "string"}}, []),
+            _f("wp_fact_move", "把一条通用事实移进某个唤醒人的记录（会从通用里删掉）",
+               {"id": {"type": "string"}, "qq": {"type": "string"}}, ["id", "qq"]),
+            _f("wp_fact_add", "记一条关于某个唤醒人的事（单独记，最多 200 条）",
+               {"qq": {"type": "string"}, "text": {"type": "string"}}, ["qq", "text"]),
+            _f("wp_fact_list", "看某个唤醒人的记录", {"qq": {"type": "string"}}, ["qq"]),
+            _f("wp_fact_search", "在某个唤醒人的记录里按关键词找",
+               {"qq": {"type": "string"}, "query": {"type": "string"}}, ["qq", "query"]),
+            _f("wp_fact_delete", "删某个唤醒人的记录（按编号或关键词）",
+               {"qq": {"type": "string"}, "id": {"type": "string"},
+                "keyword": {"type": "string"}}, ["qq"]),
+            _f("facts_list", "列出我记住的所有事实（带编号，方便改/删）"),
+            _f("facts_search", "按关键词查**我已经记下来的事实**（长期记忆条目）；查不到不代表没发生过，那说明要去翻聊天档案 history_search", {"query": {"type": "string"}, "limit": {"type": "integer"}}, ["query"]),
+            _f("facts_edit", "改一条事实（给编号和新的说法）",
+               {"id": {"type": "string"}, "text": {"type": "string"}}, ["id", "text"]),
+            _f("facts_delete", "删一条事实（给编号；或给关键词批量删）",
+               {"id": {"type": "string"}, "keyword": {"type": "string"}}, []),
+            _f("remember", "把一件你觉得重要的事记进长期记忆（以后都记得）",
+               {"text": {"type": "string"}}, ["text"]),
+            _f("vm_fetch", "把群里的文件/图片/语音下载到我自己的虚拟机里（给我 url 或消息号都行）",
+               {"url": {"type": "string"}, "name": {"type": "string"},
+                "msg_id": {"type": "string"}}, []),
+            _f("send_shot", "把截图发出去（不传 path 就发最新一张）；发不发由你决定",
+               {"path": {"type": "string"}, "kind": {"type": "string"},
+                "user_id": {"type": "integer"}, "group_id": {"type": "integer"}}),
+            _f("qq_send", "主动发消息：kind=group|private|temp，可指定 user_id/group_id",
+               {"kind": {"type": "string"}, "text": {"type": "string"},
+                "user_id": {"type": "integer"}, "group_id": {"type": "integer"}},
+               ["kind", "text"]),
+            _f("vm_hold_drag", "按住式拖拽：按住(x,y)先停 hold_ms，再拖 distance 像素后松开",
+               {"x": {"type": "integer"}, "y": {"type": "integer"},
+                "distance": {"type": "integer"}, "hold_ms": {"type": "integer"}}, ["x", "y", "distance"]),
+            _f("vm_frame_eval", "在匹配 match 的页面/iframe 里执行 JS（读验证码图片 URL 等）",
+               {"js": {"type": "string"}, "match": {"type": "string"}}, ["js"]),
+            _f("vm_slider_drag", "拟人拖拽：从 (x,y) 横向拖 distance 像素（过滑块用）",
+               {"x": {"type": "integer"}, "y": {"type": "integer"},
+                "distance": {"type": "integer"}}, ["x", "y", "distance"]),
+        ] + [s for s in self._task_tool_schemas()]
+
+    def _as_llm_url(self, ref) -> str:
+        """[img-url-fix] 把图片引用转成 LLM 能接受的 URL（data: / http(s)）✓。
+
+        本地路径必须转 data URL，否则上游报 `Unsupported image_url format` ✗
+        """
+        try:
+            text = str(ref or "").strip()
+            if not text:
+                return ""
+            if text.startswith("data:"):
+                return text
+            if text.startswith(("http://", "https://")):
+                # [drop-dead-images] 远程图先落成 data URL；死链就丢弃 ✓
+                try:
+                    import urllib.request as _ur
+
+                    req = _ur.Request(text, headers={"User-Agent": "Mozilla/5.0"})
+                    with _ur.urlopen(req, timeout=8) as resp:
+                        blob = resp.read(4 * 1024 * 1024 + 1)
+                    if not blob or len(blob) > 4 * 1024 * 1024:
+                        logger.info("[higan] 丢弃过大/空的远程图：%s" % text[:60])
+                        return ""
+                    import base64 as _b64
+
+                    return "data:image/jpeg;base64," + _b64.b64encode(blob).decode()
+                except Exception as exc:  # noqa: BLE001
+                    logger.info("[higan] 丢弃取不到的图（%s）：%s"
+                                % (str(exc)[:60], text[:60]))
+                    return ""
+            from pathlib import Path as _P
+            path = _P(text[7:]) if text.startswith("file://") else _P(text)
+            if path.exists() and path.is_file() and path.stat().st_size <= 4 * 1024 * 1024:
+                return self._data_url(path)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[higan] 图片转 URL 失败：%r", exc)
+        return ""
+
+    def _hist(self):
+        """[history-persist] 懒加载历史记录器（按路径 ✓）。"""
+        if getattr(self, "_hist_obj", None) is not None:
+            return self._hist_obj
+        import importlib.util as _ilu
+        from pathlib import Path as _Path
+
+        path = _Path(__file__).resolve().parent / "history.py"
+        spec = _ilu.spec_from_file_location("history", str(path))
+        mod = _ilu.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        self._hist_obj = mod.Recorder("/root/higan/history")
+        return self._hist_obj
+
+    async def _forward_to_text(self, event) -> str:
+        """[forward-from-component] 解析合并转发：优先读组件自带节点 ✓。"""
+        try:
+            comps = getattr(getattr(event, "message_obj", None), "message", None) or []
+        except Exception:  # noqa: BLE001
+            return ""
+
+        def _fmt_nodes(nodes) -> str:
+            lines: list = []
+            for node in (nodes or [])[:40]:
+                try:
+                    if isinstance(node, dict):
+                        sender = node.get("sender") or {}
+                        name = (sender.get("card") or sender.get("nickname")
+                                or sender.get("user_id") or node.get("nickname") or "?")
+                        segs = node.get("message") or node.get("content") or []
+                    else:
+                        sender = getattr(node, "sender", None) or {}
+                        name = (getattr(node, "name", None) or getattr(node, "nickname", "")
+                                or sender.get("nickname") if isinstance(sender, dict) else "")
+                        segs = getattr(node, "content", None) or getattr(node, "message", None) or []
+                    parts: list = []
+                    if isinstance(segs, str):
+                        parts.append(segs)
+                    else:
+                        for seg in segs:
+                            if isinstance(seg, dict):
+                                st = seg.get("type")
+                                sd = seg.get("data") or {}
+                                if st == "text":
+                                    parts.append(str(sd.get("text") or ""))
+                                elif st == "image":
+                                    parts.append("[图片]")
+                                elif st == "face":
+                                    parts.append("[表情]")
+                                elif st == "at":
+                                    parts.append("@%s" % (sd.get("qq") or ""))
+                                elif st in ("forward", "node", "nodes", "multimsg"):
+                                    # [see-forward] 合并转发：给出标题/条数，别只留裸标记
+                                    _title = str(sd.get("title") or sd.get("summary")
+                                                 or sd.get("prompt") or "").strip()[:60]
+                                    _cnt = 0
+                                    for _k in ("content", "messages", "nodes"):
+                                        _v = sd.get(_k)
+                                        if isinstance(_v, list):
+                                            _cnt = len(_v)
+                                            break
+                                    _names = []
+                                    for _item in (sd.get("content") or sd.get("messages")
+                                                  or [])[:5]:
+                                        if isinstance(_item, dict):
+                                            _snd = (_item.get("sender") or {})
+                                            _nm = str((_snd or {}).get("nickname")
+                                                      or _item.get("name") or "").strip()
+                                            if _nm:
+                                                _names.append(_nm)
+                                    _fid = str(sd.get("id") or sd.get("res_id")
+                                                or sd.get("file") or "").strip()
+                                    parts.append("[转发聊天记录%s%s%s%s]" % (
+                                        (": " + _title) if _title else "",
+                                        ("（%d 条）" % _cnt) if _cnt else "",
+                                        (" id=" + _fid) if _fid else "",
+                                        (" 含: " + "/".join(_names)) if _names else ""))
+                                elif st in ("json", "xml", "card", "lightapp"):
+                                    # [see-card] 小程序/网页卡片：给出标题或摘要
+                                    _raw = str(sd.get("data") or sd.get("content") or "")
+                                    _ttl = ""
+                                    for _key in ('"title"', '"desc"', '"prompt"', '"summary"'):
+                                        _i = _raw.find(_key)
+                                        if _i >= 0:
+                                            _seg = _raw[_i:_i + 120]
+                                            _q = _seg.find(":", len(_key))
+                                            if _q > 0:
+                                                _ttl = _seg[_q + 1:].strip(' ",}')[:60]
+                                                break
+                                    parts.append("[卡片消息%s]" % ((": " + _ttl) if _ttl else ""))
+                                elif st in ("file", "record", "video", "audio"):
+                                    # [see-attachments] 让她知道"有这么个东西"（含名字/大小 ✓）
+                                    _fname = str(sd.get("file") or sd.get("name")
+                                                 or sd.get("file_name") or "").strip()
+                                    _fname = os.path.basename(_fname) if _fname else ""
+                                    _fsize = sd.get("file_size") or sd.get("size") or 0
+                                    try:
+                                        _mb = float(_fsize) / 1048576.0
+                                    except Exception:  # noqa: BLE001
+                                        _mb = 0.0
+                                    _dur = sd.get("duration") or sd.get("length") or 0
+                                    if st == "file":
+                                        parts.append("[文件: %s%s]"
+                                                     % (_fname or "未命名",
+                                                        (" · %.1fMB" % _mb) if _mb else ""))
+                                    elif st == "record":
+                                        parts.append("[语音%s%s]"
+                                                     % ((" · %s秒" % _dur) if _dur else "",
+                                                        (" · %s" % _fname) if _fname else ""))
+                                    else:
+                                        parts.append("[%s%s%s]"
+                                                     % ("视频" if st == "video" else "音频",
+                                                        (" · %.1fMB" % _mb) if _mb else "",
+                                                        (" · %s" % _fname) if _fname else ""))
+                                else:
+                                    parts.append("[%s]" % st)
+                            elif isinstance(seg, str):
+                                parts.append(seg)
+                            else:
+                                txt = getattr(seg, "text", None) or getattr(seg, "data", None)
+                                if isinstance(txt, str):
+                                    parts.append(txt)
+                    body = " ".join("".join(parts).split())[:300]
+                    if body:
+                        lines.append("%s：%s" % (str(name or "?")[:16], body))
+                except Exception:  # noqa: BLE001
+                    continue
+            return "\n".join(lines[:40])
+
+        # ① 组件自带节点（最常见 ✓）
+        for comp in comps:
+            try:
+                data = getattr(comp, "data", None)
+                for holder in (data if isinstance(data, dict) else {},
+                               getattr(comp, "content", None),
+                               getattr(comp, "nodes", None),
+                               getattr(comp, "message", None)):
+                    if isinstance(holder, (list, tuple)) and holder:
+                        text = _fmt_nodes(holder)
+                        if text:
+                            return text
+                    if isinstance(holder, dict) and holder.get("content"):
+                        text = _fmt_nodes(holder.get("content"))
+                        if text:
+                            return text
+            except Exception:  # noqa: BLE001
+                continue
+
+        # ② HTTP 兜底（本机 NapCat 是空壳，基本不会成功；保留无害 ✓）
+        ids: list = []
+        for comp in comps:
+            try:
+                data = getattr(comp, "data", None)
+                fid = (data.get("id") if isinstance(data, dict) else "") or ""
+                if fid and str(getattr(comp, "type", "")).lower() in (
+                        "forward", "forward_msg", "node", "json", "xml"):
+                    ids.append(str(fid))
+            except Exception:  # noqa: BLE001
+                continue
+        for fid in ids[:2]:
+            try:
+                res = await asyncio.to_thread(self._onebot_http, "get_forward_msg", {"id": fid})
+                nodes = ((res.get("data") or {}).get("messages")
+                         or (res.get("data") or {}).get("message") or [])
+                text = _fmt_nodes(nodes)
+                if text:
+                    return text
+            except Exception:  # noqa: BLE001
+                continue
+        return ""
+
+    def _onebot_http(self, action: str, params: dict) -> dict:
+        """[read-forward] 直连 NapCat HTTP 调一个 action（同步，放线程里用 ✓）。"""
+        import json as _json
+        import urllib.request
+
+        try:
+            _url = "http://127.0.0.1:13000/"      # [onebot-local-url] 局部常量 ✓
+            payload = _json.dumps({"action": action, "params": params}).encode()
+            req = urllib.request.Request(_url, data=payload, method="POST")
+            req.add_header("Content-Type", "application/json")
+            with urllib.request.urlopen(req, timeout=25) as resp:
+                return _json.loads(resp.read().decode("utf-8", "replace"))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[higan] OneBot %s 失败：%r", action, str(exc)[:120])
+            return {}
+
+    def _group_policy(self, group: str) -> dict:
+        """[group-policy+at] 读分群策略（默认：正常参与 ✓）。"""
+        try:
+            with open("/root/higan/groups.json", encoding="utf-8") as handle:
+                conf = json.load(handle)
+        except Exception:  # noqa: BLE001
+            return {"mention_only": [], "muted": []}
+        if not isinstance(conf, dict):
+            return {"mention_only": [], "muted": []}
+        # [poll-interval] 每 N 分钟看一次的群（值为分钟数 ✓）
+        _poll = {}
+        try:
+            for _k, _v in (conf.get("poll_minutes") or {}).items():
+                _poll[str(_k)] = max(1, int(_v))
+        except Exception:  # noqa: BLE001
+            _poll = {}
+        # [pct+quote] 每个群的回复概率（缺省 100 = 全参与 ✓）
+        _pct = {}
+        try:
+            for _k, _v in (conf.get("reply_pct") or {}).items():
+                _pct[str(_k)] = max(0.0, min(100.0, float(_v)))
+        except Exception:  # noqa: BLE001
+            _pct = {}
+        return {"mention_only": [str(x) for x in (conf.get("mention_only") or [])],
+                "muted": [str(x) for x in (conf.get("muted") or [])],
+                "poll_minutes": _poll, "reply_pct": _pct}
+
+    def _at_components(self, text: str):
+        """[group-policy+at] 把 `[at:QQ]` 转成 At 组件（返回 (净化文本, [At...])）。"""
+        comps: list = []
+        try:
+            import re as _re
+
+            def _sub(match):
+                qq = (match.group(1) or "").strip()
+                if not qq.isdigit():
+                    return match.group(0)
+                try:
+                    comps.append(At(qq=qq))
+                    return ""
+                except Exception:  # noqa: BLE001
+                    return match.group(0)
+
+            cleaned = _re.sub(r"\[at:(\d{5,12})\]", _sub, text or "")
+            return cleaned, comps
+        except Exception:  # noqa: BLE001
+            return text, comps
+
+    def _strip_internal(self, text: str) -> str:
+        """[no-internal-leak] 去掉句子里的内部术语（工具名/配置/日志）✓。"""
+        import re as _re
+
+        raw = str(text or "")
+        if not raw:
+            return ""
+        parts = _re.split(r"(?<=[。！？!?\n])", raw)
+        keep = []
+        for seg in parts:
+            s = seg.strip()
+            if not s:
+                continue
+            if _re.search(r"vm_[a-z_]+|group_policy|策略文件|配置项|配置文件|日志|"
+                          r"工具调用|工具返回|reply_pct|mention_only|poll_minutes|"
+                          r"scope|prompt|schema", s, re.I):
+                logger.info("[higan] 过滤内部句子：%s" % s[:40])
+                continue
+            keep.append(s)
+        return "".join(keep).strip()
+
+    def _llm_extra(self) -> dict:
+        """[thinking-max] 思考参数（默认开到 high，可被 /root/higan/llm.json 覆盖 ✓）。"""
+        extra = {"reasoning_effort": "high", "max_tokens": 4096}
+        try:
+            with open("/root/higan/llm.json", encoding="utf-8") as handle:
+                conf = json.load(handle)
+            if isinstance(conf, dict):
+                if conf.get("reasoning_effort"):
+                    extra["reasoning_effort"] = str(conf["reasoning_effort"])
+                if conf.get("max_tokens"):
+                    extra["max_tokens"] = int(conf["max_tokens"])
+        except Exception:  # noqa: BLE001
+            pass
+        return extra
+
+    async def _poll_loop(self) -> None:
+        """[poll-loop] 定时查看设了间隔的群（到点主动看一遍 ✓ 不依赖新消息）。"""
+        while True:
+            try:
+                await asyncio.sleep(30)
+                conf = {}
+                try:
+                    with open("/root/higan/groups.json", encoding="utf-8") as handle:
+                        conf = json.load(handle)
+                except Exception:  # noqa: BLE001
+                    conf = {}
+                poll = (conf.get("poll_minutes") or {}) if isinstance(conf, dict) else {}
+                # [poll-heartbeat] 每轮心跳（证明循环在跑 ✓ 含条目数）
+                logger.info("[higan] 定时查看：心跳一轮（poll=%d 个）" % len(poll))
+
+                # [wake-at] 定点看一眼：wake_at = {"<群号>": ["09:00", "21:30"]}
+                try:
+                    _at_tbl = conf.get("wake_at") or {}
+                    _now_hm = time.strftime("%H:%M")
+                    _fired = getattr(self, "_wake_at_fired", None)
+                    if _fired is None:
+                        _fired = {}
+                        self._wake_at_fired = _fired
+                    for _g, _times in list(_at_tbl.items()):
+                        for _hm in (_times or []):
+                            if str(_hm).strip() != _now_hm:
+                                continue
+                            _key = "%s@%s" % (_g, _now_hm)
+                            if _fired.get(_key):
+                                continue
+                            _fired[_key] = True
+                            logger.info("[higan] 定点查看：群 %s 到点 %s（无论有无新消息）"
+                                        % (_g, _hm))
+                            _lines = list(self._recent.get(str(_g), []))[-20:]
+                            if not _lines:
+                                logger.info("[higan] 定点查看：该群还没有历史，跳过")
+                                continue
+                            _prompt = ("【群%s 最近的聊天】\n%s\n\n现在是定点查看时间："
+                                       "要说话就正常说一句；没什么要说的就只输出 SILENT。"
+                                       % (_g, "\n".join(_lines)))
+                            try:
+                                _out = await self._llm_plain(
+                                    "你是彼岸酱，正在群里。可以自己决定说不说", _prompt, [])
+                            except Exception as _exc:  # noqa: BLE001
+                                logger.warning("[higan] 定点查看决策失败：%r", str(_exc)[:100])
+                                continue
+                            _out = (_out or "").strip()
+                            if not _out or _out.upper().strip("。.!！ ") == "SILENT":
+                                logger.info("[higan] 定点查看后选择沉默")
+                                continue
+                            try:
+                                await self._qq_send("group", _out[:800], 0, str(_g))
+                                logger.info("[higan] 定点查看后发言：%s" % _out[:40])
+                            except Exception as _exc:  # noqa: BLE001
+                                logger.warning("[higan] 定点发言失败：%r", str(_exc)[:100])
+                    # 每小时清一次已触发标记，避免无限增长
+                    if len(_fired) > 500:
+                        _fired.clear()
+                except Exception as _aexc:  # noqa: BLE001
+                    logger.warning("[higan] 定点查看异常（继续）：%r", str(_aexc)[:100])
+
+                if not poll:
+                    continue
+                seen = getattr(self, "_poll_seen", None)
+                if seen is None:
+                    self._poll_seen = {}
+                    seen = self._poll_seen
+                now = time.time()
+                for group, mins in list(poll.items()):
+                    try:
+                        mins = max(1, int(mins))
+                    except Exception:  # noqa: BLE001
+                        continue
+                    last = float(seen.get(str(group)) or 0)
+                    if now - last < mins * 60:
+                        continue
+                    seen[str(group)] = now
+                    lines = list(self._recent.get(str(group), []))[-20:]
+                    # [poll-tick-log] 到点就先记一行（行数可能为 0 ✓ 便于确认定时器在跑）
+                    logger.info("[higan] 定时查看到点：群 %s（每 %d 分钟）｜历史 %d 行"
+                                % (group, mins, len(lines)))
+                    if not lines:
+                        continue
+                    prompt = ("【群%s 最近的聊天】\n%s\n\n现在是定时查看时间："
+                              "要说话就正常说一句；没什么要说的就只输出 SILENT。"
+                              % (group, "\n".join(lines)))
+                    try:
+                        out = await self._llm_plain(
+                            "你是彼岸酱，正在群里。可以自己决定说不说 ✓", prompt, [])
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("[higan] 定时查看决策失败：%r", str(exc)[:120])
+                        continue
+                    out = (out or "").strip()
+                    if not out or out.upper().strip("。.!！ ") == "SILENT":
+                        logger.info("[higan] 定时查看后选择沉默 ✓")
+                        continue
+                    try:
+                        await self._qq_send("group", out[:800], 0, str(group))
+                        logger.info("[higan] 定时查看后发言：%s" % out[:40])
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("[higan] 定时发言失败：%r", str(exc)[:120])
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("[higan] 定时查看循环异常（继续）：%r", str(exc)[:120])
+
+    async def _llm_plain(self, system: str, prompt: str, image_urls: list) -> str:
+        """[direct-plain] 直连 relay 的纯文本对话（不带 tools / 不带思考参数 ✓）。
+
+        为什么需要它：AstrBot 的 provider 会自动加"深度思考"参数，与 relay/上游默认值冲突
+        时报 400 REASONING_CONFLICT ✗；直连同一 key 是 200 ✓。这里绕开注入，参数完全可控。
+        """
+        import asyncio
+        import urllib.request
+
+        base, key, model = self._her_llm_config()
+        if not base or not key:
+            return ""
+        # [string-content] 无图时用字符串（数组形式会被上游 400 ✗）
+        if image_urls:
+            content: object = [{"type": "text", "text": prompt}]
+            for _ref in image_urls:
+                _url = self._as_llm_url(_ref)
+                if _url:
+                    content.append({"type": "image_url", "image_url": {"url": _url}})
+        else:
+            content = prompt
+        payload = {
+            "model": model or "deepseek-v4.1-flash-1017",
+            "messages": [{"role": "system", "content": system},
+                         {"role": "user", "content": content}],
+        }
+        payload.update(self._llm_extra())   # [thinking-max] 思考拉满 ✓
+        body = json.dumps(payload).encode("utf-8")
+
+        def _call() -> dict:
+            req = urllib.request.Request(base + "/chat/completions", data=body, method="POST")
+            req.add_header("Content-Type", "application/json")
+            req.add_header("Authorization", "Bearer " + key)
+            with urllib.request.urlopen(req, timeout=CHAT_TIMEOUT) as resp:
+                return json.loads(resp.read().decode("utf-8", "replace"))
+
+        try:
+            data = await asyncio.to_thread(_call)
+            msg = ((data.get("choices") or [{}])[0].get("message") or {})
+            return (msg.get("content") or "").strip()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[higan] 直连纯文本失败：%r", str(exc)[:140])
+            return ""
+
+    async def _llm_tools(self, system: str, prompt: str, image_urls: list) -> tuple:
+        """[direct-tools] 带工具调用的一次 LLM 往返；返回 (文本, 工具调用列表)。
+
+        只用标准库 + 线程，不阻塞事件循环 ✓；失败一律返回 ("", []) 由上层回退 ✓。
+        """
+        import asyncio
+        import urllib.request
+
+        base, key, model = self._her_llm_config()
+        if not base or not key:
+            return "", []
+
+        # [string-content] 同上：无图用字符串，否则上游 400 ✗
+        if image_urls:
+            content: object = [{"type": "text", "text": prompt}]
+            for _ref in image_urls:
+                _url = self._as_llm_url(_ref)
+                if _url:
+                    content.append({"type": "image_url", "image_url": {"url": _url}})
+        else:
+            content = prompt
+        payload = {
+            "model": model or "deepseek-v4.1-flash-1017",
+            "messages": [{"role": "system", "content": system},
+                         {"role": "user", "content": content}],
+            "tools": _dedupe_tool_schemas(self._tool_schemas()),
+            "tool_choice": "auto",
+        }
+        payload["tools"] = _dedupe_tool_schemas(payload.get("tools") or [])
+        payload.update(self._llm_extra())   # [thinking-max] 思考拉满 ✓
+        body = json.dumps(payload).encode("utf-8")
+
+        def _call() -> dict:
+            req = urllib.request.Request(base + "/chat/completions", data=body, method="POST")
+            req.add_header("Content-Type", "application/json")
+            req.add_header("Authorization", "Bearer " + key)
+            with urllib.request.urlopen(req, timeout=CHAT_TIMEOUT) as resp:
+                return json.loads(resp.read().decode("utf-8", "replace"))
+
+        try:
+            data = await asyncio.to_thread(_call)
+        except Exception as exc:  # noqa: BLE001
+            # [log-400-body] 打印服务端返回体，才能看出哪个字段不合法 ✓
+            _detail = ""
+            try:
+                import urllib.error as _ue
+                if isinstance(exc, _ue.HTTPError):
+                    _detail = exc.read().decode("utf-8", "replace")[:500]
+            except Exception:  # noqa: BLE001
+                _detail = ""
+            logger.warning("[higan] 直连工具调用失败：%r ｜body=%s"
+                           % (str(exc)[:120], _detail))
+            if _detail:
+                logger.warning("[higan] 工具 schema 数量=%d 名称=%s"
+                               % (len(_dedupe_tool_schemas(self._tool_schemas())),
+                                  [t.get("function", {}).get("name")
+                                   for t in _dedupe_tool_schemas(self._tool_schemas())][:25]))
+            return "", []
+        try:
+            msg = ((data.get("choices") or [{}])[0].get("message") or {})
+            _txt = (msg.get("content") or "").strip()
+            _tcs = (msg.get("tool_calls") or [])
+            # [tool-debug] 每次都能看到模型给不给 tool_calls ✓
+            logger.info("[higan] 工具请求结果：text=%d字 ｜tool_calls=%d 个%s"
+                        % (len(_txt), len(_tcs),
+                           ("（%s）" % ((_tcs[0].get("function") or {}).get("name") or ""))
+                           if _tcs else ""))
+            return _txt, _tcs
+        except Exception:  # noqa: BLE001
+            return "", []
+
+    # ---------------------------------------------------------- 后台任务（[task-system]）
+    def _tasks_mod(self):
+        """懒加载 tasks 模块（按路径 ✓ 不依赖 sys.path）。"""
+        if getattr(self, "_tasks_module", None) is not None:
+            return self._tasks_module
+        import importlib.util as _ilu
+        from pathlib import Path as _Path
+
+        path = _Path(__file__).resolve().parent / "tasks.py"
+        spec = _ilu.spec_from_file_location("tasks", str(path))
+        mod = _ilu.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        self._tasks_module = mod
+        return mod
+
+    @staticmethod
+    def _task_tool_schemas() -> list:
+        """任务类工具（模型可以自己给自己排活 ✓）。"""
+        def _f(name, desc, props=None, required=None):
+            return {"type": "function", "function": {
+                "name": name, "description": desc,
+                "parameters": {"type": "object", "properties": props or {},
+                               "required": required or []}}}
+        return [
+            _f("task_add", "给自己排一个后台任务：到点会提醒你继续做，直到你调用 task_done",
+               {"title": {"type": "string"}, "goal": {"type": "string"},
+                "interval_s": {"type": "integer"}, "repeat": {"type": "string"},
+                "delay_s": {"type": "integer"}, "scope": {"type": "string"}},
+               ["title"]),
+            _f("read_forward", "读一条合并转发（聊天记录）的完整内容",
+               {"id": {"type": "string"}}, ["id"]),
+            _f("forward_expand", "展开一条合并转发，逐条读出谁说了什么"
+               "（用上下文里 [转发聊天记录 … id=xxx] 的 id，或直接给消息号）",
+               {"id": {"type": "string"}, "msg_id": {"type": "string"}}, []),
+            _f("history_search", "翻**聊天档案**（完整历史，含我已遗忘的部分）：某人以前说过什么、之前发生过的对话都从这里查；可按群限定、按关键词过滤",
+               {"keyword": {"type": "string"}, "scope": {"type": "string"},
+                "limit": {"type": "integer"}}, ["keyword"]),
+            _f("task_list", "看看自己有哪些后台任务", {"scope": {"type": "string"}}),
+            _f("task_done", "把某个任务标记为完成（停止继续提醒）",
+               {"title": {"type": "string"}, "id": {"type": "string"},
+                "note": {"type": "string"}}),
+            _f("task_cancel", "取消某个任务", {"title": {"type": "string"}, "id": {"type": "string"}}),
+            _f("task_add_script", "给自己排一个**脚本触发**的后台任务：条件成立才叫你", {}),
+            _f("task_update", "改写任务简述 / 你自己写的续做提示词 / 间隔（多步任务每轮都可以改）",
+               {"title": {"type": "string"}, "id": {"type": "string"},
+                "brief": {"type": "string"}, "resume_prompt": {"type": "string"},
+                "interval_s": {"type": "integer"}, "next_step_note": {"type": "string"}}),
+        ]
+
+    async def _dispatch_tool(self, name: str, args: dict, scope: str = "") -> dict:
+        """统一工具入口：task_* 本地处理，其余走 VM API ✓。"""
+        try:
+            tasks = self._tasks_mod()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[higan] tasks 模块不可用：%r", exc)
+            tasks = None
+        if name == "read_forward":
+            # [read-forward] 转发内容直接问 NapCat（get_forward_msg ✓）
+            try:
+                res = await asyncio.to_thread(self._onebot_http, "get_forward_msg",
+                                              {"id": str(args.get("id") or "")})
+            except Exception as exc:  # noqa: BLE001
+                return {"ok": False, "error": repr(exc)[:160]}
+            return {"ok": bool(res), "raw": res}
+        if name == "forward_expand":
+            # [forward-expand] 主动展开合并转发（逐条内容）
+            try:
+                _api = event.bot.api
+                _fid = str(args.get("id") or "").strip()
+                _mid = str(args.get("msg_id") or "").strip().lstrip("#")
+                if not _fid and _mid:
+                    _r = await _api.call_action("get_msg", message_id=int(_mid))
+                    for _seg in ((_r or {}).get("message") or []):
+                        _sd = _seg.get("data") or {}
+                        if _seg.get("type") in ("forward", "node", "nodes"):
+                            _fid = str(_sd.get("id") or _sd.get("res_id") or "").strip()
+                            break
+                if not _fid:
+                    return {"ok": False, "error": "没有拿到转发 id（可传 msg_id 让我自己找）"}
+                _res = await _api.call_action("get_forward_msg", id=_fid)
+                _items = []
+                for _node in ((_res or {}).get("messages") or [])[:100]:
+                    _sender = (_node.get("sender") or {})
+                    _nm = str(_sender.get("nickname") or _sender.get("card")
+                              or _sender.get("user_id") or "").strip()
+                    _txt = []
+                    for _seg in (_node.get("message") or _node.get("content") or []):
+                        if isinstance(_seg, dict):
+                            _t = _seg.get("type")
+                            _d = _seg.get("data") or {}
+                            if _t == "text":
+                                _txt.append(str(_d.get("text") or ""))
+                            elif _t == "image":
+                                _txt.append("[图片]")
+                            elif _t == "at":
+                                _txt.append("@" + str(_d.get("qq") or ""))
+                            elif _t == "face":
+                                _txt.append("[表情]")
+                    _line = " ".join("".join(_txt).split())[:200]
+                    if _line or _nm:
+                        _items.append({"from": _nm, "text": _line})
+                return {"ok": True, "count": len(_items), "items": _items}
+            except Exception as _exc:  # noqa: BLE001
+                logger.warning("[higan] 转发展开失败：%r", str(_exc)[:150])
+                return {"ok": False, "error": str(_exc)[:150]}
+
+        if name == "history_search":
+            try:
+                hits = self._hist().search(str(args.get("keyword") or ""),
+                                           str(args.get("scope") or ""),
+                                           int(args.get("limit") or 10))
+            except Exception as exc:  # noqa: BLE001
+                return {"ok": False, "error": repr(exc)[:160]}
+            return {"ok": True, "count": len(hits), "hits": hits}
+        if name == "self_status":
+            # [self-status] 她查看自己当前状态（不返回任何密钥 ✓）
+            _cfg_path = os.path.join(HIGAN_ROOT, "groups.json")
+            _conf = {}
+            try:
+                with open(_cfg_path, encoding="utf-8") as _h:
+                    _conf = json.load(_h)
+            except Exception:                          # noqa: BLE001
+                _conf = {}
+            _pct = {str(k): v for k, v in (_conf.get("reply_pct") or {}).items()}
+            _poll = {str(k): v for k, v in (_conf.get("poll_minutes") or {}).items()}
+            _mention = [str(x) for x in (_conf.get("mention_only") or [])]
+            _muted = [str(x) for x in (_conf.get("muted") or [])]
+
+            _mem_path = os.path.join(HIGAN_ROOT, "memory", "memory.json")
+            _facts, _scopes = 0, {}
+            try:
+                with open(_mem_path, encoding="utf-8") as _h:
+                    _mem = json.load(_h)
+                _facts = len((_mem.get("global") or {}).get("facts") or [])
+                for _gid, _item in (_mem.get("scopes") or {}).items():
+                    _scopes[str(_gid)] = {
+                        "turns": _item.get("turns"),
+                        "summary_len": len(str(_item.get("summary") or "")),
+                    }
+            except Exception:                          # noqa: BLE001
+                pass
+
+            _llm = {}
+            try:
+                with open(os.path.join(HIGAN_ROOT, "llm.json"), encoding="utf-8") as _h:
+                    _raw = json.load(_h)
+                _base = str(_raw.get("api_base") or _raw.get("base_url") or "")
+                _llm = {"model": _raw.get("model") or _raw.get("name"),
+                        "api_host": (_base.split("//")[-1].split("/")[0] if _base else "")}
+            except Exception:                          # noqa: BLE001
+                _llm = {"model": "未知"}
+
+            _up = 0
+            try:
+                with open("/proc/uptime", encoding="utf-8") as _h:
+                    _up = int(float(_h.read().split()[0]))
+            except Exception:                          # noqa: BLE001
+                pass
+
+            return {
+                "ok": True,
+                "self": {"qq": str(self_id or ""), "name": "Qhunliv-bot/彼岸酱"},
+                "groups": {
+                    "reply_pct": _pct,
+                    "mention_only": _mention,
+                    "poll_minutes": _poll,
+                    "muted": _muted,
+                    "note": "未列出的群 = 正常参与（默认 100%）",
+                },
+                "memory": {"facts": _facts, "scopes": _scopes,
+                           "file_bytes": (os.path.getsize(_mem_path)
+                                          if os.path.exists(_mem_path) else 0)},
+                "model": _llm,
+                "runtime": {"host_uptime_s": _up},
+            }
+
+        if name == "group_policy":
+            # [group-policy-tool] 她可以自己决定某个群要不要只看@ ✓
+            try:
+                import json as _json
+
+                _cfgp = "/root/higan/groups.json"
+                try:
+                    with open(_cfgp, encoding="utf-8") as _h:
+                        _conf = _json.load(_h)
+                    if not isinstance(_conf, dict):
+                        _conf = {}
+                except Exception:  # noqa: BLE001
+                    _conf = {}
+                for _k in ("mention_only", "muted"):
+                    _conf[_k] = [str(x) for x in (_conf.get(_k) or [])]
+                _g = str(args.get("group") or scope or "").strip()
+                _mode = str(args.get("mode") or "show").strip().lower()
+                # [group-policy-log] 把参数与结果打出来，便于核对 ✓
+                logger.info("[higan] group_policy 调用：mode=%s group=%s minutes=%s scope=%s"
+                            % (_mode, _g or "(空)", args.get("minutes"), scope or "(空)"))
+                if scope and _g and str(_g) != str(scope):
+                    logger.warning("[higan] group_policy 群号与当前群不一致：传=%s 当前=%s"
+                                   "（若说'本群'应不传 group ✓）" % (_g, scope))
+                if _mode not in ("show",) and not _g:
+                    return {"ok": False,
+                            "error": "缺少群号：请传 group，或在群里调用（scope 会自动带上）"}
+                if _mode not in ("mention_only", "muted", "normal", "show",
+                                 "poll", "probability"):
+                    return {"ok": False,
+                            "error": "mode 只能是 mention_only/normal/muted/poll/probability/show"}
+                _conf.setdefault("poll_minutes", {})
+                # [self-label+robust-pct] 只要带了 pct（或 mode 像数字/百分比）就按概率处理
+                _pct_arg = args.get("pct")
+                if _mode not in ("probability",) and _pct_arg is not None:
+                    _mode = "probability"
+                elif _mode not in ("probability",) and str(_mode).replace("%", "").isdigit():
+                    _pct_arg = int(str(_mode).replace("%", ""))
+                    _mode = "probability"
+                if _mode == "probability" and _g:
+                    # [pct+quote] 她设定这个群的参与概率 ✓
+                    _pct = max(0.0, min(100.0, float(args.get("pct")
+                                               if args.get("pct") is not None
+                                               else (args.get("minutes") or 100))))
+                    _conf.setdefault("reply_pct", {})[_g] = _pct
+                    with open(_cfgp, "w", encoding="utf-8") as _h:
+                        json.dump(_conf, _h, ensure_ascii=False, indent=2)
+                    logger.info("[higan] group_policy 已写盘：%s 回复概率 %d%% ✓" % (_g, _pct))
+                    return {"ok": True, "group": _g, "mode": "probability",
+                            "pct": _pct, "reply_pct": _conf["reply_pct"]}
+                if _mode == "poll" and _g:
+                    _mins = int(args.get("minutes") or args.get("n") or 10)
+                    _conf["poll_minutes"][_g] = max(1, min(1440, _mins))
+                    logger.info("[higan] group_policy 已写盘：%s 每 %d 分钟看一次 ✓"
+                                % (_g, _conf["poll_minutes"][_g]))
+                    return {"ok": True, "group": _g, "mode": "poll",
+                            "minutes": _conf["poll_minutes"][_g],
+                            "poll_minutes": _conf["poll_minutes"]}
+                if _mode != "show" and _g:
+                    for _k in ("mention_only", "muted"):
+                        if _g in _conf[_k]:
+                            _conf[_k].remove(_g)
+                    (_conf.get("poll_minutes") or {}).pop(_g, None)
+                    (_conf.get("reply_pct") or {}).pop(_g, None)
+                    if _mode in ("mention_only", "muted"):
+                        _conf[_mode].append(_g)
+                    with open(_cfgp, "w", encoding="utf-8") as _h:
+                        _json.dump(_conf, _h, ensure_ascii=False, indent=2)
+                return {"ok": True, "group": _g, "mode": _mode,
+                        "mention_only": _conf["mention_only"],
+                        "muted": _conf["muted"]}
+            except Exception as exc:  # noqa: BLE001
+                return {"ok": False, "error": repr(exc)[:200]}
+        if name == "send_sticker":
+            # [stickers-only] 从表情包 manifest 里挑一张发（走插件通道 ✓）
+            try:
+                from pathlib import Path as _Path2
+
+                # 从表情包 manifest 里挑
+                _kw = str(args.get("keyword") or "").strip()
+                _want = str(args.get("file") or "").strip()
+                _items = list(self.manifest or [])
+                if not _items:
+                    return {"ok": False, "error": "表情包库是空的"}
+                # 她自己指定了文件 ⇒ 直接发那张
+                if _want:
+                    for _item in _items:
+                        if _want in str(_item.get("file") or ""):
+                            _p = STICKER_DIR / str(_item.get("file"))
+                            if _p.exists():
+                                return {"ok": True, "deliver": "plugin",
+                                        "path": str(_p), "send_as": "image"}
+                    return {"ok": False, "error": "没有这个文件：%s" % _want}
+                # 关键词匹配：描述 + 文件名
+                _hits = []
+                if _kw:
+                    _kwl = _kw.lower()
+                    for _item in _items:
+                        _blob = (str(_item.get("desc") or "") + " "
+                                 + str(_item.get("file") or "")).lower()
+                        if _kwl in _blob:
+                            _hits.append(_item)
+                if len(_hits) == 1:
+                    _p = STICKER_DIR / str(_hits[0].get("file"))
+                    if _p.exists():
+                        return {"ok": True, "deliver": "plugin",
+                                "path": str(_p), "send_as": "image"}
+                if _hits:
+                    # 多张命中 ⇒ 把候选给她，她自己挑
+                    return {"ok": True, "candidates": [
+                        {"file": str(_i.get("file") or ""),
+                         "desc": str(_i.get("desc") or "")[:40]} for _i in _hits[:8]],
+                        "note": "挑一张就把它的 file 传给 send_sticker 的 file 参数"}
+                # 没命中 ⇒ 给她最近用过的几张当参考，别擅自发
+                return {"ok": False, "error": "没有匹配「%s」的表情包" % _kw,
+                        "samples": [
+                            {"file": str(_i.get("file") or ""),
+                             "desc": str(_i.get("desc") or "")[:40]}
+                            for _i in _items[:8]]}
+                _p = STICKER_DIR / str(_hit.get("file"))   # [sticker-path] 用真实常量 ✓
+                if not _p.exists():
+                    return {"ok": False, "error": "文件不存在：%s" % _p}
+                return {"ok": True, "deliver": "plugin", "path": str(_p), "send_as": "image"}
+            except Exception as _exc:  # noqa: BLE001
+                return {"ok": False, "error": repr(_exc)[:200]}
+        if name in ("__wake_v1_disabled__",):
+            # [wake] 她自己的唤醒词/唤醒人（命中就当作被叫到，绕过回复率）
+            try:
+                _p = "/root/higan/groups.json"
+                with open(_p, encoding="utf-8") as _h:
+                    _c = json.load(_h)
+                _w = [str(x) for x in (_c.get("wake_words") or []) if str(x).strip()]
+                _q = [str(x) for x in (_c.get("wake_persons") or []) if str(x).strip()]
+                if name == "wake_list":
+                    return {"ok": True, "wake_words": _w, "wake_persons": _q}
+                _word = str(args.get("word") or "").strip()
+                _qq = str(args.get("qq") or "").strip()
+                if not _word and not _qq:
+                    return {"ok": False, "error": "word 或 qq 至少给一个"}
+                if name == "wake_add":
+                    if _word and _word not in _w:
+                        _w.append(_word)
+                    if _qq and _qq not in _q:
+                        _q.append(_qq)
+                else:
+                    if _word in _w:
+                        _w.remove(_word)
+                    if _qq in _q:
+                        _q.remove(_qq)
+                _c["wake_words"], _c["wake_persons"] = _w, _q
+                with open(_p, "w", encoding="utf-8") as _h:
+                    json.dump(_c, _h, ensure_ascii=False, indent=2)
+                return {"ok": True, "wake_words": _w, "wake_persons": _q,
+                        "count": len(_w) + len(_q)}
+            except Exception as _exc:  # noqa: BLE001
+                logger.warning("[higan] wake 工具失败：%r", str(_exc)[:120])
+                return {"ok": False, "error": str(_exc)[:120]}
+
+        if name == "wake_person_info":
+            # [wake-person-info] 唤醒人全息视图（配置 + 事实 + 定点时间）
+            try:
+                with open("/root/higan/groups.json", encoding="utf-8") as _h:
+                    _c = json.load(_h)
+                _qq = str(args.get("qq") or "").strip()
+                if not _qq:
+                    return {"ok": False, "error": "要给 qq"}
+                _groups = [str(_g) for _g, _lst in (_c.get("wake_persons") or {}).items()
+                           if _qq in [str(x) for x in (_lst or [])]]
+                _conf = (_c.get("wake_person_conf") or {}).get(_qq) or {}
+                _at = _c.get("wake_at") or {}
+                _facts = []
+                try:
+                    import importlib.util as _ilu6
+                    from pathlib import Path as _P6
+                    _sp6 = _ilu6.spec_from_file_location(
+                        "wpi", str(_P6(BASE_DIR, "memory.py")))
+                    _wpm = _ilu6.module_from_spec(_sp6)
+                    _sp6.loader.exec_module(_wpm)
+                    _st6 = _wpm.WakePersonFacts(
+                        "/root/higan/memory/wake_persons.json").load()
+                    _facts = _st6.list(_qq)
+                except Exception:  # noqa: BLE001
+                    _facts = []
+                return {"ok": True, "qq": _qq,
+                        "is_wake_person_in": _groups,
+                        "conf": {"pct": _conf.get("pct", 100),
+                                 "words": _conf.get("words") or []},
+                        "wake_at": {g: (_at.get(g) or []) for g in _groups} or _at,
+                        "facts_count": len(_facts),
+                        "facts": _facts[:50]}
+            except Exception as _exc:  # noqa: BLE001
+                return {"ok": False, "error": str(_exc)[:150]}
+
+        if name in ("wake_person_set", "wake_person_show"):
+            # [wake-person-conf] 单唤醒人配置：pct / words / hours
+            try:
+                _p = "/root/higan/groups.json"
+                with open(_p, encoding="utf-8") as _h:
+                    _c = json.load(_h)
+                _tbl = _c.setdefault("wake_person_conf", {})
+                _qq = str(args.get("qq") or "").strip()
+                if not _qq:
+                    return {"ok": False, "error": "要给 qq"}
+                if name == "wake_person_show":
+                    return {"ok": True, "qq": _qq, "conf": _tbl.get(_qq) or {}}
+                _item = _tbl.setdefault(_qq, {})
+                if args.get("pct") is not None:
+                    _item["pct"] = max(0.0, min(100.0, float(args["pct"])))
+                if isinstance(args.get("words"), list):
+                    _item["words"] = [str(x) for x in args["words"]][:20]
+                if isinstance(args.get("hours"), list):
+                    _item["hours"] = [int(x) for x in args["hours"]][:2]
+                with open(_p, "w", encoding="utf-8") as _h:
+                    json.dump(_c, _h, ensure_ascii=False, indent=2)
+                return {"ok": True, "qq": _qq, "conf": _item}
+            except Exception as _exc:  # noqa: BLE001
+                return {"ok": False, "error": str(_exc)[:150]}
+
+        if name in ("wake_list", "wake_add", "wake_remove", "wake_search"):
+            # [wake-v2] 唤醒人/唤醒词：按群存、按群看、可删、可搜（不直接吐全量）
+            try:
+                _p = "/root/higan/groups.json"
+                with open(_p, encoding="utf-8") as _h:
+                    _c = json.load(_h)
+                _wp = _c.get("wake_persons") or {}
+                _ww = _c.get("wake_words") or {}
+                if not isinstance(_wp, dict):
+                    _wp = {}
+                if not isinstance(_ww, dict):
+                    _ww = {}
+                _g = str(args.get("group") or "").strip() or str(group or "")
+                if name == "wake_list":
+                    _mode = str(args.get("mode") or "summary")
+                    if _mode == "group" and _g:
+                        return {"ok": True, "group": _g,
+                                "persons": [str(x) for x in (_wp.get(_g) or [])],
+                                "words": [str(x) for x in (_ww.get(_g) or [])]}
+                    return {"ok": True, "mode": "summary",
+                            "groups": {k: {"persons": len(v or []),
+                                           "words": len(_ww.get(k) or [])}
+                                       for k, v in _wp.items()},
+                            "hint": "要看某个群的名单就传 group（例如本群）"}
+                if name == "wake_search":
+                    _q = str(args.get("query") or "").strip()
+                    _hit_p, _hit_w = {}, {}
+                    for _gid, _lst in _wp.items():
+                        _f = [x for x in (_lst or []) if _q and _q in str(x)]
+                        if _f:
+                            _hit_p[_gid] = _f
+                    for _gid, _lst in _ww.items():
+                        _f = [x for x in (_lst or []) if _q and _q in str(x)]
+                        if _f:
+                            _hit_w[_gid] = _f
+                    return {"ok": True, "query": _q,
+                            "persons": _hit_p, "words": _hit_w}
+                _qq = str(args.get("qq") or "").strip()
+                _word = str(args.get("word") or "").strip()
+                if name == "wake_add":
+                    if _qq:
+                        if not _qq.isdigit():
+                            return {"ok": False,
+                                    "error": "唤醒人必须用 QQ 号（纯数字），名字不可信"}
+                        _lst = _wp.setdefault(_g, [])
+                        if _qq not in _lst:
+                            _lst.append(_qq)
+                    elif _word:
+                        _lst = _ww.setdefault(_g, [])
+                        if _word not in _lst:
+                            _lst.append(_word)
+                    else:
+                        return {"ok": False, "error": "要给 qq（唤醒人）或 word（唤醒词）"}
+                else:  # wake_remove
+                    if _qq:
+                        _lst = _wp.get(_g) or []
+                        if _qq in _lst:
+                            _lst.remove(_qq)
+                        _wp[_g] = _lst
+                    if _word:
+                        _lst = _ww.get(_g) or []
+                        if _word in _lst:
+                            _lst.remove(_word)
+                        _ww[_g] = _lst
+                _c["wake_persons"], _c["wake_words"] = _wp, _ww
+                with open(_p, "w", encoding="utf-8") as _h:
+                    json.dump(_c, _h, ensure_ascii=False, indent=2)
+                return {"ok": True, "group": _g,
+                        "persons": [str(x) for x in (_wp.get(_g) or [])],
+                        "words": [str(x) for x in (_ww.get(_g) or [])]}
+            except Exception as _exc:  # noqa: BLE001
+                logger.warning("[higan] wake 工具失败：%r", str(_exc)[:120])
+                return {"ok": False, "error": str(_exc)[:120]}
+
+        if name == "wp_fact_move":
+            # [wp-move] 通用事实 → 某个唤醒人的记录（原子：先写成功再从通用里删）
+            try:
+                import importlib.util as _ilu5
+                from pathlib import Path as _P5
+                _sp5 = _ilu5.spec_from_file_location("wpm", str(_P5(BASE_DIR, "memory.py")))
+                _wpmod5 = _ilu5.module_from_spec(_sp5)
+                _sp5.loader.exec_module(_wpmod5)
+                _qq5 = str(args.get("qq") or "").strip()
+                _fid5 = str(args.get("id") or "").strip()
+                if not _qq5 or not _fid5:
+                    return {"ok": False, "error": "要同时给 id 和 qq"}
+                _gm = _wpmod5.Memory("/root/higan/memory/memory.json").load()
+                _hit = [f for f in _gm.list_facts() if str(f.get("id")) == _fid5]
+                if not _hit:
+                    return {"ok": False, "error": "通用事实里没有 %s" % _fid5}
+                _text = str(_hit[0].get("text") or "")
+                _st5 = _wpmod5.WakePersonFacts(
+                    "/root/higan/memory/wake_persons.json").load()
+                _new_id = _st5.add(_qq5, _text)
+                if not _new_id:
+                    return {"ok": False, "error": "写入唤醒人记录失败"}
+                _gm.delete_fact(_fid5)
+                logger.info("[higan] 通用事实 %s 已移入唤醒人 %s（%s）" % (_fid5, _qq5, _new_id))
+                return {"ok": True, "moved": _fid5, "to_person": _qq5,
+                        "new_id": _new_id, "count": _st5.count(_qq5)}
+            except Exception as _exc:  # noqa: BLE001
+                return {"ok": False, "error": str(_exc)[:150]}
+
+        if name in ("wp_fact_add", "wp_fact_list", "wp_fact_search", "wp_fact_delete"):
+            # [wake-person-facts] 关于某个唤醒人的记录（单独存，最多 200 条，不计入 facts）
+            try:
+                import importlib.util as _ilu3
+                from pathlib import Path as _P3
+                _sp3 = _ilu3.spec_from_file_location(
+                    "wp_mem", str(_P3(BASE_DIR, "memory.py")))
+                _wpmod = _ilu3.module_from_spec(_sp3)
+                _sp3.loader.exec_module(_wpmod)
+                _st = _wpmod.WakePersonFacts("/root/higan/memory/wake_persons.json").load()
+                _qq = str(args.get("qq") or "").strip()
+                if name == "wp_fact_add":
+                    _fid = _st.add(_qq, str(args.get("text") or ""))
+                    return {"ok": bool(_fid), "id": _fid, "count": _st.count(_qq)}
+                if name == "wp_fact_list":
+                    return {"ok": True, "qq": _qq, "facts": _st.list(_qq)}
+                if name == "wp_fact_search":
+                    return {"ok": True, "qq": _qq,
+                            "hits": _st.search(_qq, str(args.get("query") or ""))}
+                _n = _st.delete(_qq, str(args.get("id") or ""),
+                                str(args.get("keyword") or ""))
+                return {"ok": True, "deleted": _n}
+            except Exception as _exc:  # noqa: BLE001
+                logger.warning("[higan] 唤醒人记录失败：%r", str(_exc)[:120])
+                return {"ok": False, "error": str(_exc)[:120]}
+
+        if name in ("facts_list", "facts_search", "facts_edit", "facts_delete"):
+            try:
+                import importlib.util as _ilu2
+                from pathlib import Path as _P2
+                _sp2 = _ilu2.spec_from_file_location(
+                    "higan_memory_mod2", str(_P2("/root/astrbot-src/data/plugins/"
+                                                 "astrbot_plugin_higan/memory.py")))
+                _mmmod2 = _ilu2.module_from_spec(_sp2)
+                _sp2.loader.exec_module(_mmmod2)
+                _mm = _mmmod2.Memory("/root/higan/memory/memory.json").load()
+                if name == "facts_list":
+                    return {"ok": True, "facts": _mm.list_facts()}
+                if name == "facts_search":
+                    _q = str(args.get("query") or "")
+                    _lim = int(args.get("limit") or 500)
+                    _hits = _mm.list_facts()
+                    _kw = [w for w in _q.split() if w]
+                    _hit = [f for f in _hits if not _kw or all(w in f["text"] for w in _kw)][:_lim]
+                    return {"ok": True, "query": _q, "facts": _hit}
+                if name == "facts_edit":
+                    _ok = _mm.edit_fact(str(args.get("id") or ""), str(args.get("text") or ""))
+                    return {"ok": bool(_ok), "id": args.get("id")}
+                _n = _mm.delete_fact(str(args.get("id") or ""), str(args.get("keyword") or ""))
+                return {"ok": True, "deleted": _n}
+            except Exception as _exc:  # noqa: BLE001
+                logger.warning("[higan] 事实管理失败：%r", str(_exc)[:120])
+                return {"ok": False, "error": str(_exc)[:120]}
+
+        if name == "remember":
+            # [remember-tool] 她自己决定记什么 ✓（写入走 memory.add_fact，自动去重）
+            _txt = str(args.get("text") or "").strip()
+            if not _txt:
+                return {"ok": False, "error": "text 不能为空"}
+            try:
+                import importlib.util as _ilu
+                from pathlib import Path as _P
+                _sp = _ilu.spec_from_file_location(
+                    "higan_memory_mod", str(_P("/root/astrbot-src/data/plugins/"
+                                                "astrbot_plugin_higan/memory.py")))
+                _mmmod = _ilu.module_from_spec(_sp)
+                _sp.loader.exec_module(_mmmod)
+                _m = _mmmod.Memory("/root/higan/memory/memory.json").load()
+                _m.add_fact(_txt[:200], "tool")
+                _n = len((_m.data.get("global") or {}).get("facts") or [])
+                logger.info("[higan] remember 写入：%s（累计 %d 条）" % (_txt[:60], _n))
+                return {"ok": True, "saved": _txt[:200], "facts_total": _n}
+            except Exception as _exc:  # noqa: BLE001
+                logger.warning("[higan] remember 失败：%r", str(_exc)[:120])
+                return {"ok": False, "error": str(_exc)[:120]}
+        if name == "vm_fetch":
+            # [vm-fetch] 她自己决定把目标文件下载进虚拟机 ✓
+            _msg_id = str(args.get("msg_id") or "").strip()
+            _url = str(args.get("url") or "").strip()
+            _name = str(args.get("name") or "").strip()
+            if not _url and _msg_id:
+                try:
+                    _u = await self._file_url_of_message(_msg_id)
+                except Exception as _exc:  # noqa: BLE001
+                    logger.warning("[higan] vm_fetch 取消息文件失败：%r", str(_exc)[:120])
+                    _u = ""
+                _url = _u or ""
+            if not _url:
+                return {"ok": False, "error": "没有可下载的地址（url 与 msg_id 都没给，或那条消息里没有文件）"}
+            _res = await self._vm_tool("vm_fetch", {"url": _url, "name": _name})
+            logger.info("[higan] vm_fetch %s → %s" % (_url[:60], str(_res)[:120]))
+            return _res
+        if name == "send_shot":
+            return await self._vm_tool("vm_send_shot", args) or await self._vm_tool("send_shot", args)
+        if name == "qq_send":
+            return await self._qq_send(str(args.get("kind") or "group"),
+                                       str(args.get("text") or ""),
+                                       int(args.get("user_id") or 0),
+                                       int(args.get("group_id") or 146045691))
+        if name == "task_add" and tasks is not None:
+            task = tasks.add(str(args.get("title") or ""), str(args.get("goal") or ""),
+                             str(args.get("scope") or scope or ""),
+                             int(args.get("interval_s") or 120),
+                             str(args.get("repeat") or "every"),
+                             int(args.get("delay_s") or 0),
+                             str(args.get("brief") or ""),
+                             str(args.get("resume_prompt") or ""),
+                             str(args.get("trigger_kind") or "time"),
+                             str(args.get("trigger_script") or ""),
+                             int(args.get("trigger_every_s") or 60))
+            logger.info("[higan] 新任务 %s「%s」每 %ds 一次（scope=%s）"
+                        % (task["id"], task["title"], task["interval_s"], task["scope"]))
+            return {"ok": True, "task": task}
+        if name == "task_list" and tasks is not None:
+            return {"ok": True, "tasks": tasks.listing(str(args.get("scope") or scope or ""))}
+        if name == "task_update" and tasks is not None:
+            hit = tasks.update(str(args.get("id") or ""), str(args.get("title") or ""),
+                               str(args.get("brief") or ""), str(args.get("resume_prompt") or ""),
+                               int(args.get("interval_s") or 0),
+                               str(args.get("next_step_note") or ""),
+                               str(args.get("trigger_kind") or ""),
+                               str(args.get("trigger_script") or ""),
+                               int(args.get("trigger_every_s") or 0))
+            logger.info("[higan] 任务改写：%s" % [h.get("title") for h in hit])
+            return {"ok": bool(hit), "updated": [h.get("title") for h in hit]}
+        if name in ("task_done", "task_cancel") and tasks is not None:
+            hit = tasks.set_status(str(args.get("id") or ""), str(args.get("title") or ""),
+                                   "done" if name == "task_done" else "cancelled",
+                                   str(args.get("note") or ""))
+            logger.info("[higan] 任务 %s 结束：%s" % (name, [h.get("title") for h in hit]))
+            return {"ok": bool(hit), "closed": [h.get("title") for h in hit]}
+        return await self._vm_tool(name, args)
+
+    def _send_onebot_sync(self, scope: str, text: str) -> bool:
+        """通过本机 NapCat 直接发消息（群号或 private:QQ ✓）。"""
+        import urllib.request
+
+        if not text:
+            return False
+        body = None
+        if scope.startswith("private:"):
+            body = {"action": "send_private_msg", "params": {
+                "user_id": int(scope.split(":", 1)[1]), "message": text}}
+        else:
+            digits = "".join(ch for ch in scope if ch.isdigit())
+            if not digits:
+                return False
+            body = {"action": "send_group_msg", "params": {
+                "group_id": int(digits), "message": text}}
+        try:
+            req = urllib.request.Request("http://127.0.0.1:13000/",
+                                         data=json.dumps(body).encode("utf-8"), method="POST")
+            req.add_header("Content-Type", "application/json")
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                ok = json.loads(resp.read().decode("utf-8", "replace")).get("status") == "ok"
+            return bool(ok)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[higan] 后台任务发送失败：%r", str(exc)[:120])
+            return False
+
+    async def _run_task_once(self, task: dict) -> str:
+        """用任务目标再问她一次（她可以继续调工具），返回要发出去的文本 ✓。"""
+        import asyncio
+
+        # [script-trigger] [task-selfbrief] 续做提示词由**她自己写**（resume_prompt）；没有就用简述/目标兜底 ✓
+        brief = str(task.get("brief") or task.get("goal") or task.get("title") or "")
+        resume = str(task.get("resume_prompt") or "").strip()
+        system = ("你是彼岸酱。你之前给自己排了一个**多步后台任务**，现在到点继续。\n"
+                  "任务简述（你自己写的）：%s\n\n"
+                  "下面是你上一轮写给自己的续做提示词（如果为空，就按简述自己判断下一步）：\n"
+                  "%s\n\n"
+                  "要求：继续推进这个多步任务（可以用截图/开网页/执行/记忆/任务管理工具 ✓）。\n"
+                  "如果还没做完：用 task_update 把你给下一轮的 resume_prompt 写清楚（下一步做什么）；"
+                  "如果做完了：task_done。\n"
+                  % (brief, resume or "（空）"))
+        prompt = ("【继续你的后台任务：%s】\n现在是 %s。" %
+                  (task.get("title"), time.strftime("%Y-%m-%d %H:%M")))
+        text, calls = await self._llm_tools(system, prompt, [])
+        if calls:
+            for call in calls:
+                fn = ((call.get("function") or {}).get("name") or "")
+                raw_args = ((call.get("function") or {}).get("arguments") or "{}")
+                try:
+                    targs = json.loads(raw_args) if isinstance(raw_args, str) else (raw_args or {})
+                except Exception:  # noqa: BLE001
+                    targs = {}
+                tres = await self._dispatch_tool(fn, targs, str(task.get("scope") or ""))
+                logger.info("[higan] 任务工具 %s → %s"
+                            % (fn, json.dumps(tres, ensure_ascii=False)[:120]))
+                text2, _ = await self._llm_tools(
+                    system + "\n\n【%s 的结果】\n%s" % (fn, json.dumps(tres, ensure_ascii=False)[:1200]),
+                    prompt, [])
+                if text2:
+                    text = text2
+        return (text or "").strip()
+
+    async def _task_loop(self) -> None:
+        """后台循环：每 25 秒看一次到点任务 ✓（只启动一次）。"""
+        import asyncio
+
+        while True:
+            try:
+                await asyncio.sleep(25)
+                tasks = self._tasks_mod()
+                _due = await asyncio.to_thread(tasks.due)
+                for task in _due:
+                    text = await self._run_task_once(task)
+                    scope = str(task.get("scope") or "")
+                    if text and scope:
+                        self._send_onebot_sync(scope, text)
+                        logger.info("[higan] 后台任务「%s」→ %s：%s"
+                                    % (task.get("title"), scope, text[:60]))
+                    tasks.mark(text[:200])
+            except asyncio.CancelledError:
+                return
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("[higan] 任务循环异常（继续）：%r", str(exc)[:160])
+
+    def _ensure_task_loop(self) -> None:
+        """确保后台循环在跑（懒启动 ✓ 不依赖 AstrBot 生命周期）。"""
+        import asyncio
+
+        # [poll-loop-start-fix] 定时查看必须独立启动（不受任务循环守卫影响 ✓）
+        try:
+            if getattr(self, "_poll_loop_task", None) is None:
+                _loop0 = asyncio.get_running_loop()
+                self._poll_loop_task = _loop0.create_task(self._poll_loop())
+                logger.info("[higan] 定时查看循环已启动（30s 一轮）✓")
+        except Exception as _exc:  # noqa: BLE001
+            logger.warning("[higan] 定时查看循环启动失败：%r", str(_exc)[:120])
+        if getattr(self, "_task_loop_task", None) is not None:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+            self._task_loop_task = loop.create_task(self._task_loop())
+            self._free_tick_task = loop.create_task(self._free_tick())
+            logger.info("[higan] 后台任务循环已启动（25s 一轮）")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[higan] 启动任务循环失败：%r", exc)
+
+    async def _qq_send(self, kind: str, text: str, user_id: int = 0,
+                       group_id: int = 146045691) -> dict:
+        """[proactive-social] 主动发消息（群 / 私聊 / 群临时会话）✓。"""
+        import asyncio
+        import urllib.request
+
+        if not (text or "").strip():
+            return {"ok": False, "error": "empty text"}
+        payload = {"kind": kind, "text": text, "user_id": int(user_id or 0),
+                   "group_id": int(group_id or 146045691)}
+
+        def _post() -> dict:
+            body = json.dumps(payload).encode("utf-8")
+            req = urllib.request.Request("http://127.0.0.1:18003/vm/qq/send",
+                                         data=body, method="POST")
+            req.add_header("Content-Type", "application/json")
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                return json.loads(resp.read().decode("utf-8", "replace"))
+
+        try:
+            return await asyncio.to_thread(_post)
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": repr(exc)[:200]}
+
+    # [proactive-social]
+    async def _free_tick(self) -> None:
+        """[proactive-social] 自由活动节拍：每 ~12 分钟给她一次自主机会 ✓。
+
+        她可以：查点什么 / 发条消息给某人 / 继续自己的任务 / **什么都不做**（默认 ✓）。
+        节流：同一 scope 至少间隔 25 分钟；无兴趣时可静默 ✓ 不刷屏。
+        """
+        import asyncio
+
+        while True:
+            try:
+                await asyncio.sleep(12 * 60)
+                now = time.time()
+                last = float(getattr(self, "_last_free_tick", 0) or 0)
+                if now - last < 25 * 60:
+                    continue
+                scope = str(getattr(self, "_main_scope", "") or "146045691")
+                since = int(now - last) if last else 0
+                sysmsg = ("你是彼岸酱。现在没有人在叫你，这是你自己的时间。\n"
+                          "你可以：继续自己的任务、去看看虚拟机/网页、主动找某人说话，"
+                          "或者什么都不做（没人会催你 ✓）。\n"
+                          "要说话就输出 JSON：{\"action\":\"reply\",\"kind\":\"group|private|temp\","
+                          "\"user_id\":0,\"segments\":[\"...\"],\"reason\":\"...\"}；"
+                          "不想说就 {\"action\":\"silent\"}。")
+                prompt = ("【自由时间】距上次自主活动约 %d 分钟。现在想做什么？" % (since // 60))
+                text, calls = await self._llm_tools(sysmsg, prompt, [])
+                for call in calls or []:
+                    fn = ((call.get("function") or {}).get("name") or "")
+                    raw_args = ((call.get("function") or {}).get("arguments") or "{}")
+                    try:
+                        targs = json.loads(raw_args) if isinstance(raw_args, str) else (raw_args or {})
+                    except Exception:  # noqa: BLE001
+                        targs = {}
+                    await self._dispatch_tool(fn, targs, scope)
+                data = self._parse_decision(text or "", require_action=False)
+                self._last_free_tick = now
+                if not data or str(data.get("action")) != "reply":
+                    logger.info("[higan] 自由时间：她选择不说话 ✓")
+                    continue
+                segs = [str(s) for s in (data.get("segments") or []) if str(s).strip()]
+                msg = "\n".join(segs).strip()
+                if not msg:
+                    continue
+                kind = str(data.get("kind") or "group")
+                uid = int(data.get("user_id") or 0)
+                res = await self._qq_send(kind, msg, uid, int(scope) if scope.isdigit() else 146045691)
+                logger.info("[higan] 自由时间：她主动说了（%s）→ %s ｜%s"
+                            % (kind, msg[:50], json.dumps(res, ensure_ascii=False)[:100]))
+            except asyncio.CancelledError:
+                return
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("[higan] 自由节拍异常（继续）：%r", str(exc)[:160])
+
+    # [fix-tool-map] 2026-10-21 补齐 schema 与映射不一致的工具
+    # [map-mail-legacy] 2026-10-21 补 mail_list/mail_code
+    # [map-hold-frame] 2026-10-21 补 hold_drag/frame_eval
+    # [tool-map-audit] 2026-10-21 补齐 schema↔映射缺口
+    async def _vm_tool(self, name: str, args: dict) -> dict:
+        """[tool-loop] 调她自己的虚拟机（127.0.0.1:18003）✓。
+
+        为什么直接打 VM API 而不走 MCP：AstrBot 的 MCP 工具只在其 agent 管线里自动注入 ✗，
+        而 `_decide` 是自己调 LLM ⇒ 模型根本看不到工具清单 ✗。这里用最直接的方式补上回路，
+        同时把超时（30s）与失败降级都控制在我们手里 ✓。
+        """
+        import asyncio
+        import urllib.request
+
+        mapping = {
+            "vm_shot": ("GET", "/vm/shot", None),
+            "vm_fetch": ("POST", "/vm/download", {"url": str(args.get("url") or ""),
+                                                  "name": str(args.get("name") or "")}),
+            "vm_files": ("GET", "/vm/files?dir=%s" % (args.get("dir") or "files"), None),
+            "vm_click": ("POST", "/vm/click", {"x": int(args.get("x") or 0),
+                                               "y": int(args.get("y") or 0)}),
+            "vm_type": ("POST", "/vm/type", {"text": str(args.get("text") or "")}),
+            "vm_key": ("POST", "/vm/key", {"key": str(args.get("key") or "Return")}),
+            "vm_browse": ("POST", "/vm/browse", {"url": str(args.get("url") or "")}),
+            "vm_exec": ("POST", "/vm/exec", {"code": str(args.get("code") or ""),
+                                             "lang": str(args.get("lang") or "python")}),
+            "vm_recall": ("POST", "/vm/qq/recall", {"group_id": str(args.get("group_id") or "146045691"),
+                                                    "count": int(args.get("count") or 1)}),
+            "tab_action": ("POST", "/vm/tab", {"action": str(args.get("action") or "close"),
+                                               "n": int(args.get("n") or 0)}),
+            "vm_click_text": ("POST", "/vm/click_text", {"text": str(args.get("text") or ""),
+                              "exact": bool(args.get("exact") or False),
+                              "index": int(args.get("index") or 0)}),
+            "vm_click_confirm": ("POST", "/vm/click_confirm", {}),
+            "vm_click_preview": ("POST", "/vm/click_preview", {"x": int(args.get("x") or 0),
+                                 "y": int(args.get("y") or 0),
+                                 "label": str(args.get("label") or "")}),
+            "vm_send_shot": ("POST", "/vm/qq/send_shot", {"path": str(args.get("path") or ""),
+                              "kind": str(args.get("kind") or "group"),
+                              "user_id": int(args.get("user_id") or 0),
+                              "group_id": int(args.get("group_id") or 146045691)}),
+            "mail_recent": ("POST", "/vm/mail/recent", {"limit": int(args.get("limit") or 5)}),
+            "mail_web_login": ("POST", "/vm/mail/web_login", {}),
+            "mail_web_read": ("POST", "/vm/mail/web_read", {"limit": int(args.get("limit") or 2500)}),
+            "vm_hold_drag": ("POST", "/vm/hold_drag", {"x": int(args.get("x") or 0),
+                             "y": int(args.get("y") or 0),
+                             "to_x": int(args.get("to_x") or 0),
+                             "to_y": int(args.get("to_y") or 0),
+                             "hold_ms": int(args.get("hold_ms") or 700),
+                             "steps": int(args.get("steps") or 28)}),
+            "vm_frame_eval": ("POST", "/vm/frame_eval", {"js": str(args.get("js") or ""),
+                              "match": str(args.get("match") or "")}),
+            "mail_list": ("POST", "/vm/mail/list", {"limit": int(args.get("limit") or 10),
+                                    "unseen_only": bool(args.get("unseen_only") or False)}),
+            "mail_code": ("POST", "/vm/mail/code", {"limit": int(args.get("limit") or 5)}),
+            "vm_eval": ("POST", "/vm/eval", {"js": str(args.get("js") or "")}),
+            "vm_slider_gap": ("POST", "/vm/slider/gap", {"bg_url": str(args.get("bg_url") or ""),
+                                                         "piece_url": str(args.get("piece_url") or "")}),
+            "vm_slider_drag": ("POST", "/vm/slider/drag", {"x": int(args.get("x") or 0),
+                                                           "y": int(args.get("y") or 0),
+                                                           "distance": int(args.get("distance") or 0)}),
+        }
+        if name not in mapping:
+            return {"ok": False, "error": "unknown tool %s" % name}
+
+        def _call() -> dict:
+            method, path, payload = mapping[name]
+            url = "http://127.0.0.1:18003" + path
+            try:
+                if method == "GET":
+                    with urllib.request.urlopen(url, timeout=35) as resp:
+                        return json.loads(resp.read().decode("utf-8", "replace"))
+                body = json.dumps(payload).encode("utf-8")
+                req = urllib.request.Request(url, data=body, method="POST")
+                req.add_header("Content-Type", "application/json")
+                with urllib.request.urlopen(req, timeout=35) as resp:
+                    return json.loads(resp.read().decode("utf-8", "replace"))
+            except Exception as exc:  # noqa: BLE001
+                return {"ok": False, "error": repr(exc)[:200]}
+
+        try:
+            return await asyncio.to_thread(_call)
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": repr(exc)[:200]}
+
+    async def _decide_tools_first(self, event: AstrMessageEvent, group: str,
+                                  text: str, has_image: bool) -> str:
+        """[see-and-send] 工具优先通路（2026-10-20）。
+
+        三件事在这一处解决：
+          ① 截图后把图**喂回模型**（她下一轮能"看见"屏幕 ⇒ 自己先看一眼再说话 ✓）
+          ② 结束时把 `[发图:<路径>]` 附在回复末尾 ⇒ `_send` 真的把图发到群里 ✓
+          ③ 工具失败/没文本一律回退原裁决 ✓（不会哑掉）
+        """
+        try:
+            import importlib.util as _ilu
+            from pathlib import Path as _Path
+
+            _f = _Path(__file__).resolve().parent / "agent_loop.py"
+            _spec = _ilu.spec_from_file_location("agent_loop", str(_f))
+            _loop = _ilu.module_from_spec(_spec)
+            _spec.loader.exec_module(_loop)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[higan] agent_loop 不可用，回退普通裁决：%r", exc)
+            return await self._decide(event, group, text, has_image)
+
+        provider = self.context.get_using_provider(event.unified_msg_origin)
+        if provider is None:
+            return await self._decide(event, group, text, has_image)
+        try:
+            refs, _desc = await self._refs_for(event, group, text, has_image)
+        except Exception:  # noqa: BLE001
+            refs = []
+        live_refs = list(refs or [])          # 会随截图增长 ⇒ 模型下一轮能看见 ✓
+        shots: list = []                      # 要发出去的图
+
+        _persona = getattr(self, "persona", "") or ""
+        # [mail-capability] 能力里点名邮箱（她才知道有这个工具 ✓）
+        # [focus-and-silence] 简短自然 + 允许沉默 + 聚焦最后一条 ✓
+        system = ("%s\n\n想发「你自己的照片」就写 `[头像:me]`（会发你的头像 ✓），也可以直接发文件 /root/higan/images/her-avatar.jpg ✓\n\n回别人时**优先引用他那条**：在句子里写 `[quote:消息ID]`"
+                  "（转录每行末尾的 #号就是 ID）✓\n\n"
+                  "你是彼岸酱，在群里聊天。你能截屏、开网页、点击、跑脚本、查聊天记录，也能直接收邮箱邮件（含验证码），虚拟机里的文件（图片/视频/文档）也能发出去，群文件也能列出来看，表情包也能发；哪些群只在被 @ 时才看，也由你决定。\n"
+                  "下面最后一条是现在要对你说的话：先想清楚它在问什么/要你做什么。\n"
+                  "要动手就动手；要回就自然回一句；**不想回、或没你的事，就只输出 SILENT** ✓"
+                  % _persona)
+        # [structured-groups] 一份结构化聊天记录：按群分组、当前群标"现在" ✓
+        _by_group: dict = {}
+        try:
+            for _ln in (self._all_recent or [])[-120:]:
+                if not _ln.startswith("[群"):
+                    continue
+                _gid = _ln[2:_ln.find("]")] if "]" in _ln else ""
+                _body = _ln.split("]", 1)[1].strip() if "]" in _ln else _ln
+                _by_group.setdefault(_gid, []).append(_body)
+        except Exception:  # noqa: BLE001
+            _by_group = {}
+        _blocks: list = []
+        for _gid, _lines in list(_by_group.items())[:4]:
+            if str(group) in _gid:
+                continue
+            _blocks.append("【%s】最近：\n%s" % (_gid, "\n".join(_lines[-4:])))
+        _cur = list(self._recent.get(group, []))[-20:]
+        _blocks.append("【群%s（现在）】\n%s" % (group, "\n".join(_cur) or "（空）"))
+        prompt = ("【聊天记录】\n%s\n\n现在要对你说的话：%s"
+                  % ("\n\n".join(_blocks), text or "[图片]"))
+
+        async def _llm(_sys, _prompt):
+            # 注意：live_refs 会把新截图带进下一轮 ⇒ 她"自己先看一眼" ✓
+            return await self._llm_tools(_sys, _prompt, live_refs)
+
+        tool_notes: list = []
+
+        async def _tool(name, args):
+            # [group-files] 群文件走 AstrBot 的 OneBot 客户端（HTTP 口是空壳 ✗）
+            if name in ("group_files", "group_file_download"):
+                try:
+                    _api = event.bot.api
+                    if name == "group_files":
+                        _r = await _api.call_action("get_group_root_files",
+                                                    group_id=int(group),
+                                                    file_count=int(args.get("limit") or 20))
+                        _files = ((_r or {}).get("files") or [])[: int(args.get("limit") or 20)]
+                        _folders = (_r or {}).get("folders") or []
+                        _out = []
+                        for f in _files:
+                            _out.append({"name": f.get("file_name"),
+                                         "size": f.get("file_size"),
+                                         "uploader": f.get("uploader"),
+                                         "time": f.get("upload_time"),
+                                         "id": f.get("file_id")})
+                        return {"ok": True, "files": _out,
+                                "folders": [{"name": d.get("folder_name"),
+                                             "count": d.get("total_file_count"),
+                                             "id": d.get("folder_id")} for d in _folders]}
+                    _r = await _api.call_action("get_group_file_url",
+                                                group_id=int(group),
+                                                file_id=str(args.get("id") or ""))
+                    return {"ok": True, "url": (_r or {}).get("url")}
+                except Exception as exc:  # noqa: BLE001
+                    return {"ok": False, "error": repr(exc)[:200]}
+            res = await self._dispatch_tool(name, args, group)
+            # [plugin-delivers-media] VM 说"交给你发" ⇒ 走插件通道（实测可用 ✓）
+            try:
+                if isinstance(res, dict) and res.get("deliver") == "plugin":
+                    _p = str(res.get("path") or "")
+                    if _p:
+                        await self._send(event, group, "[发图:%s]" % _p)
+                        # [no-double-media] 记下来，组装回复时不要再挂一次 ✓
+                        self._delivered_media = _p
+                        res = dict(res)
+                        res["delivered"] = True
+                        logger.info("[higan] 插件已发送文件：%s" % _p)
+            except Exception as _exc:  # noqa: BLE001
+                logger.warning("[higan] 插件发送失败：%r", str(_exc)[:120])
+            try:
+                if name == "vm_shot" and isinstance(res, dict) and res.get("path"):
+                    path = str(res["path"])
+                    shots.append(path)
+                    live_refs.append(path)      # ← 关键：让她能看见这张图 ✓
+                    logger.info("[higan] 截图已喂回模型：%s" % path)
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                tool_notes.append({
+                    "id": "call_%d_%s" % (len(tool_notes) + 1, name),
+                    "name": name,
+                    "arguments": json.dumps(args, ensure_ascii=False),
+                    "result": json.dumps(res, ensure_ascii=False)[:2000],
+                })
+            except Exception:  # noqa: BLE001
+                pass
+            return res
+
+        try:
+            _out, _used = await asyncio.wait_for(
+                _loop.run(system, prompt, _llm, _tool), timeout=200)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[higan] 工具回路失败，回退普通裁决：%r", str(exc)[:140])
+            return await self._decide(event, group, text, has_image)
+
+        if _used:
+            logger.info("[higan] 本轮用过工具：%s ｜截图 %d 张" % (_used, len(shots)))
+        # [no-internal-leak] 把工具名/配置/日志这类内部话滤掉 ✓
+        try:
+            _before = (_out or "")
+            _out = self._strip_internal(_before)
+            if _out != _before:
+                logger.info("[higan] 已过滤内部信息（%d→%d 字）" % (len(_before), len(_out)))
+        except Exception as _exc:  # noqa: BLE001
+            logger.warning("[higan] 内部信息过滤失败：%r", str(_exc)[:100])
+        # [tool-messages] 把工具结果按标准 tool 消息回喂给她，由她自己开口
+        if tool_notes:
+            # [persona-voice] 回话必须带着她的人格，别再拿工具说明当 system
+            _persona_sys = (getattr(self, "persona", "") or "").strip()
+            if _persona_sys:
+                _persona_sys += ("\n\n（刚才你查了点资料；现在就像平时聊天那样回她，"
+                                 "短一点、用你的语气，别念资料、别报工具。）")
+            else:
+                _persona_sys = system
+            _msgs: list = [{"role": "system", "content": _persona_sys}]
+            _msgs.append({"role": "user", "content": prompt})
+            for _tn in tool_notes[-8:]:
+                _msgs.append({
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [{
+                        "id": _tn["id"], "type": "function",
+                        "function": {"name": _tn["name"],
+                                     "arguments": _tn["arguments"] or "{}"},
+                    }],
+                })
+                _msgs.append({"role": "tool", "tool_call_id": _tn["id"],
+                              "content": _tn["result"]})
+            # [valid-tail] 结尾只放**当前这一句**（不要重复整段提示，否则她会接不上）
+            _cur_line = "%s：%s" % (self._who(event), text or "[图片]")
+            _msgs.append({"role": "user", "content": _cur_line})
+            logger.info("[higan] 工具结果以 tool 消息回喂（%d 条）" % len(tool_notes[-8:]))
+            _text = await self._llm_chat(_msgs, tools=False)
+            _text = (_text or "").strip()
+            if _text:
+                logger.info("[higan] 她用工具结果自己回了（%d 字）" % len(_text))
+                return _text[:1500]
+            logger.info("[higan] 工具结果回喂后她没说话 ⇒ 走普通裁决")
+            return await self._decide(event, group, text, has_image)
+        # [focus-and-silence] 她可以选择不说 ✓
+        if (_out or "").strip().upper().strip("。.!！") == "SILENT":
+            logger.info("[higan] 她选择沉默（SILENT）✓")
+            return ""
+        _out = (_out or "").strip()
+        if not _out and not shots:
+            return await self._decide(event, group, text, has_image)
+        # [no-caption-fallback] 图已发就不要再硬凑文字 ✗（会凭空跑题）
+        # 她本来就会在工具回路里自己说话；没说就是不想说 ✓
+        # [claim-image-align] 她**说**截了图 ⇒ 必须真有图（否则就是"说的和做的不符"✗）
+        try:
+            import re as _re_ci
+
+            _claims_img = bool(shots) and bool(_re_ci.search(
+                r"截图|截了图|截好啦|图给你|给你看|看这张|图呢|图在这", _out or ""))
+            if _claims_img and "[发图" not in (_out or ""):
+                _out = (_out or "").rstrip() + "\n[发图:%s]" % shots[-1]
+                logger.info("[higan] 她声称截图却没附图 ⇒ 自动补上：%s" % shots[-1])
+        except Exception:  # noqa: BLE001
+            pass
+
+        # [model-decides-image] 其余情况仍由她自己写 [发图] 决定 ✓
+        if shots and "[发图]" in (_out or ""):
+            _out = _out.replace("[发图]", "[发图:%s]" % shots[-1], 1).strip()
+            logger.info("[higan] 她决定发图：%s" % shots[-1])
+        elif shots and "[发图" not in (_out or ""):
+            logger.info("[higan] 本轮截图 %d 张，她选择不发（内部保留 ✓）" % len(shots))
+        if not _out:
+            return await self._decide(event, group, text, has_image)
+        logger.info("[higan] 工具优先通路产出回复（%d 字）" % len(_out))
+        return _out[:1500]
+
+    async def _decide(self, event: AstrMessageEvent, group: str, text: str,
+                      has_image: bool) -> str:
+        """[autonomy-v3] 单次调用：模型**自己决定**要不要说、说什么（不省 token）。"""
+        # [path-import] 2026-10-19: 按文件路径加载，避免依赖 sys.path（211/186 都能用 ✓）
+        try:
+            import importlib.util as _ilu
+            from pathlib import Path as _Path
+
+            def _load_sibling(_name):
+                _f = _Path(__file__).resolve().parent / (_name + ".py")
+                _spec = _ilu.spec_from_file_location(_name, str(_f))
+                _mod = _ilu.module_from_spec(_spec)
+                _spec.loader.exec_module(_mod)
+                return _mod
+
+            _p2 = _load_sibling("prompts_v2")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[higan] prompts_v2 不可用：%r", exc)
+            return ""
+        provider = self.context.get_using_provider(event.unified_msg_origin)
+        if provider is None:
+            return ""
+        history = self._recent.setdefault(group, [])
+        self_id = str(event.get_self_id() or "")
+        ats = [str(qq) for qq in (self._at_targets(event) or [])]
+        at_me = bool(self_id) and self_id in ats
+        called_name = any(k in (text or "") for k in ("彼岸酱", "小彼", "酱"))
+        try:
+            self._ensure_task_loop()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            refs, _desc = await self._refs_for(event, group, text, has_image)
+        except Exception:  # noqa: BLE001
+            refs = []
+        _lr = getattr(self, "_last_reply_at", None) or {}
+        last = _lr.get(group) if isinstance(_lr, dict) else None
+        ago = int(time.time() - last) if last else None
+        _sm = getattr(self, "_said_this_minute", None) or {}
+        said = _sm.get(group, 0) if isinstance(_sm, dict) else 0
+        # [at-targets] 2026-10-24 用户现场：别人 @ 的是主人，她却当成在叫自己 ✗
+        # 必须把"这条 @ 的是谁"明确告诉模型，否则她会把文本里的 @ 当自己 ✓
+        _at_others = [q for q in ats if not self_id or q != self_id]
+        signals = {
+            "at_me": at_me,
+            "at_others": _at_others,
+            "called_name": called_name,
+            "replying_me": False,
+        }
+        # [memory-wired] 记忆：超阈值才压缩（≈60 万 token），否则全量喂给模型
+        # [shared-memory-v2] 全局摘要：跨群共享（下面 _mem_obj 建立后再取 ✓）
+        _summary = ""
+        _facts = []
+        try:
+            _mem = _load_sibling("memory")
+            _memory = _mem.Memory("/root/higan/memory/memory.json").load()
+            _turns = _memory.bump_turns(group)
+            # [forget-not-compress] 2026-10-24 用户要求：不再压缩，直接忘掉 60% 对话
+            # 只动**上下文里的对话记录**；事实、人设、memory.json 摘要、history 文件都不动
+            try:
+                _chars = sum(len(str(x)) for x in history)
+                if _chars > FORGET_TOKEN_LIMIT:
+                    _drop = int(len(history) * FORGET_RATIO)
+                    logger.info("[higan] 群 %s：上下文约 %d 字符（>%d）⇒ 忘记最早 %d 条（%.0f%%）"
+                                % (group, _chars, FORGET_TOKEN_LIMIT, _drop,
+                                   FORGET_RATIO * 100))
+                    del history[:_drop]
+            except Exception as _fexc:  # noqa: BLE001
+                logger.warning("[higan] 忘记旧对话失败（忽略）：%r", str(_fexc)[:100])
+            _summary = _memory.get_summary(group) or ""
+            # [roster] 2026-10-20: 让她认得出谁是谁（最近发言者的昵称）
+            try:
+                _names = []
+                for _line in history[-40:]:
+                    _who = str(_line).split(":", 1)[0].strip()
+                    if _who and _who not in _names and len(_who) <= 24:
+                        _names.append(_who)
+                if _names:
+                    _summary = (_summary + "\n【在座的人】" + "、".join(_names[:16])).strip()
+            except Exception as _exc:  # noqa: BLE001
+                logger.warning("[higan] 名录生成失败（忽略）：%r", _exc)
+            _global = _memory.get_global_summary() or ""
+            if _global and _global != _summary:
+                _summary = (_summary + " / 跨场景：" + _global)[:3000]
+            _facts = _memory.search_facts(text or "")
+        except Exception as _exc:  # noqa: BLE001
+            logger.warning("[higan] 记忆处理失败（忽略）：%r", _exc)
+        # [people-v2] 只给模型最近 120 行（存 2000 行不变 ✓）：窗口太大时她必然串人 ✗
+        # [shared-memory-v3] 跨场景记忆已在上面并入 _summary（33-35 行）✓ 这里无需重复
+        msgs = _p2.build_messages(
+            history[-120:], text or "（无文字）", signals,
+            last_reply=(getattr(self, "_last_reply_text", None) or {}).get(group, ""),
+            seconds_since=ago, said_this_minute=said,
+            summary=_summary, facts=_facts,
+            my_recent=(getattr(self, "_my_recent", None) or {}).get(group, []))
+        extra_system = msgs[0]["content"]
+        prompt = "\n\n".join(m["content"] for m in msgs[1:])
+        # [tool-loop] 2026-10-19: 最多 3 轮"调工具→看结果→继续"，让她真的能截图/执行
+        _prompt = prompt
+        _data = None
+        _shots: list = []
+        for _round in range(3):
+            _raw = await self._call_llm(provider, _prompt, extra_system, refs)
+            _clean = (_raw or "").strip()
+            if "```" in _clean:
+                import re as _re_fence
+                _fence = _re_fence.search(r"```(?:json)?\s*(.*?)```", _clean, _re_fence.S)
+                if _fence:
+                    _clean = _fence.group(1).strip()
+            if not _clean.startswith("{"):
+                import re as _re_obj
+                _obj = _re_obj.search(r"\{.*\}", _clean, _re_obj.S)
+                if _obj:
+                    _clean = _obj.group(0)
+            _data = self._parse_decision(_clean, require_action=True)
+            # [native-tools] 先看模型有没有走**原生工具调用**（tools_call）
+            _tc = getattr(getattr(self, "_last_resp", None), "tools_call", None) or []
+
+            # [direct-tools] 先走直连 OpenAI 原生工具调用（AstrBot 侧工具集取不到 ✗）
+            _dt = []
+            _dtext = ""
+            try:
+                _dtext, _dt = await self._llm_tools(extra_system, _prompt, refs)
+            except Exception as _exc:  # noqa: BLE001
+                logger.warning("[higan] 直连工具异常（忽略）：%r", _exc)
+            if _dt:
+                for _call in _dt:
+                    _fn = ((_call.get("function") or {}).get("name") or "")
+                    _args_raw = ((_call.get("function") or {}).get("arguments") or "{}")
+                    try:
+                        _args = json.loads(_args_raw) if isinstance(_args_raw, str) else (_args_raw or {})
+                    except Exception:  # noqa: BLE001
+                        _args = {}
+                    _tres = await self._dispatch_tool(_fn, _args, group)
+                    logger.info("[higan] 直连工具 %s(%s) → %s"
+                                % (_fn, json.dumps(_args, ensure_ascii=False)[:60],
+                                   json.dumps(_tres, ensure_ascii=False)[:140]))
+                    if _fn == "vm_shot" and isinstance(_tres, dict) and _tres.get("path"):
+                        _shots.append(str(_tres["path"]))
+                    _prompt = (prompt + "\n\n【%s 的执行结果】\n%s\n\n请据此回答（或继续调用工具）。"
+                               % (_fn, json.dumps(_tres, ensure_ascii=False)[:1200]))
+                continue
+            if _tc:
+                _name = ""
+                _targs = {}
+                for _one in _tc:
+                    _name = getattr(_one, "func_name", None) or getattr(_one, "name", "") or ""
+                    _raw_args = getattr(_one, "func_args", None) or getattr(_one, "args", None) or {}
+                    if isinstance(_raw_args, str):
+                        try:
+                            _targs = json.loads(_raw_args)
+                        except Exception:  # noqa: BLE001
+                            _targs = {}
+                    elif isinstance(_raw_args, dict):
+                        _targs = _raw_args
+                    break
+                if _name:
+                    _tres = await self._dispatch_tool(_name, _targs, group)
+                    logger.info("[higan] 原生工具 %s(%s) → %s"
+                                % (_name, json.dumps(_targs, ensure_ascii=False)[:80],
+                                   json.dumps(_tres, ensure_ascii=False)[:140]))
+                    if _name == "vm_shot" and isinstance(_tres, dict) and _tres.get("path"):
+                        _shots.append(str(_tres["path"]))
+                    _prompt = (prompt + "\n\n【刚才 %s 的执行结果】\n%s\n\n继续。"
+                               % (_name, json.dumps(_tres, ensure_ascii=False)[:1200]))
+                    continue
+            if not _data:
+                break
+            _tool = str(_data.get("tool") or "").strip()
+            if not _tool:
+                break
+            _res = await self._vm_tool(_tool, _data.get("args") or {})
+            logger.info("[higan] 第 %d 轮工具 %s → %s"
+                        % (_round + 1, _tool, json.dumps(_res, ensure_ascii=False)[:140]))
+            if _tool == "vm_shot" and isinstance(_res, dict) and _res.get("path"):
+                _shots.append(str(_res["path"]))
+            # [tool-loop-esc] 用单引号避免转义污染提示词
+            _hint = ('\n\n【工具 %s 的返回】\n%s\n\n'
+                     '还需要信息就继续输出 {"tool":"名称","args":{...}}；'
+                     '可以回答了就输出 {"action":"reply","segments":["..."]} 或 {"action":"silent"}。')
+            _prompt = prompt + (_hint % (_tool, json.dumps(_res, ensure_ascii=False)[:1200]))
+        data = _data
+        _want_image = _shots[-1] if _shots else ""
+        if not data:
+            # [plain-fallback] 解析全失败 ⇒ 再问一次纯文本（别静默 ✗）
+            try:
+                _fb = await self._llm_plain(
+                    "你是彼岸酱，正在群里聊天。直接说你要说的那句话，不要 JSON、不要解释。",
+                    "最近对话：\n%s\n\n现在这条：%s"
+                    % ("\n".join(list(self._recent.get(group, []))[-10:]), text or "[图片]"),
+                    [])
+                _fb = (_fb or "").strip()
+                if _fb and 2 <= len(_fb) <= 300:
+                    logger.info("[higan] 解析失败 ⇒ 纯文本兜底：%s" % _fb[:40])
+                    return _fb
+            except Exception as _exc:  # noqa: BLE001
+                logger.warning("[higan] 纯文本兜底失败：%r", str(_exc)[:120])
+            logger.info("[higan] 群 %s：裁决不可解析且兜底失败 ⇒ 静默（%s）"
+                        % (group, (_raw or _clean or "")[:60]))
+            return ""
+        try:  # [model-quote] 她选的引用（消息号）
+            _q = data.get("quote")
+            self._last_quote = int(_q) if _q not in (None, "", 0, "0") else None
+        except Exception:  # noqa: BLE001
+            self._last_quote = None
+        action = str(data.get("action") or "silent")
+        if action != "reply":
+            logger.info("[higan] 群 %s：模型自主沉默（%s）"
+                        % (group, str(data.get("reason") or "")[:60]))
+            return ""
+        segments = [str(x).strip() for x in (data.get("segments") or []) if str(x).strip()]
+        reply = "\n".join(segments).strip()
+        # [plain-fallback] 要回但没正文（如裸引号修复后）⇒ 再问一次纯文本 ✓
+        if not reply:
+            try:
+                _fb2 = await self._llm_plain(
+                    "你是彼岸酱，正在群里聊天。直接说你要说的那句话，不要 JSON、不要解释。",
+                    "最近对话：\n%s\n\n现在这条：%s"
+                    % ("\n".join(list(self._recent.get(group, []))[-10:]), text or "[图片]"),
+                    [])
+                reply = (_fb2 or "").strip()[:300]
+                if reply:
+                    logger.info("[higan] 空 segments ⇒ 纯文本兜底：%s" % reply[:40])
+            except Exception as _exc:  # noqa: BLE001
+                logger.warning("[higan] 空 segments 兜底失败：%r", str(_exc)[:120])
+        # [no-auto-image] 2026-10-24 用户要求：去掉自动附图
+        # 她想发图就自己调 send_shot / send_file（工具通道），不再由插件替她挂 ✓
+        if not reply:
+            logger.info("[higan] 群 %s：决定回复但内容为空 ⇒ 静默" % group)
+            return ""
+        logger.info("[higan] 群 %s：自主接话（%s）「%s」"
+                    % (group, str(data.get("reason") or "")[:40], reply[:60]))
+        return reply
+
+    def _parse_decision(self, raw: str, require_action: bool = True):
+        """[tolerant-parse] 从模型输出里取 JSON（三级容错 ✓）。
+
+        ① 严格解析 ② 串内裸引号换成中文引号再解析 ③ 正则抽 action/segments
+        任何一级成功就返回；全失败才返回 None（调用方再决定是否静默）✓
+        """
+        if not raw:
+            return None
+        match = re.search(r"\{.*\}", raw, re.S)
+        cand = match.group(0) if match else raw
+
+        # ① 严格
+        try:
+            data = json.loads(cand)
+            if isinstance(data, dict) and (not require_action or "action" in data):
+                return data
+        except Exception:  # noqa: BLE001
+            pass
+
+        # ② 把字符串内部的裸双引号换成中文引号（最常见的坏法 ✓）
+        try:
+            fixed = re.sub(r'(?<=[^\s:,\[{])"(?=[^\s:,\]}])', "”", cand)
+            data = json.loads(fixed)
+            if isinstance(data, dict) and (not require_action or "action" in data):
+                logger.info("[higan] 裁决修复成功（裸引号 → 中文引号）✓")
+                return data
+        except Exception:  # noqa: BLE001
+            pass
+
+        # ③ 正则抽（救"要回但 JSON 断了"）
+        try:
+            act = re.search(r'"action"\s*:\s*"(reply|silent)"', cand)
+            if not act:
+                return None
+            segs: list = []
+            m2 = re.search(r'"segments"\s*:\s*\[(.*?)\]', cand, re.S)
+            if m2:
+                segs = re.findall(r'"((?:[^"\\]|\\.)*)"', m2.group(1))
+            if not segs:
+                # 没有 segments：取出所有看起来像中文句子的引号串 ✓
+                for s in re.findall(r'"((?:[^"\\]|\\.){2,})"', cand):
+                    if re.search(r"[\u4e00-\u9fff]", s) and s not in (
+                            "reply", "silent", "reason", "tone", "segments"):
+                        segs.append(s)
+            logger.info("[higan] 裁决正则修复：action=%s segments=%d 段 ✓"
+                        % (act.group(1), len(segs)))
+            return {"action": act.group(1),
+                    "reason": "（正则修复）",
+                    "segments": segs[:4]}
+        except Exception:  # noqa: BLE001
+            return None
+
+    async def _send(self, event: AstrMessageEvent, group: str, reply: str,
+                    quote_id=None) -> None:
+        """发送回复：**引用被回复的消息** + 文字 + 可选表情包（**发前先看一眼**）。
+
+        引用（QQ 的"回复某条消息"）很关键：快速连发时，光看内容分不清在回哪一句，
+        引用后一目了然，顺序上的歧义也就消失了（用户 2026-09-19 要求）。
+        写法与 AstrBot 官方一致：`chain.insert(0, Reply(id=消息ID))`。
+
+        **用 `event.send()` 直接发**，而不是 `set_result()`：因为在 `on_message` 里调用了
+        `stop_event()`（用来拦掉默认 LLM），管线会中止、RespondStage 不会执行，
+        `set_result` 的结果就发不出去了。`event.send` 是官方命令插件同样在用的直接发送。
+        """
+        # [strip-at-send] 发送前统一清洗：工具调用语法/DSML 一律不发到群里
+        try:
+            _clean_reply = self._strip_tool_syntax(reply)
+            if not _clean_reply.strip():
+                logger.info("[higan] 回复只剩工具语法，已拦下不发送")
+                return
+            reply = _clean_reply
+            # 兜底：还有 <||DSML|| 残留就整行丢掉
+            if "DSML" in reply:
+                reply = "\n".join(
+                    ln for ln in reply.splitlines() if "DSML" not in ln).strip()
+                if not reply:
+                    logger.info("[higan] 清洗后为空，不发送")
+                    return
+        except Exception as _sexc:  # noqa: BLE001
+            logger.warning("[higan] 发送前清洗失败：%r", str(_sexc)[:100])
+
+        # [recall] 2026-10-19: 她的回复里带 [撤回] ⇒ 先撤掉上一条再发新内容
+        if "[撤回]" in reply:
+            reply = reply.replace("[撤回]", "")
+            try:
+                await self._recall_last(event, group, count=1)
+            except Exception as _exc:  # noqa: BLE001
+                logger.warning("[higan] 撤回异常（忽略）：%r", _exc)
+        # [tool-loop] 2026-10-19: 支持 [发图:/abs/path]，把工具产生的图片真的发出去
+        _img_path = ""
+        _img_hit = re.search(r"\[发图:([^\]]+)\]", reply or "")
+        if _img_hit:
+            _img_path = _img_hit.group(1).strip()
+            reply = (reply or "").replace(_img_hit.group(0), "")
+        m = STICKER_MARKER.search(reply)
+        text = self._to_plain(STICKER_MARKER.sub("", reply))
+        chain = MessageChain()
+        # [group-policy+at] 回复里的 `[at:QQ]` ⇒ 真正的 @ ✓
+        try:
+            text, _ats = self._at_components(text)
+            for _a in _ats:
+                chain.chain.append(_a)
+        except Exception:  # noqa: BLE001
+            pass
+        # [model-quote] 引用由模型决定：只有她给了 quote 才引 ✓（不再硬贴触发那条 ✗）
+        msg_id = quote_id or None
+        # [pct+quote] 她可以显式引用某条：`[quote:消息ID]` ✓
+        try:
+            import re as _re_q
+
+            _qm = _re_q.search(r"\[quote:(\d{2,20})\]", text or "")
+            if _qm:
+                msg_id = _qm.group(1)
+                text = _re_q.sub(r"\[quote:\d{2,20}\]", "", text, count=1)
+                logger.info("[higan] 她选择引用消息：%s" % msg_id)
+        except Exception:  # noqa: BLE001
+            pass
+        if msg_id:
+            try:
+                chain.chain.append(Reply(id=msg_id))
+            except Exception as exc:
+                logger.warning("[higan] 构造引用失败：%r", exc)
+        # [send-my-avatar] `[头像:me]` → 换成自己的 QQ（走既有头像通道 ✓）
+        try:
+            if "[头像:me]" in (text or ""):
+                _selfq = str(event.get_self_id() or "")
+                if _selfq:
+                    text = text.replace("[头像:me]", "[头像:%s]" % _selfq)
+        except Exception:  # noqa: BLE001
+            pass
+        # `[头像:QQ]` → 把该成员的头像发出来（用户 2026-09-19 要求"能看到群成员头像"）
+        av = AVATAR_MARKER.search(text)
+        if av:
+            text = self._to_plain(AVATAR_MARKER.sub("", text))
+            try:
+                avatar_file = await self._member_avatar(av.group(1))
+                if avatar_file:
+                    chain.chain.append(Image.fromFileSystem(str(avatar_file)))
+                    logger.info("[higan] 发出成员 %s 的头像" % av.group(1))
+            except Exception as exc:
+                logger.warning("[higan] 取成员头像失败：%r", exc)
+        # `[删表情:关键词]` → 模型主动丢掉没用的图（只移出索引，不删文件）
+        drop = DELETE_STICKER_MARKER.search(text)
+        if drop:
+            text = self._to_plain(DELETE_STICKER_MARKER.sub("", text))
+            keys = self._split_keywords(drop.group(1))
+            victims = [s for s in self.manifest
+                       if any(k and k in (s.get("desc") or "") for k in keys)]
+            for item in victims:
+                self.manifest.remove(item)
+                logger.info("[higan] 按模型要求丢掉表情包：%s（%s）"
+                            % (item["file"], (item.get("desc") or "")[:20]))
+            if victims:
+                self._save_manifest()
+        # `[下图:关键词或直链]` → 下载一张图并发出去（搜图/成员头像都支持）
+        dl = DOWNLOAD_IMG_MARKER.search(text)
+        if dl:
+            text = self._to_plain(DOWNLOAD_IMG_MARKER.sub("", text))
+            arg = dl.group(1).strip()
+            # 支持 `[下图:头像 123456]` 这种写法：走成员头像
+            qq = re.search(r"头像\D*(\d{5,12})", arg)
+            if qq:
+                path = await self._member_avatar(qq.group(1))
+            else:
+                path = await self._download_image(arg)
+            if path:
+                chain.chain.append(Image.fromFileSystem(str(path)))
+                logger.info("[higan] 已下载并发出图片：%s（%s）" % (path.name, arg[:30]))
+            else:
+                logger.info("[higan] 下载图片失败/无结果：%s" % arg[:30])
+        if _img_path:
+            try:
+                if os.path.exists(_img_path):
+                    chain.chain.append(Image.fromFileSystem(_img_path))
+                    logger.info("[higan] 发送工具生成的图片：%s" % _img_path)
+                else:
+                    logger.warning("[higan] 要发的图不存在：%s" % _img_path)
+            except Exception as _exc:  # noqa: BLE001
+                logger.warning("[higan] 挂图失败：%r", _exc)
+        if text:
+            chain.message(text)
+        if m:
+            context = "\n".join(self._recent.get(group, [])[-6:]) or text
+            keywords = self._split_keywords(m.group(1))       # 支持多个关键词
+            sticker = await self._pick_sticker_reviewed(keywords, context)
+            if sticker:
+                path = STICKER_DIR / sticker["file"]
+                if path.exists():
+                    chain.chain.append(Image.fromFileSystem(str(path)))
+                    logger.info("[higan] 发表情包 %s（关键词=%s，描述=%s）"
+                                % (sticker["file"], keywords, sticker.get("desc")))
+                else:
+                    logger.warning("[higan] 表情包文件缺失：%s" % path)
+        if not chain.chain:
+            return
+        try:
+            # [recall] 2026-10-19: 记录发出去的消息 id，供"自己撤回"使用
+            _sent = await event.send(chain)
+            _ids = []
+            for _item in (_sent or []):
+                _mid = getattr(_item, "message_id", None)
+                if _mid is None and isinstance(_item, dict):
+                    _mid = _item.get("message_id")
+                if _mid:
+                    _ids.append(_mid)
+            if _ids:
+                self._last_sent.setdefault(group, []).extend(_ids)
+                del self._last_sent[group][:-5]
+                logger.info("[higan] 已发送，message_id=%s" % ",".join(map(str, _ids)))
+            try:  # [brevity] 记住她最近说过的话，防重复
+                _mine = getattr(self, "_my_recent", None)
+                if _mine is None:
+                    _mine = self._my_recent = {}
+                _lst = _mine.setdefault(group, [])
+                _lst.append(self._to_plain(STICKER_MARKER.sub("", reply))[:200])
+                del _lst[:-3]
+            except Exception:  # noqa: BLE001
+                pass
+        except Exception as exc:
+            logger.error("[higan] 发送失败：%r", exc)
+    async def _recall_last(self, event: AstrMessageEvent, group: str,
+                           count: int = 1) -> list:
+        """[recall] 撤回她自己最近发出的消息（走 AstrBot 的 bot 连接 ✓）。
+
+        为什么不用 OneBot HTTP 旁路：186 上实测 `get_group_msg_history` 返回 0 条 ✗，
+        而 AstrBot 自己的连接是活的 ⇒ 直接 `call_action("delete_msg")` 最稳 ✓。
+        """
+        ids = list(getattr(self, "_last_sent", {}).get(group) or [])[-count:]
+        done = []
+        bot = getattr(event, "bot", None)
+        for mid in reversed(ids):
+            ok = False
+            for name in ("call_action", "api"):
+                fn = getattr(bot, name, None)
+                if not callable(fn):
+                    continue
+                try:
+                    await fn("delete_msg", message_id=mid)
+                    ok = True
+                    break
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("[higan] 撤回 %s 失败（%s）：%r" % (mid, name, exc))
+            done.append({"message_id": mid, "ok": ok})
+            if ok:
+                self._last_sent[group] = [x for x in (self._last_sent.get(group) or [])
+                                          if x != mid]
+        logger.info("[higan] 撤回结果：%s" % done)
+        return done
+
+    async def _archive_images(self, event: AstrMessageEvent, group: str) -> list:
+        """[vm-archive] 把收到的图片存进 /root/higan/images/inbox（她的虚拟机）✓。
+
+        为什么存进 VM：她现在跑在 186 上，这些图就是"她见过的东西"，
+        以后要回看/复述某张图时能直接读文件 ✓（不再依赖 211 的临时目录 ✗）。
+        """
+        import shutil as _shutil
+        from pathlib import Path as _Path
+        out_dir = _Path("/root/higan/images/inbox")
+        try:
+            out_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[higan] 建归档目录失败：%r", exc)
+            return []
+        saved = []
+        for idx, ref in enumerate(self._image_refs(event) or []):
+            try:
+                raw = str(ref)
+                src = _Path(raw[7:] if raw.startswith("file://") else raw)
+                if not src.exists() or not src.is_file():
+                    continue
+                name = "%s-%d-%s" % (group.replace(":", "_"), idx, src.name)
+                dst = out_dir / name
+                _shutil.copy2(src, dst)
+                saved.append(str(dst))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("[higan] 归档单张失败：%r", exc)
+        if saved:
+            logger.info("[higan] 已归档 %d 张图到她的虚拟机：%s" % (len(saved), out_dir))
+        return saved
+
+    # ----------------------------------------------------- 上网搜索（工具）
+
+    @staticmethod
+    def _web_search(query: str, limit: int = SEARCH_TOP_N) -> list[dict]:
+        """用 Bing 搜一下，返回结构化结果 `[{title, url, snippet}]`。
+
+        为什么自己实现而不开 AstrBot 的 `web_search`：那套要填第三方 key（Tavily 等），
+        而 Bing 网页结果足够用，且本机出网正常（2026-09-19 实测可解析）。
+        """
+        import html
+        import urllib.parse
+        import urllib.request
+        url = "https://cn.bing.com/search?" + urllib.parse.urlencode(
+            {"q": query, "count": limit + 3, "mkt": "zh-CN", "setlang": "zh-hans"})
+        req = urllib.request.Request(url, headers={
+            "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                           "AppleWebKit/537.36 (KHTML, like Gecko) "
+                           "Chrome/126.0.0.0 Safari/537.36 Edg/126.0.0.0"),
+            "Accept-Language": "zh-CN,zh;q=0.9"})
+        with urllib.request.urlopen(req, timeout=SEARCH_TIMEOUT) as resp:
+            page = resp.read().decode("utf-8", "replace")
+        out: list[dict] = []
+        for block in re.findall(r'<li class="b_algo".*?</li>', page, re.S):
+            m = re.search(r'<h2[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>', block, re.S)
+            if not m:
+                continue
+            pm = re.search(r"<p[^>]*>(.*?)</p>", block, re.S)
+            out.append({
+                "title": html.unescape(re.sub(r"<[^>]+>", "", m.group(2))).strip()[:100],
+                "url": html.unescape(m.group(1)),
+                "snippet": (html.unescape(re.sub(r"<[^>]+>", "", pm.group(1))).strip()[:200]
+                            if pm else "")})
+            if len(out) >= limit:
+                break
+        return out
+
+    @staticmethod
+    def _fetch_page(url: str, limit: int = PAGE_TEXT_LIMIT) -> str:
+        """**打开网页**并抽取正文文本（去脚本/样式/标签），供模型阅读。
+
+        用户 2026-09-19 反馈"搜到的都是网页标题，我哪知道几点" —— 只给摘要不够，
+        必须真的把页面打开读正文。百度百科/知乎等会反爬（403），故调用方要多试几个站。
+        """
+        import html
+        import urllib.request
+        if not url.startswith("http"):
+            return ""
+        req = urllib.request.Request(url, headers={
+            "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                           "AppleWebKit/537.36 (KHTML, like Gecko) "
+                           "Chrome/126.0.0.0 Safari/537.36 Edg/126.0.0.0"),
+            "Accept": ("text/html,application/xhtml+xml,application/xml;q=0.9,"
+                       "image/avif,image/webp,*/*;q=0.8"),
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache",
+            "Referer": "https://cn.bing.com/",
+            "Upgrade-Insecure-Requests": "1",
+        })
+        with urllib.request.urlopen(req, timeout=SEARCH_TIMEOUT) as resp:
+            raw = resp.read(800_000).decode("utf-8", "replace")
+        text = re.sub(r"<script.*?</script>|<style.*?</style>|<!--.*?-->", " ",
+                      raw, flags=re.S)
+        text = html.unescape(re.sub(r"<[^>]+>", " ", text))
+        return re.sub(r"\s+", " ", text).strip()[:limit]
+
+    @staticmethod
+    def _format_results(results: list[dict]) -> str:
+        """把搜索结果整理成给模型看的文本。"""
+        return "\n".join("%d. %s\n   %s\n   %s"
+                         % (i, r["title"], r["snippet"], r["url"])
+                         for i, r in enumerate(results, 1))
+
+    @staticmethod
+    def _web_image_search(query: str, limit: int = 6) -> list[str]:
+        """Bing **图片搜索**，返回图片直链列表（用户 2026-09-19 要求"上网搜索看图"）。"""
+        import html
+        import urllib.parse
+        import urllib.request
+        url = "https://cn.bing.com/images/search?" + urllib.parse.urlencode(
+            {"q": query, "count": limit + 6, "mkt": "zh-CN", "setlang": "zh-hans"})
+        req = urllib.request.Request(url, headers={
+            "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                           "AppleWebKit/537.36 (KHTML, like Gecko) "
+                           "Chrome/126.0.0.0 Safari/537.36 Edg/126.0.0.0"),
+            "Accept-Language": "zh-CN,zh;q=0.9"})
+        with urllib.request.urlopen(req, timeout=SEARCH_TIMEOUT) as resp:
+            page = resp.read().decode("utf-8", "replace")
+        # 结果里每张图都带 murl（原图直链）
+        urls: list[str] = []
+        for m in re.finditer(r'murl&quot;:&quot;(.*?)&quot;', page):
+            link = html.unescape(m.group(1)).replace("\\/", "/")
+            if link.startswith("http") and link not in urls:
+                urls.append(link)
+            if len(urls) >= limit:
+                break
+        return urls
+
+    async def _download_image(self, ref: str) -> Path | None:
+        """下载一张图到本地（支持 http 直链或关键词 → 先搜图再下第一张）。
+
+        用户 2026-09-19 要求"可以下载搜到的图也可以下载群成员头像"。
+        下载后放到 `data/downloads/`，便于直接发出去或复用。
+        """
+        target = (ref or "").strip()
+        if not target:
+            return None
+        if not target.startswith("http"):
+            try:
+                found = await asyncio.wait_for(
+                    asyncio.to_thread(self._web_image_search, target, 3),
+                    timeout=SEARCH_TIMEOUT + 5)
+            except Exception as exc:
+                logger.warning("[higan] 搜图失败（%s）：%r", target[:30], exc)
+                return None
+            if not found:
+                logger.info("[higan] 搜图没找到：%s" % target[:30])
+                return None
+            target = found[0]
+        try:
+            raw = await asyncio.wait_for(asyncio.to_thread(self._read_image, target),
+                                         timeout=SEARCH_TIMEOUT + 5)
+        except Exception as exc:
+            logger.warning("[higan] 下载图片失败（%s）：%r", target[:60], exc)
+            return None
+        if not raw or len(raw) < 512 or len(raw) > MAX_DOWNLOAD_BYTES:
+            logger.info("[higan] 图片不合适（%d 字节），跳过" % len(raw or b""))
+            return None
+        suffix = (".gif" if raw[:3] == b"GIF" else ".png" if raw[:4] == b"\x89PNG"
+                  else ".webp" if raw[:4] == b"RIFF" else ".jpg")
+        digest = hashlib.sha1(raw).hexdigest()[:16]
+        out = DOWNLOAD_DIR / ("%s%s" % (digest, suffix))
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(raw)
+        logger.info("[higan] 已下载图片 %s（%d 字节，来源 %s）"
+                    % (out.name, len(raw), target[:60]))
+        return out
+
+    async def _handle_search(self, provider, reply: str, refs: list[str],
+                             event: AstrMessageEvent) -> str:
+        """处理回复里的 `[搜索:关键词]`：联网搜 → **打开网页读正文** → 喂回模型作答。
+
+        这是"工具调用"的轻量实现（用标记而不是 AstrBot 的 ToolSet）。
+        关键点：**不只给搜索摘要，还要真的打开前几个页面读正文** ——
+        否则遇到"现在几点/今天几号"这类问题，模型只能看到网页标题，答不出来
+        （2026-09-19 用户实测反馈）。
+        """
+        m = SEARCH_MARKER.search(reply)
+        if not m:
+            return reply
+        query = m.group(1).strip()
+        logger.info("[higan] 模型要求搜索：%s" % query)
+        results: list[dict] = []
+        try:
+            results = await asyncio.wait_for(
+                asyncio.to_thread(self._web_search, query), timeout=SEARCH_TIMEOUT + 5)
+        except Exception as exc:
+            logger.warning("[higan] 搜索失败：%r", exc)
+        if not results:
+            logger.info("[higan] 搜索无结果")
+            cleaned = SEARCH_MARKER.sub("", reply).strip()
+            prompt = ("【你刚才想说的话】%s\n\n【搜索关键词】%s\n\n"
+                      "（没有搜到任何结果）请据此回一句（可以说搜不到喵）。"
+                      % (cleaned or "（无）", query))
+            return await self._call_llm(provider, prompt, SEARCH_ANSWER_SYSTEM,
+                                        refs) or cleaned
+
+        # **打开网页读正文**：多试几个站（百度百科/知乎等会 403），
+        # 并发拉取，取前 PAGE_FETCH_TOP 个成功的。
+        pages: list[str] = []
+        candidates = results[:PAGE_FETCH_TRY]
+        try:
+            bodies = await asyncio.gather(*[
+                asyncio.wait_for(asyncio.to_thread(self._fetch_page, r["url"]),
+                                 timeout=SEARCH_TIMEOUT + 5)
+                for r in candidates], return_exceptions=True)
+            for r, body in zip(candidates, bodies):
+                if isinstance(body, str) and len(body) > 80:
+                    pages.append("【%s】\n%s" % (r["title"], body))
+                    logger.info("[higan] 已打开网页：%s（%d 字）"
+                                % (r["url"][:60], len(body)))
+                elif isinstance(body, Exception):
+                    logger.info("[higan] 网页打不开（跳过）：%s → %s"
+                                % (r["url"][:50], type(body).__name__))
+                if len(pages) >= PAGE_FETCH_TOP:
+                    break
+        except Exception as exc:
+            logger.warning("[higan] 打开网页失败：%r", exc)
+
+        cleaned = SEARCH_MARKER.sub("", reply).strip()
+        prompt = ("【你刚才想说的话】%s\n\n【搜索关键词】%s\n\n【搜索结果】\n%s\n"
+                  % (cleaned or "（无）", query, self._format_results(results)))
+        if pages:
+            prompt += "\n【已打开的网页正文】\n%s\n" % "\n\n".join(pages)
+        else:
+            prompt += "\n（网页正文没能打开，只能依据上面的搜索摘要回答）\n"
+        prompt += "\n请据此给一句回复。"
+        out = await self._call_llm(provider, prompt, SEARCH_ANSWER_SYSTEM, refs)
+        logger.info("[higan] 搜索后回复：%s" % (out[:60] or "（空）"))
+        return out or cleaned
+
+    # ------------------------------------------------- 管理员命令（改关键词）
+
+    @filter.command("表情列表")
+    async def cmd_list_stickers(self, event: AstrMessageEvent) -> None:
+        """列出表情包与序号（只有主人可用）。用法：`/表情列表 [页码]`。"""
+        if not self._is_owner(event):
+            return
+        try:
+            page = max(1, int((event.get_message_str() or "").split()[-1]))
+        except ValueError:
+            page = 1
+        per = 20
+        items = self.manifest[(page - 1) * per: page * per]
+        if not items:
+            event.set_result(MessageEventResult().message("这一页没有表情包喵"))
+            return
+        lines = ["表情包（第 %d 页，共 %d 张）：" % (page, len(self.manifest))]
+        for i, item in enumerate(items, (page - 1) * per + 1):
+            lines.append("%d. %s" % (i, (item.get("desc") or "（无标签）")[:24]))
+        lines.append("改标签：/表情改 <序号> <新关键词>（可用、分隔多个）")
+        lines.append("删除：/表情删 <序号>")
+        event.set_result(MessageEventResult().message("\n".join(lines)))
+
+    @filter.command("表情改")
+    async def cmd_edit_sticker(self, event: AstrMessageEvent) -> None:
+        """修改某张表情包的关键词（只有主人可用）。用法：`/表情改 <序号> <关键词>`。
+
+        关键词可用 `、` 或 `,` 分隔多个，便于模型模糊搜索命中。
+        """
+        if not self._is_owner(event):
+            return
+        parts = (event.get_message_str() or "").split(maxsplit=2)
+        if len(parts) < 3:
+            event.set_result(MessageEventResult().message(
+                "用法：/表情改 <序号> <关键词>（多个关键词用、分隔）"))
+            return
+        try:
+            idx = int(parts[1])
+        except ValueError:
+            event.set_result(MessageEventResult().message("序号得是数字喵"))
+            return
+        if not (1 <= idx <= len(self.manifest)):
+            event.set_result(MessageEventResult().message("序号超范围喵（共 %d 张）"
+                                                          % len(self.manifest)))
+            return
+        item = self.manifest[idx - 1]
+        old = item.get("desc") or ""
+        item["desc"] = "、".join(self._split_keywords(parts[2]))[:60]
+        self._save_manifest()
+        logger.info("[higan] 主人改了关键词：%s 「%s」→「%s」"
+                    % (item["file"], old, item["desc"]))
+        event.set_result(MessageEventResult().message(
+            "改好了喵～\n%s\n旧：%s\n新：%s" % (item["file"], old[:30], item["desc"])))
+
+    @filter.command("表情删")
+    async def cmd_del_sticker(self, event: AstrMessageEvent) -> None:
+        """把某张表情包移出索引（只有主人可用）。用法：`/表情删 <序号>`。
+
+        只移出索引、**不删文件**（避免误删，且随时可以再加回来）。
+        """
+        if not self._is_owner(event):
+            return
+        parts = (event.get_message_str() or "").split()
+        try:
+            idx = int(parts[-1])
+        except (ValueError, IndexError):
+            event.set_result(MessageEventResult().message("用法：/表情删 <序号>"))
+            return
+        if not (1 <= idx <= len(self.manifest)):
+            event.set_result(MessageEventResult().message("序号超范围喵"))
+            return
+        item = self.manifest.pop(idx - 1)
+        self._save_manifest()
+        logger.info("[higan] 主人移出表情包：%s（%s）" % (item["file"], item.get("desc")))
+        event.set_result(MessageEventResult().message(
+            "已移出索引（文件保留）：%s" % item["file"]))
+
+    @staticmethod
+    def _is_owner(event: AstrMessageEvent) -> bool:
+        """命令是否来自主人（群主 / 管理员）。非主人一律静默忽略。"""
+        return str(event.get_sender_id() or "") in OWNER_QQS
+
+    # --------------------------------------------------------- 表情包收集
+
+    async def _collect_images(self, event: AstrMessageEvent, group: str,
+                              images: list) -> None:
+        """把群友发的图存进表情包库，并用视觉模型打描述做索引。
+
+        **关键**：AstrBot 会把收到的图下载到 `data/temp/`，此时组件里是**本地路径**
+        （`file://` 或绝对路径）而不是 http URL —— 两种都必须处理，否则一张都收不到。
+        """
+        for comp in images[:2]:                        # 一条消息最多收 2 张
+            src = getattr(comp, "url", None) or getattr(comp, "file", None) \
+                or getattr(comp, "path", None)
+            if not src:
+                continue
+            src = str(src)
+            try:
+                raw = await asyncio.to_thread(self._read_image, src)
+            except Exception as exc:
+                logger.warning("[higan] 取图失败（%s）：%r", src[:60], exc)
+                continue
+            if not raw or len(raw) < 1024 or len(raw) > MAX_STICKER_BYTES:
+                continue
+            digest = hashlib.sha1(raw).hexdigest()[:16]
+            suffix = (".gif" if raw[:3] == b"GIF"
+                      else ".png" if raw[:4] == b"\x89PNG"
+                      else ".webp" if raw[:4] == b"RIFF"
+                      else ".jpg")
+            path = STICKER_DIR / ("%s%s" % (digest, suffix))
+            if path.exists():
+                continue
+            path.write_bytes(raw)
+            desc = await self._describe(self._as_url(src, path))
+            self._register_sticker(path, desc)
+            logger.info("[higan] 收集表情包 %s（%s）" % (path.name, desc))
+
+    @staticmethod
+    def _read_image(src: str) -> bytes:
+        """读一张图：支持 http(s) URL 与本地路径（含 `file://` 形式）。"""
+        import urllib.parse
+        import urllib.request
+        if src.startswith("http://") or src.startswith("https://"):
+            req = urllib.request.Request(src, headers={"User-Agent": "astrbot-higan/1.1"})
+            with urllib.request.urlopen(req, timeout=25) as resp:
+                return resp.read()
+        path = urllib.parse.unquote(src[7:] if src.startswith("file://") else src)
+        if not os.path.isabs(path):                    # 相对 AstrBot 工作目录
+            path = os.path.join(os.getcwd(), path)
+        with open(path, "rb") as fh:
+            return fh.read()
+
+    @staticmethod
+    def _as_url(src: str, saved: Path) -> str:
+        """给视觉模型用的图片来源：优先 http，否则用刚存下的本地文件。"""
+        return src if src.startswith("http") else str(saved)
+
+    async def _member_avatar(self, qq: str) -> Path | None:
+        """取某个群成员的头像并缓存到本地（用户 2026-09-19 要求）。
+
+        用 QQ 官方头像接口，无需登录态；同一 QQ 只拉一次（缓存复用）。
+        """
+        qq = str(qq or "").strip()
+        if not qq.isdigit():
+            return None
+        path = AVATAR_CACHE.parent / ("member_avatar_%s.jpg" % qq)
+        if path.exists() and path.stat().st_size > 1024:
+            return path
+        try:
+            url = "https://q1.qlogo.cn/g?b=qq&nk=%s&s=640" % qq
+            raw = await asyncio.to_thread(self._read_image, url)
+            if not raw or len(raw) < 1024:
+                return None
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(raw)
+            return path
+        except Exception as exc:
+            logger.warning("[higan] 拉取成员 %s 头像失败：%r", qq, exc)
+            return None
+
+    # --------------------------------------------- 群成员变动（加群/退群）
+
+    async def _watch_members(self) -> None:
+        """后台任务：定期比对群成员名单，把**加群/退群**写进群上下文。
+
+        用户 2026-09-19 要求"模型能看到加群退群"。AstrBot 不会把 OneBot 的
+        成员变动通知转给插件，所以这里自己轮询 `get_group_member_list` 做 diff
+        （只读、幂等；间隔 `MEMBER_WATCH_INTERVAL` 秒）。
+        """
+        while True:
+            try:
+                await asyncio.sleep(MEMBER_WATCH_INTERVAL)
+                groups = await self._onebot("get_group_list", {})
+                for g in (groups.get("data") or []):
+                    gid = str(g.get("group_id") or "")
+                    if not gid or (MEMBER_WATCH_GROUPS and gid not in MEMBER_WATCH_GROUPS):
+                        continue
+                    await self._diff_members(gid, g.get("group_name") or gid)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning("[higan] 成员变动监听出错：%r", exc)
+
+    async def _diff_members(self, group: str, group_name: str) -> None:
+        """拉一次成员名单，与上次比对，把变化写进该群的上下文。"""
+        resp = await self._onebot("get_group_member_list", {"group_id": int(group)})
+        members = resp.get("data") or []
+        if not members:
+            return
+        current = {str(m.get("user_id")): (m.get("card") or m.get("nickname") or "")
+                   for m in members if m.get("user_id")}
+        prev = self._member_snapshot.get(group)
+        self._member_snapshot[group] = current
+        if prev is None:                      # 首次只建基线，不刷"全员加入"
+            logger.info("[higan] 群 %s 成员基线：%d 人" % (group, len(current)))
+            return
+        joined = [qq for qq in current if qq not in prev]
+        left = [qq for qq in prev if qq not in current]
+        history = self._recent.setdefault(group, [])
+        for qq in joined:
+            line = "【群动态】%s（QQ %s）加入了群聊" % (current[qq] or "某人", qq)
+            history.append(line)
+            logger.info("[higan] %s" % line)
+        for qq in left:
+            line = "【群动态】%s（QQ %s）退出了群聊" % (prev[qq] or "某人", qq)
+            history.append(line)
+            logger.info("[higan] %s" % line)
+        if joined or left:
+            del history[:-2000]
+
+    @staticmethod
+    async def _onebot(action: str, payload: dict) -> dict:
+        """调 NapCat 的 OneBot HTTP 接口（只读用途）。"""
+        import urllib.request
+        url = "%s/%s" % (ONEBOT_BASE, action)
+        req = urllib.request.Request(url, data=json.dumps(payload).encode(), method="POST")
+        req.add_header("Content-Type", "application/json")
+
+        def _call() -> dict:
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                return json.loads(resp.read().decode("utf-8", "replace"))
+
+        try:
+            return await asyncio.to_thread(_call)
+        except Exception as exc:
+            logger.warning("[higan] OneBot %s 调用失败：%r", action, exc)
+            return {}
+
+    async def _describe(self, image_ref: str) -> str:
+        """用视觉模型给表情包打一句中文描述（用于关键词匹配）。
+
+        **本地文件也要传给模型**：实测只传 http 会让"手动放进目录 / 从 temp 导入"的
+        表情包只能拿到通用描述，导致按关键词挑图时匹配不到（2026-09-19 踩到）。
+        """
+        text = await self._describe_image(
+            image_ref, "用不超过 10 个字描述这张表情包表达的情绪或含义（只输出描述）。")
+        return text or "表情包"
+
+    async def _describe_image(self, image_ref: str, prompt: str) -> str:
+        """通用视觉描述：把一张图（http URL 或本地路径）交给视觉模型。
+
+        本地路径会转成 **data URL** 并压缩（实测 `file://` 交给 provider 拿不到图，
+        而原图 base64 会让请求大到 2.7MB、单次调用 100 秒以上）。
+        """
+        provider = self.context.get_using_provider()
+        if provider is None:
+            return ""
+        try:
+            if image_ref.startswith("http"):
+                refs = [image_ref]
+            else:
+                path = Path(image_ref)
+                refs = [self._data_url(path) if path.exists() else image_ref]
+        except Exception as exc:
+            logger.warning("[higan] 准备图片失败（%s）：%r", image_ref[:50], exc)
+            return ""
+        try:
+            resp = await asyncio.wait_for(
+                provider.text_chat(prompt=prompt, system_prompt="你是图像描述助手。",
+                                   image_urls=refs),
+                timeout=REVIEW_TIMEOUT)
+        except asyncio.TimeoutError:
+            logger.warning("[higan] 图像描述超时（>%ds）" % REVIEW_TIMEOUT)
+            return ""
+        except Exception as exc:
+            logger.warning("[higan] 图像描述失败（%s）：%r", image_ref[:50], exc)
+            return ""
+        return (getattr(resp, "completion_text", "") or "").strip()[:60]
+
+    async def terminate(self) -> None:
+        """插件卸载：落盘索引。"""
+        self._save_manifest()
+        logger.info("[higan] 插件已卸载，表情包库 %d 张" % len(self.manifest))
