@@ -167,6 +167,8 @@ def production(tmp_path, monkeypatch):
         raise AssertionError("real network forbidden in production integration tests")
 
     monkeypatch.setattr(urllib.request, "urlopen", deny_network)
+    # Baseline contracts exercise immediate dispatch; batch-specific tests opt into a short window.
+    monkeypatch.setenv("HIGAN_BATCH_WINDOW", "0")
     klass = _load_production(tmp_path)
 
     def make_instance():
@@ -269,16 +271,19 @@ def test_request_context_frozen_history_current_identity_and_source_data(product
     quote = Reply(message_str="quoted-nonce", sender_nickname="Other speaker", chain=[Image(url="https://offline.invalid/quoted.png")])
     event = Event("current-nonce", components=[quote, At(qq="80001"), Image(file="local.png")])
     prompt = plugin._request_context(event, "42", event.text, True)
-    history_text, current_text = prompt.split("【当前消息（JSON 数据）】\n")
-    current = json.loads(current_text.split("\n\n", 1)[0])
+    history_text, current_text = prompt.split("【待考虑消息批次（JSON 数据）】\n")
+    envelope = json.loads(current_text.split("\n\n", 1)[0])
+    assert len(envelope["messages"]) == 1
+    current = envelope["messages"][0]
     assert "prior-only" in history_text and "current-nonce" not in history_text
     assert "mutated later history" not in prompt
     assert prompt.count("current-nonce") == 1
-    assert current["speaker"].startswith("Current speaker")
-    assert current["quoted_text"] == "Other speaker：quoted-nonce"
-    assert current["mentions"] == ["80001"]
-    assert current["message_id"] == "1234"
-    assert current["image_refs"] == ["https://offline.invalid/quoted.png", "local.png"]
+    assert current["sender"] == {"id": "10001", "display_name": "Current speaker", "role": "member"}
+    assert current["body"] == "current-nonce"
+    assert current["quote"] == {"id": "", "sender": {"id": "", "display_name": "Other speaker"}, "body": "quoted-nonce"}
+    assert current["mentions"] == [{"id": "80001", "display_name": ""}]
+    assert current["id"] == envelope["anchor_message_id"] == "1234"
+    assert envelope["image_refs"] == ["https://offline.invalid/quoted.png", "local.png"]
     assert prompt.endswith("frozen clock")
 
 
@@ -393,8 +398,8 @@ def test_plugin_media_failure_never_marks_delivered(production, monkeypatch, tmp
     assert plugin._recent == {} and event.sent == []
 
 
-def test_on_message_snapshot_excludes_current_and_executes_every_accepted_turn_fifo(production):
-    """Actual entry freezes history and serializes all three accepted turns without revocation."""
+def test_on_message_snapshot_excludes_batch_and_collects_arrivals_in_one_followup(production):
+    """Active work finishes, then both newer arrivals share one frozen follow-up context."""
     plugin = production()
     plugin._hist().append("42", "persisted prior line")
     plugin._forward_to_text = _empty_forward
@@ -407,21 +412,25 @@ def test_on_message_snapshot_excludes_current_and_executes_every_accepted_turn_f
     async def handle(event, group, text, has_image, woken):
         """Inject newer arrivals during an active turn to exercise the real pending loop."""
         snapshots.append((text, copy.deepcopy(plugin._turn_context[group]), plugin._request_context(event, group, text, has_image)))
-        if text == "first-nonce":
+        if [record["body"] for record in plugin._turn_context[group]["messages"]] == ["first-nonce"]:
             await plugin.on_message(second)
             await plugin.on_message(third)
 
     plugin._handle_one = handle
     asyncio.run(plugin.on_message(first))
-    assert [item[0] for item in snapshots] == ["first-nonce", "second-nonce", "third-nonce"]
+    assert len(snapshots) == 2
+    assert json.loads(snapshots[0][0])["messages"][0]["body"] == "first-nonce"
     assert snapshots[0][1]["history"] == ("persisted prior line",)
-    for text, snapshot, prompt in snapshots:
-        # Each admitted event retains its arrival snapshot, not later queued chat.
-        assert prompt.count(text) == 1
-        assert text not in json.dumps(snapshot["history"])
+    assert [record["body"] for record in snapshots[0][1]["messages"]] == ["first-nonce"]
+    assert [record["body"] for record in snapshots[1][1]["messages"]] == ["second-nonce", "third-nonce"]
+    for _, snapshot, prompt in snapshots:
+        # The oldest collected arrival supplies prior history, excluding every current batch member.
+        for record in snapshot["messages"]:
+            assert record["body"] not in json.dumps(snapshot["history"])
+            _, current_text = prompt.split("【待考虑消息批次（JSON 数据）】\n")
+            assert current_text.count(record["body"]) == 1
     assert "first-nonce" in json.dumps(snapshots[1][1]["history"])
-    assert "third-nonce" not in json.dumps(snapshots[1][1]["history"])
-    assert "second-nonce" in json.dumps(snapshots[2][1]["history"])
+    assert "persisted prior line" in snapshots[1][1]["history"]
     assert len(plugin._hist().load("42")) == 4
     assert all(event.stopped for event in (first, second, third))
     assert not any(plugin._pending.values())
@@ -927,7 +936,7 @@ def test_on_message_waits_readiness_and_rejects_stopping_instance(production):
 
     async def handle(*args):
         """Record admitted turns without model or delivery effects."""
-        handled.append(args[2])
+        handled.append([record["body"] for record in json.loads(args[2])["messages"]])
 
     plugin._handle_one = handle
 
@@ -939,10 +948,10 @@ def test_on_message_waits_readiness_and_rejects_stopping_instance(production):
         assert not waiting.done() and handled == []
         plugin._ready.set()
         await waiting
-        assert handled == ["after-ready"]
+        assert handled == [["after-ready"]]
         plugin._stopping = True
         await plugin.on_message(Event("must-not-admit"))
-        assert handled == ["after-ready"]
+        assert handled == [["after-ready"]]
         assert "must-not-admit" not in json.dumps(plugin._recent)
 
     asyncio.run(scenario())

@@ -97,7 +97,8 @@ def test_actual_top_level_self_mentions_admit_and_send(production, tmp_path, com
     assert plugin._at_targets(event) == ["90001"]
     assert plugin._directly_mentioned(event) is True
     asyncio.run(plugin.on_message(event))
-    assert decisions == [("42", event.text)]
+    assert len(decisions) == 1 and decisions[0][0] == "42"
+    assert [record["body"] for record in json.loads(decisions[0][1])["messages"]] == [event.text]
     assert len(event.sent) == 1
     assert plugin._hist().load("42")[-1] == "彼岸酱：accepted direct mention"
 
@@ -124,7 +125,7 @@ def test_queued_handle_rechecks_policy_changed_after_admission(production, tmp_p
 
     async def decide(event, group, text, has_image):
         """Queue a second accepted event before restricting the real durable policy."""
-        decisions.append(text)
+        decisions.append([record["body"] for record in json.loads(text)["messages"]])
         assert plugin._policy_allows(queued, "42")
         await plugin.on_message(queued)
         assert len(plugin._pending["42"]) == 1
@@ -134,7 +135,7 @@ def test_queued_handle_rechecks_policy_changed_after_admission(production, tmp_p
     plugin._decide_tools_first = decide
     asyncio.run(plugin.on_message(first))
     # The first send and second dequeue each recheck independently; neither leaks.
-    assert decisions == ["active first"]
+    assert decisions == [["active first"]]
     assert first.sent == queued.sent == []
     assert len(plugin._hist().load("42")) == 2
     assert not any(plugin._pending.values())
