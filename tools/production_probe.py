@@ -120,6 +120,10 @@ async def probe(directory, output):
                             "status": search.get("status"), "error": search.get("error")}
     fetch = await original("web_fetch", {"url": "https://www.python.org/"}, scope, event)
     report["web_fetch"] = {"ok": fetch.get("ok"), "body_chars": len(fetch.get("body") or ""), "error": fetch.get("error")}
+    files = await original("vm_files", {"dir": "files"}, scope, event)
+    report["vm_files"] = {"ok": bool(files.get("ok")), "error": files.get("error")}
+    history = await original("history_search", {"keyword": "release-probe-no-match", "scope": scope, "limit": 1}, scope, event)
+    report["history_search"] = {"ok": bool(history.get("ok")), "count": history.get("count"), "error": history.get("error")}
     output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(report, ensure_ascii=False))
     return 0 if ("self_status" in called and report["self_status_success"]
