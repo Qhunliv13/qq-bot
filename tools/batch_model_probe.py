@@ -46,6 +46,7 @@ async def probe(plugin, output):
     """Run actual prompt/native loop over one coalesced opportunity per scenario, no forced choice."""
     module = load_plugin(plugin)
     from release_probe_plugin.message_batch import collect_batch
+    from release_probe_plugin.reply_selection import decode_reply
     from release_probe_plugin.tool_context import ToolContextArchive, redact
     persona = module.HiganPlugin._load_persona()
     root = Path(tempfile.mkdtemp(prefix="batch-model-probe-", dir=output.parent))
@@ -86,11 +87,16 @@ async def probe(plugin, output):
 
         bot._dispatch_tool = no_effects
         answer = await asyncio.wait_for(bot._decide_tools_first(batch["event"], scope, batch["text"], False), 720)
-        row = {"name": label, "records": batch["records"], "answer": answer, "silent": not bool(answer),
-               "tool_calls": calls, "message_count": len(events), "model_opportunities": 1}
+        selection = decode_reply(answer, batch["records"])
+        row = {"name": label, "records": batch["records"], "raw_answer": answer,
+               "answer": selection["text"], "silent": not bool(selection["text"]),
+               "selection": selection, "tool_calls": calls, "message_count": len(events), "model_opportunities": 1}
         report["scenarios"].append(row)
         output.write_text(json.dumps(redact(report), ensure_ascii=False, indent=2), encoding="utf-8")
-        print(json.dumps({"scenario": label, "silent": row["silent"], "answer": answer, "tool_calls": calls}, ensure_ascii=False), flush=True)
+        print(json.dumps({"scenario": label, "silent": row["silent"], "answer": selection["text"],
+                          "reply_to": selection["reply_to"], "quote_id": selection["quote_id"],
+                          "structured": selection["structured"], "selection_error": selection["error"],
+                          "tool_calls": calls}, ensure_ascii=False), flush=True)
 
 
 async def no_refs(*args):

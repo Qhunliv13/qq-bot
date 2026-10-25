@@ -222,6 +222,44 @@ def test_metadata_stays_out_of_body_and_multiple_subjects_share_one_reply(produc
     assert "discount.example wholesale" not in system and "quoted offer" not in system
 
 
+@pytest.mark.parametrize("reply_to, quote_id", [
+    (["101"], "101"),
+    (["102"], None),
+    (["102", "101"], "101"),
+])
+@pytest.mark.parametrize("text", ["answer", "[quote:999]answer"])
+def test_structured_batch_selection_reaches_native_send_without_json_or_stale_quotes(
+        production, monkeypatch, reply_to, quote_id, text):
+    """Real handling sends selected batch attribution, never JSON or embedded/stale quotes."""
+    plugin = production()
+    _entry(plugin)
+    # A previous turn's quote must be replaced even when the latest target needs none.
+    plugin._last_quote = "888"
+    events = [Event("first subject", "101"), Event("second subject", "102")]
+    requests = _provider(monkeypatch, [
+        (json.dumps({"reply_to": reply_to, "text": text}), []),
+    ])
+
+    # Both records must enter one real _handle_one/_send turn behind the held lock.
+    asyncio.run(_arrive_while_execution_locked(plugin, events))
+    assert len(requests) == 1
+    assert [record["id"] for record in _envelope(requests[0])["messages"]] == ["101", "102"]
+    chains = _sent(events)
+    assert len(chains) == 1
+    components = chains[0].chain
+    assert [component.id for component in components if isinstance(component, Reply)] == (
+        [quote_id] if quote_id else [])
+    # Exact outgoing prose proves neither the structured envelope nor its marker leaks.
+    assert [component.text for component in components if hasattr(component, "text")] == ["answer"]
+    assert len(components) == (2 if quote_id else 1)
+    assert plugin._last_quote == quote_id
+    assert plugin._last_reply_selection["reply_to"] == reply_to
+    assert plugin._last_reply_selection["structured"] is True
+    assert all(event.stopped for event in events)
+    assert not any(plugin._pending.values()) and plugin._turn_context == {}
+    assert plugin._busy == {"42": False}
+
+
 def test_probability_is_applied_once_to_collected_batch(production, monkeypatch, tmp_path):
     """Reply percentage is a single batch admission decision, not three per-entry gates."""
     plugin = production()

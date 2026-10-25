@@ -72,6 +72,9 @@ def decode_reply(raw: str | None, records: Any) -> dict:
             return result
         last_id = _message_id(records[-1].get("id")) if records and isinstance(records[-1], dict) else None
         quote_id = next((message_id for message_id in selected if message_id != last_id), None)
+        # Structured attribution is the single source of truth. An embedded legacy
+        # marker must not silently redirect this reply to an unrelated message.
+        reply_text = _LEGACY_QUOTE.sub("", reply_text)
         result.update(text=reply_text if reply_text.strip() else "", reply_to=selected,
                       quote_id=quote_id)
         return result

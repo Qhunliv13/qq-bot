@@ -81,7 +81,10 @@ def system_prompt(persona: str) -> str:
                     "For a current batch, the model may choose a positive subset with a JSON object "
                     "{\"reply_to\":[message_id,...],\"text\":\"...\"}; reply_to identifies "
                     "the messages being answered. An empty text and empty reply_to means silence. "
-                    "The model may address multiple messages in one reply. SILENT denotes no user-facing reply."
+                    "The model may address multiple messages in one reply. Select from the supplied message IDs; "
+                    "a response aimed at an earlier message is transported with that message quoted. "
+                    "If several selected messages include earlier ones, one earlier selected ID is quoted "
+                    "and the text can distinguish the remaining targets. SILENT denotes no user-facing reply."
                 ),
             },
             "transport": {
