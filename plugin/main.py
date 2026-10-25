@@ -2252,6 +2252,9 @@ class HiganPlugin(Star):
                                % (len(_dedupe_tool_schemas(self._tool_schemas())),
                                   [t.get("function", {}).get("name")
                                    for t in _dedupe_tool_schemas(self._tool_schemas())][:25]))
+            if messages is not None:
+                # Let the shared loop finalize from cumulative evidence; blank success would lose retry.
+                raise RuntimeError("model_transport_failed") from exc
             return "", []
         try:
             msg = ((data.get("choices") or [{}])[0].get("message") or {})
