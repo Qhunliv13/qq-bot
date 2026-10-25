@@ -1,0 +1,58 @@
+{
+  "date": "2026-10-25",
+  "timezone": "Asia/Shanghai",
+  "repository": "Qhunliv13/qq-bot",
+  "branch": "main",
+  "deployed_code_commit": "498007ef8160287ac8bf3efb621f0d8ef9f1369a",
+  "verification_tool_commit": "b847ebd",
+  "baseline_commit": "02fb6dcbc31644737812db554e027f13775b14c2",
+  "target": "/root/astrbot-src/data/plugins/astrbot_plugin_higan",
+  "backup": "/root/qqbot-releases/context-tools-20261025-final/backup",
+  "activation": "native specified-plugin reload; exact-owner old-instance drain",
+  "service": {
+    "name": "astrbot-186",
+    "state": "active/running",
+    "pid_before": 489377,
+    "pid_after": 489377,
+    "restarted": false
+  },
+  "napcat": {
+    "started_before": "2026-10-25T02:31:45.216352424Z",
+    "started_after": "2026-10-25T02:31:45.216352424Z",
+    "restarted": false
+  },
+  "deployed_sha256": {
+    "main.py": "7dc6fb0876134f85696334bc48e62665b1e78ab4b305d5eb5d82ae5f906d8733",
+    "agent_loop.py": "0f2a4f6a3129380f69b34667bfe71600fb1415341def3c4df91637698519f909",
+    "prompts.py": "d973cc75fe31dceccf4023061e4d590e8ef6ca64436372650354cad096db7c80",
+    "tool_context.py": "9971f98bdb6a9819fc7f6d3422a843a9df44984bf871f27f75c4122955291b4a"
+  },
+  "verification": {
+    "hash_matches": 4,
+    "old_instance_drained_events": 1,
+    "new_plugin_initialized": true,
+    "tracebacks_in_checked_window": 0,
+    "reload_failures_in_checked_window": 0,
+    "offline_tests_passed": 41,
+    "pyflakes_clean": true,
+    "syntax_clean": true,
+    "credential_pattern_scan_failures": 0,
+    "native_self_status_called_by_real_model": true,
+    "same_turn_answer_contains_actual_observation": true,
+    "new_instance_next_turn_contains_same_observation": true,
+    "search_result_count": 5,
+    "page_body_chars": 2500,
+    "vm_files_ok": true,
+    "history_search_ok": true,
+    "qq_test_messages_sent": 0,
+    "temporary_plugin_key_revoked": true
+  },
+  "limits": [
+    "Read-only live probe loaded the exact deployed files in an isolated process; no QQ group conversation was posted.",
+    "New-instance recall verifies disk reload, not an additional production service restart.",
+    "Mutating tools use offline mocks; no live mail/send/config/shell side effects were tested.",
+    "Upstream model had transient timeouts during earlier probes; final deployed-code probe passed.",
+    "No process restart or active handler cancellation occurred; continuous user-message delivery during the reload was not injected or independently measured.",
+    "Tool observations are bounded and secret-filtered, not unlimited permanent memory."
+  ]
+}
