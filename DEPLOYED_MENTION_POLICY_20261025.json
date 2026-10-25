@@ -1,0 +1,43 @@
+{
+  "date": "2026-10-25",
+  "timezone": "Asia/Shanghai",
+  "code_commit": "f784a254c0a0c4ca74393fffa48db8f8e9e5662c",
+  "branch": "main",
+  "target_group": "457422816",
+  "mode": "mention_only",
+  "saved_and_readback_verified": true,
+  "other_policy_preserved": true,
+  "backup_code": "/root/qqbot-releases/mention-policy-20261025/backup",
+  "backup_config": "/root/qqbot-releases/mention-policy-20261025/groups.pre-policy.json",
+  "activation": "specified-plugin hot reload with old-instance drain",
+  "astrbot_pid_before": 489377,
+  "astrbot_pid_after": 489377,
+  "napcat_started_before": "2026-10-25T02:31:45.216352424Z",
+  "napcat_started_after": "2026-10-25T02:31:45.216352424Z",
+  "hash_matches": 2,
+  "temporary_release_key_revoked": true,
+  "tests": {
+    "pytest_passed": 221,
+    "platform_skipped": 17,
+    "subtests_passed": 18,
+    "pyflakes_clean": true,
+    "syntax_clean": true,
+    "credential_pattern_scan_clean": true,
+    "deployed_policy_plain_denied": true,
+    "deployed_policy_quote_wake_denied": true,
+    "deployed_policy_at_other_denied": true,
+    "deployed_policy_actual_at_self_allowed": true,
+    "deployed_policy_raw_segment_at_self_allowed": true,
+    "deployed_policy_private_preserved": true,
+    "live_non_admitted_message_denials_observed": 2,
+    "latest_live_denial_beijing": "2026-10-25T20:52:32+08:00",
+    "postreload_tracebacks": 0,
+    "postreload_errors": 0,
+    "qq_test_messages_sent": 0
+  },
+  "limits": [
+    "Live actual-mention permission was checked using deployed method extraction and real saved configuration, not by injecting QQ messages.",
+    "No group-specific phrase parser or fixed response was added; normal policy changes use the shared group_policy tool.",
+    "Only explicit top-level mentions of this bot bypass mention_only, not quotes, nicknames or framework wake flags."
+  ]
+}
