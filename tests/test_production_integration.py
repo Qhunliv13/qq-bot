@@ -123,7 +123,8 @@ def _load_production(root):
     path = ROOT / "plugin" / "main.py"
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     names = {
-        "_at_targets", "_who", "_clock_context", "_request_context", "_tool_evidence",
+        "_at_targets", "_directly_mentioned", "_policy_allows", "_group_policy",
+        "_handle_one", "_is_woken", "_who", "_clock_context", "_request_context", "_tool_evidence",
         "_quoted_text", "_ref_of", "_image_refs", "_record_visible_reply", "_mark_replied",
         "_to_plain", "_strip_tool_syntax", "_strip_internal", "_tool_schemas",
         "_task_tool_schemas", "_llm_tools", "_dispatch_tool", "_decide_tools_first",
@@ -398,7 +399,7 @@ def test_on_message_snapshot_excludes_current_and_executes_every_accepted_turn_f
     plugin._hist().append("42", "persisted prior line")
     plugin._forward_to_text = _empty_forward
     plugin._is_woken = lambda event: True
-    plugin._group_policy = lambda group: {}
+    # Keep persisted admission policy real; only unrelated wake behavior is stubbed.
     plugin._wake_hit = lambda *args: ""
     snapshots = []
     first, second, third = Event("first-nonce"), Event("second-nonce", "1235"), Event("third-nonce", "1236")
@@ -920,7 +921,7 @@ def test_on_message_waits_readiness_and_rejects_stopping_instance(production):
     plugin = production()
     plugin._forward_to_text = _empty_forward
     plugin._is_woken = lambda event: True
-    plugin._group_policy = lambda group: {}
+    # Keep persisted admission policy real; only unrelated wake behavior is stubbed.
     plugin._wake_hit = lambda *args: ""
     handled = []
 
