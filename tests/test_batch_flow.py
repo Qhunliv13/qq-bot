@@ -27,9 +27,11 @@ def _entry(plugin):
 
 
 def _envelope(request):
-    """Decode the real user context separately from history and optional tool evidence."""
+    """Decode the versioned data envelope without relying on narrative section headers."""
     prompt = request["messages"][1]["content"]
-    return json.loads(prompt.split("【待考虑消息批次（JSON 数据）】\n", 1)[1].split("\n\n", 1)[0])
+    envelope = json.loads(prompt)
+    assert envelope["source"] == {"name": "conversation_context", "trust": "untrusted_data"}
+    return envelope["conversation"]
 
 
 def _sent(events):
@@ -120,7 +122,11 @@ def test_metadata_stays_out_of_body_and_multiple_subjects_share_one_reply(produc
     assert records[0]["mentions"] == [{"id": "80001", "display_name": "sale.example"}]
     assert records[0]["quote"]["body"] == "quoted offer"
     assert records[0]["quote"]["sender"]["id"] == "70001"
-    assert "body" in requests[0]["messages"][0]["content"]
+    system = requests[0]["messages"][0]["content"]
+    protocol = json.loads(system[len(plugin.persona) + 1:])["protocol"]
+    assert protocol["name"] == "conversation_context"
+    assert "Display names" in protocol["context"]["identity"]
+    assert "discount.example wholesale" not in system and "quoted offer" not in system
 
 
 def test_probability_is_applied_once_to_collected_batch(production, monkeypatch, tmp_path):

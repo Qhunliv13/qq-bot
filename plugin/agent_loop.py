@@ -18,15 +18,12 @@ import uuid
 
 from .tool_context import make_observation, redact
 
-# Hard ceiling protects callers that accidentally pass an enormous round count.
-MAX_ROUNDS = 3
-MAX_SAFE_ROUNDS = 20
-SAFE_FINAL = "工具执行已结束，暂时无法生成可靠结论。请稍后重试；未执行任何额外操作。"
+# Model-directed completion is the default; callers may opt into a positive limit.
+MAX_ROUNDS = None
+SAFE_FINAL = "本轮未获得可用的最终回复；已执行步骤以工具记录为准。"
 FINAL_INSTRUCTION = (
-    "Tool execution budget is exhausted. No more execution is allowed. "
-    "Return a final answer based only on the observed results, explicitly noting "
-    "failures or uncertainty; do not claim any unexecuted action succeeded. "
-    "Do not emit tool calls."
+    "Provide a final response from the available conversation and tool records, "
+    "noting any uncertainty. This request is for a text response without tool calls."
 )
 _LOG = logging.getLogger(__name__)
 
@@ -75,12 +72,14 @@ def _parse_arguments(raw_args: object) -> dict:
 async def run(system: str, prompt: str,
               llm: Callable[[str, str], Awaitable[tuple]],
               run_tool: Callable[[str, dict], Awaitable[dict]],
-              max_rounds: int = MAX_ROUNDS, *,
+              max_rounds: int | None = MAX_ROUNDS, *,
               llm_messages: Callable | None = None,
               transcript: list[dict] | None = None,
               observation_callback: Callable | None = None) -> tuple:
-    """Execute bounded rounds, then get a fresh no-tools answer; return text, names.
+    """Run until model completion or an optional positive limit; return text, names.
 
+    None and nonpositive max_rounds leave completion to the model. A positive
+    count limits tool-enabled requests before a final text-only request.
     llm_messages receives (messages, allow_tools=bool) and returns (text, calls).
     transcript, when supplied, is populated in place (start with an empty list).
     observation_callback(record) may be sync or async and can persist each actual
@@ -92,7 +91,9 @@ async def run(system: str, prompt: str,
     messages.extend([{"role": "system", "content": system}, {"role": "user", "content": prompt}])
     used: list[str] = []
     seen_ids: set[str] = set()
-    rounds = max(0, min(MAX_SAFE_ROUNDS, int(max_rounds)))
+    # Nonpositive values deliberately disable the optional caller-selected limit.
+    rounds = int(max_rounds) if max_rounds is not None else None
+    rounds = rounds if rounds is not None and rounds > 0 else None
 
     async def ask(allow_tools: bool) -> tuple:
         """Use one transcript algorithm for both native and legacy injected LLMs."""
@@ -102,8 +103,9 @@ async def run(system: str, prompt: str,
         return await llm(system, _json(messages[1:]))
 
     async def finish() -> tuple:
-        """Never return an unexecuted pre-tool draft after exhausting the budget."""
-        messages.append({"role": "user", "content": FINAL_INSTRUCTION})
+        """Make one final text request; provider failures never restart the loop."""
+        # Runtime finalization is a system message, never an invented human turn.
+        messages.append({"role": "system", "content": FINAL_INSTRUCTION})
         try:
             final_text, final_calls = await ask(False)
             # A provider ignoring disabled tools has not supplied a safe final.
@@ -114,14 +116,16 @@ async def run(system: str, prompt: str,
         messages.append({"role": "assistant", "content": final})
         return final, used
 
-    for _round in range(rounds):
+    _round = 0
+    while rounds is None or _round < rounds:
         try:
             text, calls = await ask(True)
         except Exception:
             _LOG.warning("Tool-loop model call failed in round %s", _round, exc_info=True)
             return await finish()
         if not calls:
-            final = str(text or "").strip() or SAFE_FINAL
+            # Empty text with no calls is a valid model-directed silent completion.
+            final = str(text or "").strip()
             messages.append({"role": "assistant", "content": final})
             return final, used
         if not isinstance(calls, (list, tuple)):
@@ -156,4 +160,5 @@ async def run(system: str, prompt: str,
                         await pending
                 except Exception:
                     _LOG.warning("Tool observation persistence failed for %s", call["id"], exc_info=True)
+        _round += 1
     return await finish()

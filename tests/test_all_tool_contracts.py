@@ -53,14 +53,11 @@ def test_provider_all_calls_have_paired_ids_and_retained_observations(report):
     assert names == [tool["name"] for tool in report["tools"]]
 
 
-def test_duplicate_raw_schemas_are_visible_and_provider_schemas_are_unique(report):
-    """Expose legacy duplicates honestly while testing production deduplication."""
-    # Existing raw wake schemas intentionally duplicate legacy/current definitions.
-    # This assertion records rather than conceals that production-source defect;
-    # no main/plugin edits are authorized in this test-only change.
-    assert report["duplicate_schema_names"] == {"wake_list": 2, "wake_add": 2, "wake_remove": 2}
-    assert report["raw_schemas_unique"] is False
-    assert report["raw_schema_count"] - report["effective_schema_count"] == 3
+def test_catalog_exposes_unique_neutral_tool_schemas(report):
+    """The common catalog now resolves legacy declarations before runtime exposure."""
+    assert report["duplicate_schema_names"] == {}
+    assert report["raw_schemas_unique"] is True
+    assert report["raw_schema_count"] == report["effective_schema_count"] == 64
     names = [tool["name"] for tool in report["tools"]]
     assert len(names) == len(set(names))
 

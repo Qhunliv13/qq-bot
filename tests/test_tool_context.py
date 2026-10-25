@@ -292,22 +292,29 @@ def test_model_round_failure_gets_final_call():
     assert flags == [True, False]
 
 
-def test_zero_budget_still_calls_final_without_execution():
-    """A zero budget must not silently permit one tool-execution round."""
+@pytest.mark.parametrize("max_rounds", [None, 0, -1])
+def test_unbounded_rounds_allow_model_completion(max_rounds):
+    """Absent or nonpositive limits allow thirty tool rounds before model completion."""
     flags = []
 
     async def native(messages, allow_tools=True):
-        """Answer only the final no-execution request."""
+        """Keep requesting tools beyond the former ceiling, then explicitly stop."""
         flags.append(allow_tools)
-        return "No tools executed", []
+        if len(flags) <= 30:
+            return "working", [_call("lookup")]
+        return "model finished", []
+
+    async def tool(name, args):
+        """Return offline evidence without introducing any external operations."""
+        return {"ok": True}
 
     async def unused(*args):
-        """Unexpected legacy/tool calls should fail this test immediately."""
-        raise AssertionError("unexpected execution")
+        """Native mode must never invoke the legacy transport."""
+        raise AssertionError("unexpected legacy")
 
-    result = asyncio.run(agent_loop.run("s", "q", unused, unused, 0, llm_messages=native))
-    assert result == ("No tools executed", [])
-    assert flags == [False]
+    result = asyncio.run(agent_loop.run("s", "q", unused, tool, max_rounds, llm_messages=native))
+    assert result == ("model finished", ["lookup"] * 30)
+    assert flags == [True] * 31
 
 
 def test_model_and_callback_failure_are_safe():
@@ -334,3 +341,81 @@ def test_model_and_callback_failure_are_safe():
     result = asyncio.run(agent_loop.run("s", "q", llm, tool, 1, transcript=transcript, observation_callback=callback))
     assert result == (agent_loop.SAFE_FINAL, ["a"])
     assert any(m["role"] == "tool" for m in transcript)
+
+
+def test_explicit_round_limit_above_twenty_is_honored():
+    """A positive caller-selected limit is honored without the former hard clamp."""
+    flags, transcript = [], []
+
+    async def native(messages, allow_tools=True):
+        """Request tools until the runtime reaches the explicit thirty-round limit."""
+        flags.append(allow_tools)
+        if allow_tools:
+            return "draft", [_call("lookup")]
+        assert messages[-1] == {"role": "system", "content": agent_loop.FINAL_INSTRUCTION}
+        return "finished at configured limit", []
+
+    async def tool(name, args):
+        """Provide deterministic local evidence for each requested operation."""
+        return {"ok": True}
+
+    result = asyncio.run(agent_loop.run("s", "q", tool, tool, 30,
+                                        llm_messages=native, transcript=transcript))
+    assert result == ("finished at configured limit", ["lookup"] * 30)
+    assert flags == [True] * 30 + [False]
+    assert [m for m in transcript if m["role"] == "user"] == [{"role": "user", "content": "q"}]
+
+
+def test_default_round_limit_is_model_directed():
+    """Omitting the limit allows thirty tool rounds and does not force finalization."""
+    calls = 0
+
+    async def llm(system, prompt):
+        """Return a finite model-led sequence longer than all former default limits."""
+        nonlocal calls
+        calls += 1
+        return ("draft", [_call("lookup")]) if calls <= 30 else ("done", [])
+
+    async def tool(name, args):
+        """Keep this regression test entirely offline."""
+        return {"ok": True}
+
+    assert agent_loop.MAX_ROUNDS is None
+    assert asyncio.run(agent_loop.run("s", "q", llm, tool)) == ("done", ["lookup"] * 30)
+    assert calls == 31
+
+
+@pytest.mark.parametrize("text", ["", None, "   "])
+def test_empty_model_completion_remains_silent(text):
+    """No-call empty output is ordinary model silence, not a finalization failure."""
+    transcript = []
+
+    async def llm(system, prompt):
+        """Return an intentional no-call completion with no visible content."""
+        return text, []
+
+    async def unused(*args):
+        """A completed model response must not trigger tool execution or retry."""
+        raise AssertionError("unexpected execution")
+
+    assert asyncio.run(agent_loop.run("s", "q", llm, unused, transcript=transcript)) == ("", [])
+    assert transcript[-1] == {"role": "assistant", "content": ""}
+
+
+def test_unbounded_upstream_and_finish_failure_stop_without_retry():
+    """An upstream outage receives one final attempt, never an unbounded retry loop."""
+    flags = []
+
+    async def native(messages, allow_tools=True):
+        """Fail both the ordinary request and its one text-only finalization."""
+        flags.append(allow_tools)
+        raise RuntimeError("offline")
+
+    async def unused(*args):
+        """The failure path cannot execute tools or use another transport."""
+        raise AssertionError("unexpected execution")
+
+    result = asyncio.run(agent_loop.run("s", "q", unused, unused, llm_messages=native))
+    assert result == (agent_loop.SAFE_FINAL, [])
+    assert agent_loop.SAFE_FINAL == "本轮未获得可用的最终回复；已执行步骤以工具记录为准。"
+    assert flags == [True, False]

@@ -7,6 +7,7 @@ stubbed: no main import, startup, subprocess, sockets, or live credentials.
 
 import asyncio
 import copy
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -111,13 +112,18 @@ def test_task_native_path_reuses_tools_transcript_media_and_saved_goal(productio
     plugin.context.send_message = send_message
     plugin._tasks_mod = lambda: SimpleNamespace(listing=lambda **kwargs: [dict(task, status="active")])
     plugin._dispatch_tool = dispatch
+    saved_context = copy.deepcopy(task)
     requests = _provider(monkeypatch, [("draft", [_call("task_media")]), ("Saved work completed.", [])])
     assert asyncio.run(plugin._run_task_once(task)) == "Saved work completed."
     assert executed == [("task_media", "42")]
     assert task["last_tools"] == ["task_media"]
     assert sent[0][0] == "offline:task-origin"
     assert any(isinstance(component, Image) and component.file == str(media) for component in sent[0][1].chain)
-    assert "saved-goal-nonce" in requests[0]["messages"][1]["content"]
+    envelope = json.loads(requests[0]["messages"][1]["content"])
+    assert envelope["task"] == saved_context
+    assert envelope["task"]["goal"] == "saved-goal-nonce"
+    assert envelope["conversation"]["scope"] == "42"
+    assert envelope["conversation"]["messages"][0]["body"] == "continue-nonce"
     paired = [message for message in requests[-1]["messages"] if message["role"] == "tool"]
     assert len(paired) == 1 and paired[0]["tool_call_id"] == "task_media"
     record = plugin._tool_evidence().recent("42")[0]
