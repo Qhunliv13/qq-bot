@@ -20,12 +20,28 @@ from .tool_context import make_observation, redact
 
 # Model-directed completion is the default; callers may opt into a positive limit.
 MAX_ROUNDS = None
+# Legacy import compatibility only; failures must never become assistant replies.
 SAFE_FINAL = "本轮未获得可用的最终回复；已执行步骤以工具记录为准。"
 FINAL_INSTRUCTION = (
     "Provide a final response from the available conversation and tool records, "
     "noting any uncertainty. This request is for a text response without tool calls."
 )
 _LOG = logging.getLogger(__name__)
+
+
+class ModelCompletionUnavailable(RuntimeError):
+    """Expose failed finalization to the host without inventing an assistant reply.
+
+    Only machine-readable reason and actual attempted tool names are retained here;
+    the supplied transcript/archive owns observations. Hosts can report task failure
+    without replaying tools or mistaking a canned fallback for model completion.
+    """
+
+    def __init__(self, reason: str, used_tools: list[str]):
+        self.reason = reason
+        self.used_tools = tuple(used_tools)
+        self.tool_attempt_count = len(self.used_tools)
+        super().__init__(f"model_completion_unavailable: {reason}")
 
 
 def _json(value: object) -> str:
@@ -86,6 +102,8 @@ async def run(system: str, prompt: str,
     outcome, including argument/runner failures. Archive failures are logged but
     cannot undo successful tools or lose the in-memory evidence. Callers own scope
     selection and archive paths; no observations are promoted into durable facts.
+    Failed forced finalization raises ModelCompletionUnavailable, preserving the
+    transcript and exception cause instead of appending a fabricated final reply.
     """
     messages = transcript if transcript is not None else []
     messages.extend([{"role": "system", "content": system}, {"role": "user", "content": prompt}])
@@ -103,16 +121,24 @@ async def run(system: str, prompt: str,
         return await llm(system, _json(messages[1:]))
 
     async def finish() -> tuple:
-        """Make one final text request; provider failures never restart the loop."""
+        """Make one text-only attempt, raising on failure without replaying tools."""
         # Runtime finalization is a system message, never an invented human turn.
         messages.append({"role": "system", "content": FINAL_INSTRUCTION})
         try:
             final_text, final_calls = await ask(False)
-            # A provider ignoring disabled tools has not supplied a safe final.
-            final = SAFE_FINAL if final_calls else str(final_text or "").strip() or SAFE_FINAL
-        except Exception:
+        except Exception as exc:
             _LOG.warning("Final no-tools model call failed", exc_info=True)
-            final = SAFE_FINAL
+            # Preserve the provider cause internally, not in a canned user reply.
+            raise ModelCompletionUnavailable("provider_error", used) from exc
+        # Reject the whole draft when a provider ignores disabled tools; none of
+        # these extra requests may execute, even if the text claims success.
+        if final_calls:
+            raise ModelCompletionUnavailable("unexpected_tool_calls", used)
+        final = str(final_text or "").strip()
+        if not final:
+            # Unlike ordinary model-directed silence, a forced final must resolve
+            # the interrupted/limited run; empty output does not prove completion.
+            raise ModelCompletionUnavailable("empty_response", used)
         messages.append({"role": "assistant", "content": final})
         return final, used
 

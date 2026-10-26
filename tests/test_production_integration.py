@@ -123,7 +123,7 @@ def _load_production(root):
     path = ROOT / "plugin" / "main.py"
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     names = {
-        "_at_targets", "_directly_mentioned", "_policy_allows", "_group_policy",
+        "_at_targets", "_directly_mentioned", "_policy_allows", "_group_policy", "_forward_to_text",
         "_handle_one", "_is_woken", "_who", "_clock_context", "_request_context", "_tool_evidence",
         "_quoted_text", "_ref_of", "_image_refs", "_record_visible_reply", "_mark_replied",
         "_to_plain", "_strip_tool_syntax", "_strip_internal", "_tool_schemas",
@@ -392,8 +392,12 @@ def test_dispatch_self_status_and_forward_use_explicit_event(production, tmp_pat
         "get_forward_msg": {"messages": [{"sender": {"nickname": "Quoted sender"}, "message": [
             {"type": "text", "data": {"text": "quoted result"}}, {"type": "image", "data": {}}]}]}})
     result = asyncio.run(plugin._dispatch_tool("forward_expand", {"msg_id": "#1234"}, "42", event=event))
-    assert result == {"ok": True, "count": 1, "items": [{"from": "Quoted sender", "text": "quoted result[图片]"}]}
-    assert event.actions == [("get_msg", {"message_id": 1234}), ("get_forward_msg", {"id": "forward-nonce"})]
+    assert result["ok"] and result["recognized"] and len(result["items"]) == 1
+    assert result["items"][0] == {"sender": {"id": None, "display_name": "Quoted sender"},
+                                  "text": "quoted result", "media": [{"type": "image"}]}
+    assert result["source"] == "get_forward_msg"
+    assert result["error"] is None
+    assert event.actions == [("get_msg", {"message_id": "1234"}), ("get_forward_msg", {"id": "forward-nonce"})]
     assert not asyncio.run(plugin._dispatch_tool("forward_expand", {"id": "x"}, "42"))["ok"]
 
 

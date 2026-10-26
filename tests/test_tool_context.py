@@ -240,10 +240,17 @@ def test_exhausted_unexecuted_draft_and_provider_tool_violation():
         invocations.append(name)
         return {"ok": True}
 
-    answer, used = asyncio.run(agent_loop.run("s", "q", llm, tool, 1, llm_messages=native))
-    assert answer == agent_loop.SAFE_FINAL
+    transcript = []
+    with pytest.raises(agent_loop.ModelCompletionUnavailable) as failure:
+        asyncio.run(agent_loop.run("s", "q", llm, tool, 1,
+                                   llm_messages=native, transcript=transcript))
+    assert failure.value.reason == "unexpected_tool_calls"
+    assert failure.value.used_tools == ("side_effect",)
+    assert failure.value.tool_attempt_count == 1
     assert flags == [True, False]
-    assert invocations == used == ["side_effect"]
+    assert invocations == ["side_effect"]
+    assert transcript[-1] == {"role": "system", "content": agent_loop.FINAL_INSTRUCTION}
+    assert len([m for m in transcript if m["role"] == "tool"]) == 1
 
 
 def test_native_secret_arguments_are_redacted_but_tool_receives_original():
@@ -338,9 +345,17 @@ def test_model_and_callback_failure_are_safe():
         """Simulate a full archive volume without breaking the conversation."""
         raise OSError("archive unavailable")
 
-    result = asyncio.run(agent_loop.run("s", "q", llm, tool, 1, transcript=transcript, observation_callback=callback))
-    assert result == (agent_loop.SAFE_FINAL, ["a"])
+    with pytest.raises(agent_loop.ModelCompletionUnavailable) as failure:
+        asyncio.run(agent_loop.run("s", "q", llm, tool, 1,
+                                   transcript=transcript, observation_callback=callback))
+    assert failure.value.reason == "provider_error"
+    assert failure.value.used_tools == ("a",)
+    assert failure.value.tool_attempt_count == 1
+    assert isinstance(failure.value.__cause__, RuntimeError)
+    assert calls == 2
     assert any(m["role"] == "tool" for m in transcript)
+    assert transcript[-1] == {"role": "system", "content": agent_loop.FINAL_INSTRUCTION}
+    assert agent_loop.SAFE_FINAL not in json.dumps(transcript, ensure_ascii=False)
 
 
 def test_explicit_round_limit_above_twenty_is_honored():
@@ -404,18 +419,96 @@ def test_empty_model_completion_remains_silent(text):
 
 def test_unbounded_upstream_and_finish_failure_stop_without_retry():
     """An upstream outage receives one final attempt, never an unbounded retry loop."""
-    flags = []
+    flags, transcript = [], []
+    outages = [TimeoutError("first 45s timeout"), TimeoutError("final 45s timeout")]
 
     async def native(messages, allow_tools=True):
-        """Fail both the ordinary request and its one text-only finalization."""
+        """Fail both requests immediately without waiting for real provider timeouts."""
         flags.append(allow_tools)
-        raise RuntimeError("offline")
+        raise outages[len(flags) - 1]
 
     async def unused(*args):
         """The failure path cannot execute tools or use another transport."""
         raise AssertionError("unexpected execution")
 
-    result = asyncio.run(agent_loop.run("s", "q", unused, unused, llm_messages=native))
-    assert result == (agent_loop.SAFE_FINAL, [])
-    assert agent_loop.SAFE_FINAL == "本轮未获得可用的最终回复；已执行步骤以工具记录为准。"
+    with pytest.raises(agent_loop.ModelCompletionUnavailable) as failure:
+        asyncio.run(agent_loop.run("s", "q", unused, unused,
+                                   llm_messages=native, transcript=transcript))
+    assert failure.value.reason == "provider_error"
+    assert failure.value.used_tools == ()
+    assert failure.value.tool_attempt_count == 0
+    assert failure.value.__cause__ is outages[1]
+    assert "45s" not in str(failure.value)
     assert flags == [True, False]
+    assert [m["role"] for m in transcript] == ["system", "user", "system"]
+
+
+def test_two_timeouts_after_tool_preserve_evidence_without_replay():
+    """Ordinary and final timeouts cannot duplicate an already attempted tool."""
+    flags, invocations, transcript, observations = [], [], [], []
+    final_timeout = TimeoutError("final 45s timeout")
+
+    async def native(messages, allow_tools=True):
+        """Supply one tool before both remaining model requests time out offline."""
+        flags.append(allow_tools)
+        if len(flags) == 1:
+            return "unverified draft", [_call("side_effect", call_id="once")]
+        assert len([m for m in messages if m["role"] == "tool"]) == 1
+        if allow_tools:
+            raise TimeoutError("ordinary 45s timeout")
+        raise final_timeout
+
+    async def tool(name, args):
+        """Record execution independently from provider retries and observations."""
+        invocations.append(name)
+        return {"ok": True, "receipt": "retained"}
+
+    with pytest.raises(agent_loop.ModelCompletionUnavailable) as failure:
+        asyncio.run(agent_loop.run("s", "q", tool, tool,
+                                   llm_messages=native, transcript=transcript,
+                                   observation_callback=observations.append))
+    assert failure.value.reason == "provider_error"
+    assert failure.value.used_tools == ("side_effect",)
+    assert failure.value.tool_attempt_count == 1
+    assert failure.value.__cause__ is final_timeout
+    assert flags == [True, True, False]
+    assert invocations == ["side_effect"]
+    assert len(observations) == 1
+    assert observations[0]["result"]["receipt"] == "retained"
+    assert [m["role"] for m in transcript] == ["system", "user", "assistant", "tool", "system"]
+    assert agent_loop.SAFE_FINAL not in json.dumps(transcript, ensure_ascii=False)
+
+
+@pytest.mark.parametrize("final_text", ["", None, "   "])
+def test_forced_empty_final_raises_without_repeating_tools(final_text):
+    """An empty forced final is failure, while completed evidence stays intact."""
+    flags, invocations, transcript, observations = [], [], [], []
+
+    async def native(messages, allow_tools=True):
+        """Return one side effect and inspect cumulative evidence during finalization."""
+        flags.append(allow_tools)
+        if allow_tools:
+            return "draft must not escape", [_call("side_effect", call_id="once")]
+        tool_messages = [m for m in messages if m["role"] == "tool"]
+        assert len(tool_messages) == 1
+        assert tool_messages[0]["tool_call_id"] == "once"
+        assert json.loads(tool_messages[0]["content"])["result"] == {"ok": True}
+        return final_text, []
+
+    async def tool(name, args):
+        """Record every actual execution to rule out finalization replays."""
+        invocations.append(name)
+        return {"ok": True}
+
+    with pytest.raises(agent_loop.ModelCompletionUnavailable) as failure:
+        asyncio.run(agent_loop.run("s", "q", tool, tool, 1,
+                                   llm_messages=native, transcript=transcript,
+                                   observation_callback=observations.append))
+    assert failure.value.reason == "empty_response"
+    assert failure.value.used_tools == ("side_effect",)
+    assert failure.value.tool_attempt_count == 1
+    assert flags == [True, False]
+    assert invocations == ["side_effect"]
+    assert len(observations) == 1
+    assert transcript[-1] == {"role": "system", "content": agent_loop.FINAL_INSTRUCTION}
+    assert agent_loop.SAFE_FINAL not in json.dumps(transcript, ensure_ascii=False)

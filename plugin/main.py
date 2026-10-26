@@ -863,6 +863,17 @@ class HiganPlugin(Star):
                         ref = self._ref_of(sub)
                         if ref:
                             refs.append(ref)
+        # Forwarded images are not top-level AstrBot Image components. Their
+        # parsed metadata remains attached to the exact source event, not a group
+        # global that could accidentally substitute another sender's pictures.
+        forwarded = getattr(event, "_higan_forward_context", {}) or {}
+        for item in forwarded.get("items") or []:
+            for media in item.get("media") or []:
+                if media.get("type") != "image":
+                    continue
+                ref = str(media.get("url") or media.get("file") or "")
+                if ref and ref not in refs:
+                    refs.append(ref)
         return refs
 
     def _remember_images(self, group: str, refs: list[str]) -> None:
@@ -1120,10 +1131,9 @@ class HiganPlugin(Star):
             try:
                 _fwd = await self._forward_to_text(event)
                 if _fwd:
-                    text = (text + "\n【转发聊天记录】\n" + _fwd).strip()
-                    logger.info("[higan] 已解析转发聊天记录（%d 行）" % len(_fwd.splitlines()))
-                elif any(k in text for k in ("[转发", "[聊天记录", "forward")):
-                    text = text + "\n【转发聊天记录】（内容读取失败）"
+                    # This JSON is source data, not an invented message from the sender.
+                    # A failed card read remains recognized content rather than an empty poke.
+                    text = (text + "\n" + _fwd).strip()
             except Exception as _exc:  # noqa: BLE001
                 logger.warning("[higan] 转发解析异常（忽略）：%r", str(_exc)[:120])
             images = [c for c in event.get_messages() if isinstance(c, Image)]
@@ -1579,7 +1589,7 @@ class HiganPlugin(Star):
                                          data=body, method="POST")
             req.add_header("Content-Type", "application/json")
             req.add_header("Authorization", "Bearer " + key)
-            with urllib.request.urlopen(req, timeout=CHAT_TIMEOUT) as resp:
+            with urllib.request.urlopen(req, timeout=getattr(self, "_provider_request_timeout", CHAT_TIMEOUT)) as resp:
                 return json.loads(resp.read().decode("utf-8", "replace"))
 
         try:
@@ -1665,8 +1675,11 @@ class HiganPlugin(Star):
             cfg_path = "/root/astrbot-src/data/cmd_config.json"
             with open(cfg_path, encoding="utf-8-sig") as fh:
                 cfg = json.load(fh)
-            base = ((cfg.get("provider_sources") or [{}])[0].get("api_base") or "").rstrip("/")
-            key = ((cfg.get("provider_sources") or [{}])[0].get("key") or [""])[0]
+            source = (cfg.get("provider_sources") or [{}])[0]
+            from .model_transport import request_timeout
+            self._provider_request_timeout = request_timeout(source, CHAT_TIMEOUT)
+            base = (source.get("api_base") or "").rstrip("/")
+            key = (source.get("key") or [""])[0]
             model = ""
             for item in cfg.get("provider") or []:
                 if item.get("id") == "qapi-relay":
@@ -1856,161 +1869,19 @@ class HiganPlugin(Star):
         return self._hist_obj
 
     async def _forward_to_text(self, event) -> str:
-        """[forward-from-component] 解析合并转发：优先读组件自带节点 ✓。"""
-        try:
-            comps = getattr(getattr(event, "message_obj", None), "message", None) or []
-        except Exception:  # noqa: BLE001
+        """Expose forwarded source records or explicit read failure, never a false empty message."""
+        from .forward_context import resolve
+        result = await resolve(event)
+        if not result.get("recognized"):
             return ""
-
-        def _fmt_nodes(nodes) -> str:
-            lines: list = []
-            for node in (nodes or [])[:40]:
-                try:
-                    if isinstance(node, dict):
-                        sender = node.get("sender") or {}
-                        name = (sender.get("card") or sender.get("nickname")
-                                or sender.get("user_id") or node.get("nickname") or "?")
-                        segs = node.get("message") or node.get("content") or []
-                    else:
-                        sender = getattr(node, "sender", None) or {}
-                        name = (getattr(node, "name", None) or getattr(node, "nickname", "")
-                                or sender.get("nickname") if isinstance(sender, dict) else "")
-                        segs = getattr(node, "content", None) or getattr(node, "message", None) or []
-                    parts: list = []
-                    if isinstance(segs, str):
-                        parts.append(segs)
-                    else:
-                        for seg in segs:
-                            if isinstance(seg, dict):
-                                st = seg.get("type")
-                                sd = seg.get("data") or {}
-                                if st == "text":
-                                    parts.append(str(sd.get("text") or ""))
-                                elif st == "image":
-                                    parts.append("[图片]")
-                                elif st == "face":
-                                    parts.append("[表情]")
-                                elif st == "at":
-                                    parts.append("@%s" % (sd.get("qq") or ""))
-                                elif st in ("forward", "node", "nodes", "multimsg"):
-                                    # [see-forward] 合并转发：给出标题/条数，别只留裸标记
-                                    _title = str(sd.get("title") or sd.get("summary")
-                                                 or sd.get("prompt") or "").strip()[:60]
-                                    _cnt = 0
-                                    for _k in ("content", "messages", "nodes"):
-                                        _v = sd.get(_k)
-                                        if isinstance(_v, list):
-                                            _cnt = len(_v)
-                                            break
-                                    _names = []
-                                    for _item in (sd.get("content") or sd.get("messages")
-                                                  or [])[:5]:
-                                        if isinstance(_item, dict):
-                                            _snd = (_item.get("sender") or {})
-                                            _nm = str((_snd or {}).get("nickname")
-                                                      or _item.get("name") or "").strip()
-                                            if _nm:
-                                                _names.append(_nm)
-                                    _fid = str(sd.get("id") or sd.get("res_id")
-                                                or sd.get("file") or "").strip()
-                                    parts.append("[转发聊天记录%s%s%s%s]" % (
-                                        (": " + _title) if _title else "",
-                                        ("（%d 条）" % _cnt) if _cnt else "",
-                                        (" id=" + _fid) if _fid else "",
-                                        (" 含: " + "/".join(_names)) if _names else ""))
-                                elif st in ("json", "xml", "card", "lightapp"):
-                                    # [see-card] 小程序/网页卡片：给出标题或摘要
-                                    _raw = str(sd.get("data") or sd.get("content") or "")
-                                    _ttl = ""
-                                    for _key in ('"title"', '"desc"', '"prompt"', '"summary"'):
-                                        _i = _raw.find(_key)
-                                        if _i >= 0:
-                                            _seg = _raw[_i:_i + 120]
-                                            _q = _seg.find(":", len(_key))
-                                            if _q > 0:
-                                                _ttl = _seg[_q + 1:].strip(' ",}')[:60]
-                                                break
-                                    parts.append("[卡片消息%s]" % ((": " + _ttl) if _ttl else ""))
-                                elif st in ("file", "record", "video", "audio"):
-                                    # [see-attachments] 让她知道"有这么个东西"（含名字/大小 ✓）
-                                    _fname = str(sd.get("file") or sd.get("name")
-                                                 or sd.get("file_name") or "").strip()
-                                    _fname = os.path.basename(_fname) if _fname else ""
-                                    _fsize = sd.get("file_size") or sd.get("size") or 0
-                                    try:
-                                        _mb = float(_fsize) / 1048576.0
-                                    except Exception:  # noqa: BLE001
-                                        _mb = 0.0
-                                    _dur = sd.get("duration") or sd.get("length") or 0
-                                    if st == "file":
-                                        parts.append("[文件: %s%s]"
-                                                     % (_fname or "未命名",
-                                                        (" · %.1fMB" % _mb) if _mb else ""))
-                                    elif st == "record":
-                                        parts.append("[语音%s%s]"
-                                                     % ((" · %s秒" % _dur) if _dur else "",
-                                                        (" · %s" % _fname) if _fname else ""))
-                                    else:
-                                        parts.append("[%s%s%s]"
-                                                     % ("视频" if st == "video" else "音频",
-                                                        (" · %.1fMB" % _mb) if _mb else "",
-                                                        (" · %s" % _fname) if _fname else ""))
-                                else:
-                                    parts.append("[%s]" % st)
-                            elif isinstance(seg, str):
-                                parts.append(seg)
-                            else:
-                                txt = getattr(seg, "text", None) or getattr(seg, "data", None)
-                                if isinstance(txt, str):
-                                    parts.append(txt)
-                    body = " ".join("".join(parts).split())[:300]
-                    if body:
-                        lines.append("%s：%s" % (str(name or "?")[:16], body))
-                except Exception:  # noqa: BLE001
-                    continue
-            return "\n".join(lines[:40])
-
-        # ① 组件自带节点（最常见 ✓）
-        for comp in comps:
-            try:
-                data = getattr(comp, "data", None)
-                for holder in (data if isinstance(data, dict) else {},
-                               getattr(comp, "content", None),
-                               getattr(comp, "nodes", None),
-                               getattr(comp, "message", None)):
-                    if isinstance(holder, (list, tuple)) and holder:
-                        text = _fmt_nodes(holder)
-                        if text:
-                            return text
-                    if isinstance(holder, dict) and holder.get("content"):
-                        text = _fmt_nodes(holder.get("content"))
-                        if text:
-                            return text
-            except Exception:  # noqa: BLE001
-                continue
-
-        # ② HTTP 兜底（本机 NapCat 是空壳，基本不会成功；保留无害 ✓）
-        ids: list = []
-        for comp in comps:
-            try:
-                data = getattr(comp, "data", None)
-                fid = (data.get("id") if isinstance(data, dict) else "") or ""
-                if fid and str(getattr(comp, "type", "")).lower() in (
-                        "forward", "forward_msg", "node", "json", "xml"):
-                    ids.append(str(fid))
-            except Exception:  # noqa: BLE001
-                continue
-        for fid in ids[:2]:
-            try:
-                res = await asyncio.to_thread(self._onebot_http, "get_forward_msg", {"id": fid})
-                nodes = ((res.get("data") or {}).get("messages")
-                         or (res.get("data") or {}).get("message") or [])
-                text = _fmt_nodes(nodes)
-                if text:
-                    return text
-            except Exception:  # noqa: BLE001
-                continue
-        return ""
+        # Retain the resolved attachment metadata on this event only; admission,
+        # queued batches and vision input then share the same source association.
+        event._higan_forward_context = result
+        logger.info("[higan] forward_context ok=%s items=%d source=%s error=%s",
+                    result.get("ok"), len(result.get("items") or []),
+                    result.get("source"), result.get("error"))
+        return json.dumps({"source": "forwarded_messages", "trust": "untrusted_data",
+                           "result": result}, ensure_ascii=False, allow_nan=False)
 
     def _onebot_http(self, action: str, params: dict) -> dict:
         """[read-forward] 直连 NapCat HTTP 调一个 action（同步，放线程里用 ✓）。"""
@@ -2217,7 +2088,7 @@ class HiganPlugin(Star):
             req = urllib.request.Request(base + "/chat/completions", data=body, method="POST")
             req.add_header("Content-Type", "application/json")
             req.add_header("Authorization", "Bearer " + key)
-            with urllib.request.urlopen(req, timeout=CHAT_TIMEOUT) as resp:
+            with urllib.request.urlopen(req, timeout=getattr(self, "_provider_request_timeout", CHAT_TIMEOUT)) as resp:
                 return json.loads(resp.read().decode("utf-8", "replace"))
 
         try:
@@ -2265,7 +2136,7 @@ class HiganPlugin(Star):
             req = urllib.request.Request(base + "/chat/completions", data=body, method="POST")
             req.add_header("Content-Type", "application/json")
             req.add_header("Authorization", "Bearer " + key)
-            with urllib.request.urlopen(req, timeout=CHAT_TIMEOUT) as resp:
+            with urllib.request.urlopen(req, timeout=getattr(self, "_provider_request_timeout", CHAT_TIMEOUT)) as resp:
                 return json.loads(resp.read().decode("utf-8", "replace"))
 
         try:
@@ -2401,55 +2272,11 @@ class HiganPlugin(Star):
         except Exception as exc:  # noqa: BLE001
             logger.warning("[higan] tasks 模块不可用：%r", exc)
             tasks = None
-        if name == "read_forward":
-            # [read-forward] 转发内容直接问 NapCat（get_forward_msg ✓）
-            try:
-                res = await asyncio.to_thread(self._onebot_http, "get_forward_msg",
-                                              {"id": str(args.get("id") or "")})
-            except Exception as exc:  # noqa: BLE001
-                return {"ok": False, "error": repr(exc)[:160]}
-            return {"ok": bool(res), "raw": res}
-        if name == "forward_expand":
-            # [forward-expand] 主动展开合并转发（逐条内容）
-            try:
-                _api = event.bot.api
-                _fid = str(args.get("id") or "").strip()
-                _mid = str(args.get("msg_id") or "").strip().lstrip("#")
-                if not _fid and _mid:
-                    _r = await _api.call_action("get_msg", message_id=int(_mid))
-                    for _seg in ((_r or {}).get("message") or []):
-                        _sd = _seg.get("data") or {}
-                        if _seg.get("type") in ("forward", "node", "nodes"):
-                            _fid = str(_sd.get("id") or _sd.get("res_id") or "").strip()
-                            break
-                if not _fid:
-                    return {"ok": False, "error": "没有拿到转发 id（可传 msg_id 让我自己找）"}
-                _res = await _api.call_action("get_forward_msg", id=_fid)
-                _items = []
-                for _node in ((_res or {}).get("messages") or [])[:100]:
-                    _sender = (_node.get("sender") or {})
-                    _nm = str(_sender.get("nickname") or _sender.get("card")
-                              or _sender.get("user_id") or "").strip()
-                    _txt = []
-                    for _seg in (_node.get("message") or _node.get("content") or []):
-                        if isinstance(_seg, dict):
-                            _t = _seg.get("type")
-                            _d = _seg.get("data") or {}
-                            if _t == "text":
-                                _txt.append(str(_d.get("text") or ""))
-                            elif _t == "image":
-                                _txt.append("[图片]")
-                            elif _t == "at":
-                                _txt.append("@" + str(_d.get("qq") or ""))
-                            elif _t == "face":
-                                _txt.append("[表情]")
-                    _line = " ".join("".join(_txt).split())[:200]
-                    if _line or _nm:
-                        _items.append({"from": _nm, "text": _line})
-                return {"ok": True, "count": len(_items), "items": _items}
-            except Exception as _exc:  # noqa: BLE001
-                logger.warning("[higan] 转发展开失败：%r", str(_exc)[:150])
-                return {"ok": False, "error": str(_exc)[:150]}
+        if name in ("read_forward", "forward_expand"):
+            # All entry points share the native event API and the same typed source parser.
+            from .forward_context import resolve
+            return await resolve(event, forward_id=str(args.get("id") or "").strip() or None,
+                                 message_id=str(args.get("msg_id") or "").strip().lstrip("#") or None)
 
         if name == "history_search":
             try:
@@ -3372,6 +3199,14 @@ class HiganPlugin(Star):
                 _loop.run(system, prompt, _llm, _tool, max_rounds=TOOL_ROUNDS,
                           llm_messages=_llm_messages, observation_callback=_observe),
                 timeout=TOOL_TURN_TIMEOUT)
+        except _loop.ModelCompletionUnavailable as exc:
+            # The same transcript has already made its one no-tools finalization
+            # attempt. Never disguise this as chat or start an independent decision.
+            logger.warning("[higan] model_completion_unavailable reason=%s tool_attempts=%d",
+                           exc.reason, exc.tool_attempt_count)
+            if task_context is not None:
+                raise RuntimeError("task_finalization_failed") from exc
+            return ""
         except Exception as exc:  # noqa: BLE001
             logger.warning("[higan] 工具回路失败：%s", type(exc).__name__)
             if task_context is not None:
