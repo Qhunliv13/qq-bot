@@ -10,8 +10,10 @@ OVERNIGHT_CACHE_AUDIT_20261026.md. These are actual relay cache-token counts, no
 
 ## Changes without deleting context
 
-- Move fresh exact timing to the END of the JSON envelope. Place persisted observations
-  before rolling conversation history. Field values, source trust, persona, message order,
+- Move fresh exact timing to the END of the JSON envelope. The final conservative
+  candidate preserves conversation before observations in the original source order.
+  An earlier observations-first candidate was rolled back after native tool verification
+  timed out repeatedly while previous-source control passed. Field values, source trust, persona, message order,
   scope, history, tasks and attachments round-trip unchanged. No frozen or rounded clock,
   no compressed/deleted chat, no cache-specific canned answer or synthetic hit counts.
 - Freeze initial multipart images before the first model call. Each new screenshot batch
@@ -51,8 +53,10 @@ Second experiment uses independently hashed record contents,30,374 prompt charac
 Observed token-weighted rate across valid usage:old22.0133%(3/3),new63.2444%(2/3).
 This is a SMALL synthetic observation, not proof that whole live traffic will maintain63%
 or99%; one arm has an incomplete sample. New prefix allows reuse in this setup, but
-rolling120 history still drops oldest entries and breaks history-prefix reuse. Moving
-observations ahead preserves those stable records, not an unlimited stable history.
+rolling120 history still drops oldest entries and breaks history-prefix reuse. This
+observations-first experimental result is NOT the final conversation-first live result.
+The narrowed candidate needs its own measured result; preserving source priority takes
+precedence over this synthetic cache gain.
 No promise of fully cache-stable context is made. Future improvements require a separate
 conversation-history design that preserves freshness and bounded resource behavior.
 

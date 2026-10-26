@@ -89,9 +89,9 @@ def test_clock_changes_preserve_complete_context_prefix(clocks):
     stable = {
         "version": 1,
         "source": {"name": "conversation_context", "trust": "untrusted_data"},
-        "observations": inputs["observations"],
         "conversation": {"scope": inputs["scope"], "history": inputs["history"],
                          "messages": inputs["messages"], "anchor": {"message_id": "m1"}},
+        "observations": inputs["observations"],
         "other_scopes": inputs["other_scopes"],
         "task": inputs["task"],
         "attachments": {"image_refs": inputs["image_refs"]},
@@ -108,29 +108,45 @@ def test_clock_changes_preserve_complete_context_prefix(clocks):
     assert inputs == original
 
 
-def test_history_rollover_preserves_complete_observations_prefix():
-    """Rolling history must leave all stable observations ahead of its first change."""
+def test_history_rollover_preserves_conversation_priority_and_values():
+    """History changes end the shared prefix inside conversation, before observations."""
     observations = [{"scope": "s", "tool_name": "lookup",
                      "result": {"body": "稳定观察\\\"\n雪", "rows": [1, 2, 3]}}]
     old_history = [{"id": "h1", "body": "oldest"}, {"id": "h2", "body": "kept"}]
     new_history = old_history[1:] + [{"id": "h3", "body": "newest"}]
     inputs = {"scope": "s", "messages": [{"id": "m", "body": "current"}],
               "clock": {"now": 123}, "observations": observations}
+    original = copy.deepcopy(inputs)
+    original_histories = copy.deepcopy((old_history, new_history))
     before = build_context(**inputs, history=old_history)
     after = build_context(**inputs, history=new_history)
-    # The expected prefix ends after the entire observation collection, so an
-    # accidentally earlier conversation block cannot pass on a partial match.
+    # Source priority remains conversation-first even when observations are stable.
+    # The first changed history ID ends cache reuse; later observations are not prefix.
     stable = {"version": 1,
               "source": {"name": "conversation_context", "trust": "untrusted_data"},
-              "observations": observations}
-    expected_prefix = json.dumps(stable, ensure_ascii=False, separators=(",", ":"))[:-1]
-    expected_prefix += ',"conversation":'
-    assert os.path.commonprefix([before, after]).startswith(expected_prefix)
-    assert json.loads(before)["conversation"]["history"] == old_history
-    assert json.loads(after)["conversation"]["history"] == new_history
-    assert json.loads(before)["observations"] == observations
-    assert json.loads(after)["observations"] == observations
+              "conversation": {"scope": inputs["scope"]}}
+    expected_prefix = json.dumps(stable, ensure_ascii=False, separators=(",", ":"))[:-2]
+    expected_prefix += ',"history":[{"id":"h'
+    assert os.path.commonprefix([before, after]) == expected_prefix
+    for serialized, history in ((before, old_history), (after, new_history)):
+        expected = {
+            "version": 1,
+            "source": stable["source"],
+            "conversation": {"scope": inputs["scope"], "history": history,
+                             "messages": inputs["messages"]},
+            "observations": observations,
+            "other_scopes": [],
+            "task": None,
+            "attachments": {"image_refs": []},
+            "timing": inputs["clock"],
+        }
+        parsed = json.loads(serialized)
+        assert parsed == expected
+        assert list(parsed) == list(expected)
+        assert list(parsed["conversation"]) == ["scope", "history", "messages"]
     assert before != after
+    assert inputs == original
+    assert (old_history, new_history) == original_histories
 
 
 def test_new_message_preserves_complete_preceding_history_prefix():
@@ -146,17 +162,27 @@ def test_new_message_preserves_complete_preceding_history_prefix():
     after = build_context(**inputs, messages=new_messages)
     stable = {"version": 1,
               "source": {"name": "conversation_context", "trust": "untrusted_data"},
-              "observations": observations,
               "conversation": {"scope": inputs["scope"], "history": history}}
     # Remove only the two known closing object delimiters to reach messages;
     # never split on text markers that untrusted history may itself contain.
     expected_prefix = json.dumps(stable, ensure_ascii=False, separators=(",", ":"))[:-2]
     expected_prefix += ',"messages":'
     assert os.path.commonprefix([before, after]).startswith(expected_prefix)
-    assert json.loads(before)["conversation"] == {
-        "scope": inputs["scope"], "history": history, "messages": old_messages}
-    assert json.loads(after)["conversation"] == {
-        "scope": inputs["scope"], "history": history, "messages": new_messages}
+    for serialized, messages in ((before, old_messages), (after, new_messages)):
+        expected = {
+            "version": 1,
+            "source": stable["source"],
+            "conversation": {"scope": inputs["scope"], "history": history,
+                             "messages": messages},
+            "observations": observations,
+            "other_scopes": [],
+            "task": None,
+            "attachments": {"image_refs": []},
+            "timing": inputs["clock"],
+        }
+        parsed = json.loads(serialized)
+        assert parsed == expected
+        assert list(parsed) == list(expected)
     assert before != after
 
 

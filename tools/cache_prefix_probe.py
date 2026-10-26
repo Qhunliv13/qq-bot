@@ -39,7 +39,7 @@ def synthetic_history():
         for index in range(124)]
 
 
-async def probe(plugin, output, rounds):
+async def probe(plugin, output, rounds, history_mode="sliding"):
     """Compare both orders per round and capture actual allowlisted provider usage."""
     module = load_plugin(plugin)
     from release_probe_plugin.conversation_context import build_context, system_prompt
@@ -59,7 +59,7 @@ async def probe(plugin, output, rounds):
 
     model_usage.log_usage = record
     report = {"real_model": True, "qq_messages_sent": 0, "tool_effects": 0,
-              "same_semantic_fields": True, "sliding_history": True, "cache_flushed": False,
+              "same_semantic_fields": True, "history_mode": history_mode, "cache_flushed": False,
               "rows": [], "summaries": {}}
     try:
         for index in range(rounds):
@@ -68,8 +68,11 @@ async def probe(plugin, output, rounds):
                         "body": "仅作缓存对照，不调用工具。请只回答17乘23的结果。", "mentions": [], "quote": None}]
             observations = [{"tool_name": "synthetic_record", "status": "success", "result": {
                 "dataset": "offline-cache-probe", "description": "先前读取的隔离数据，非新动作的完成证据。" * 80}}]
-            optimized = build_context(scope="isolated-cache-prefix-v2", messages=current,
-                history=history[index:index+120], clock=clock, observations=observations)
+            # Separate pre-rollover append-only traffic from rolling history instead
+            # of attributing both to the clock placement change.
+            current_history = history[index:index+120] if history_mode == "sliding" else history[:118+index]
+            optimized = build_context(scope="isolated-cache-prefix-v3", messages=current,
+                history=current_history, clock=clock, observations=observations)
             data = json.loads(optimized)
             variants = {"before": old_order(data), "after": optimized}
             # Alternate order to avoid always giving one variant the second call.
@@ -99,10 +102,11 @@ def main():
     parser.add_argument("--plugin", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--rounds", type=int, default=3)
+    parser.add_argument("--history-mode", choices=("sliding", "append"), default="sliding")
     args = parser.parse_args()
     if args.rounds < 1:
         parser.error("rounds must be positive")
-    asyncio.run(probe(args.plugin, args.output, args.rounds))
+    asyncio.run(probe(args.plugin, args.output, args.rounds, args.history_mode))
 
 
 if __name__ == "__main__":

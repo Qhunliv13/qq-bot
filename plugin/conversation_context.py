@@ -41,11 +41,10 @@ def build_context(
     envelope = {
         "version": PROTOCOL_VERSION,
         "source": {"name": "conversation_context", "trust": "untrusted_data"},
-        # Persisted observations are usually unchanged across ordinary chat turns.
-        # Keep them before rolling history; a changing clock must not invalidate
-        # either prefix. This changes serialization order only, not source values.
-        "observations": [] if observations is None else observations,
+        # Preserve conversation-first source presentation; only volatile timing moves.
+        # Keep every supplied value unchanged rather than reshuffling source priority.
         "conversation": conversation,
+        "observations": [] if observations is None else observations,
         "other_scopes": [] if other_scopes is None else other_scopes,
         "task": task,
         "attachments": {"image_refs": [] if image_refs is None else image_refs},
