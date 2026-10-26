@@ -23,6 +23,7 @@ def build_context(
     other_scopes: Any = None,
     task: Any = None,
     image_refs: Any = None,
+    attachment_origins: Any = None,
     anchor_message_id: Any = None,
 ) -> str:
     """Serialize caller-provided JSON data with distinct origins and no I/O.
@@ -52,6 +53,10 @@ def build_context(
         # that can be reused. Never freeze or round time to simulate cache hits.
         "timing": clock,
     }
+    if attachment_origins is not None:
+        # Optional provenance remains source data; absent callers keep their exact
+        # established envelope and no publisher is inferred from an image subject.
+        envelope["attachments"]["origins"] = attachment_origins
     return json.dumps(envelope, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
 
 

@@ -281,7 +281,7 @@ def test_request_context_frozen_history_current_identity_and_source_data(product
     assert prompt.count("current-nonce") == 1
     assert current["sender"] == {"id": "10001", "display_name": "Current speaker", "role": "member"}
     assert current["body"] == "current-nonce"
-    assert current["quote"] == {"id": "", "sender": {"id": "", "display_name": "Other speaker"}, "body": "quoted-nonce"}
+    assert current["quote"] == {"id": "", "sender": {"id": "", "display_name": "Other speaker", "role": "unknown"}, "body": "quoted-nonce"}
     assert current["mentions"] == [{"id": "80001", "display_name": ""}]
     assert current["id"] == conversation["anchor"]["message_id"] == "1234"
     assert envelope["attachments"]["image_refs"] == ["https://offline.invalid/quoted.png", "local.png"]

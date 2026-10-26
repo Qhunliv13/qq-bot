@@ -787,6 +787,27 @@ class HiganPlugin(Star):
         records = [dict(record, sender=dict(record["sender"],
             role="owner" if str(record["sender"].get("id")) in OWNER_QQS else "member"))
             for record in records]
+        from .attachment_sources import collect_sources
+        sources = turn.get("image_sources")
+        if sources is None:
+            sources = collect_sources(event)
+        origins = []
+        for item in sources:
+            source = dict(item["source"])
+            sender = dict(source.get("sender") or {})
+            identity = str(sender.get("id") or "")
+            sender["role"] = ("owner" if identity in OWNER_QQS else "member") if identity and identity != "0" else "unknown"
+            source["sender"] = sender
+            origins.append({"ref": item["ref"], "source": source})
+        turn["image_sources"] = origins
+        for record in records:
+            if record.get("quote"):
+                quote = dict(record["quote"])
+                sender = dict(quote.get("sender") or {})
+                identity = str(sender.get("id") or "")
+                sender["role"] = ("owner" if identity in OWNER_QQS else "member") if identity and identity != "0" else "unknown"
+                quote["sender"] = sender
+                record["quote"] = quote
         observations = []
         try:
             observations = self._tool_evidence().recent(group)
@@ -796,6 +817,7 @@ class HiganPlugin(Star):
             clock=turn.get("clock", self._clock_context()), observations=observations,
             other_scopes=turn.get("other_scopes"), task=turn.get("task"),
             image_refs=turn.get("image_refs", self._image_refs(event)),
+            attachment_origins=origins if origins else None,
             anchor_message_id=str(getattr(getattr(event, "message_obj", None), "message_id", "") or ""))
 
     def _record_visible_reply(self, group: str, text: str) -> None:
@@ -845,40 +867,9 @@ class HiganPlugin(Star):
         return ""
 
     def _image_refs(self, event: AstrMessageEvent) -> list[str]:
-        """取本条消息里的图 + **被引用消息里的图**。
-
-        用户 2026-09-19 要求"可以主动看某个图"：群里常见用法是**引用一张图**再问
-        "这是什么"，此时本条消息里没有图，只看本条就什么都看不见（之前的缺陷）。
-        """
-        refs: list[str] = []
-        for comp in event.get_messages():
-            if isinstance(comp, Image):
-                ref = self._ref_of(comp)
-                if ref:
-                    refs.append(ref)
-            elif isinstance(comp, Reply):
-                # 被引用消息的完整消息段列表就在 Reply.chain 里（含图片）
-                for sub in (getattr(comp, "chain", None) or []):
-                    if isinstance(sub, Image):
-                        ref = self._ref_of(sub)
-                        if ref:
-                            refs.append(ref)
-        # Forwarded images are not top-level AstrBot Image components. Their
-        # parsed metadata remains attached to the exact source event, not a group
-        # global that could accidentally substitute another sender's pictures.
-        forwarded = getattr(event, "_higan_forward_context", {}) or {}
-        for item in forwarded.get("items") or []:
-            for media in item.get("media") or []:
-                if media.get("type") != "image":
-                    continue
-                ref = str(media.get("url") or media.get("file") or "")
-                if ref and ref not in refs:
-                    refs.append(ref)
-        nontext = getattr(event, "_higan_nontext_context", {}) or {}
-        for ref in nontext.get("image_refs") or []:
-            if ref and ref not in refs:
-                refs.append(ref)
-        return refs
+        """Project visual refs from the single source-aware collector, keeping order."""
+        from .attachment_sources import collect_sources
+        return list(dict.fromkeys(record["ref"] for record in collect_sources(event)))
 
     def _remember_images(self, group: str, refs: list[str]) -> None:
         """记住群里最近出现过的图，供"看看刚才那张图"这类请求使用。"""
@@ -1300,15 +1291,15 @@ class HiganPlugin(Star):
                         from .message_batch import collect_batch
                         batch = collect_batch(entries)
                         ev, txt = batch["event"], batch["text"]
-                        refs = []
-                        for item in entries:
-                            for ref in self._image_refs(item[0]):
-                                if ref not in refs:
-                                    refs.append(ref)
+                        from .attachment_sources import collect_sources
+                        sources = [source for item in entries for source in collect_sources(item[0])]
+                        refs = list(dict.fromkeys(source["ref"] for source in sources))
+                        selected_refs = refs[-MAX_IMAGES_PER_CALL:]
+                        sources = [source for source in sources if source["ref"] in selected_refs]
                         self._turn_context = getattr(self, "_turn_context", {})
                         self._turn_context[group] = {"history": batch["history"],
                             "clock": self._clock_context(), "messages": batch["records"],
-                            "image_refs": refs[-MAX_IMAGES_PER_CALL:]}
+                            "image_refs": selected_refs, "image_sources": sources}
                         logger.info("[higan] 群 %s 合批裁决：%d 条消息，一次模型机会", group, len(entries))
                         try:
                             await self._handle_one(ev, group, txt, batch["has_image"], batch["woken"])
@@ -2085,15 +2076,17 @@ class HiganPlugin(Star):
         base, key, model = self._her_llm_config()
         if not base or not key:
             return ""
-        # [string-content] 无图时用字符串（数组形式会被上游 400 ✗）
-        if image_urls:
-            content: object = [{"type": "text", "text": prompt}]
-            for _ref in image_urls:
-                _url = self._as_llm_url(_ref)
-                if _url:
-                    content.append({"type": "image_url", "image_url": {"url": _url}})
-        else:
-            content = prompt
+        # Native and no-tools paths share identical image/source assembly. Keep
+        # string content when no image converts, preserving the existing wire shape.
+        from .image_transcript import with_images
+        try:
+            origins = json.loads(prompt).get("attachments", {}).get("origins")
+        except (ValueError, AttributeError, TypeError):
+            origins = None
+        messages = with_images([{"role": "user", "content": prompt}], image_urls,
+                               self._as_llm_url, len(image_urls), initial=True,
+                               source_records=origins)
+        content = messages[0]["content"]
         payload = {
             "model": model or "deepseek-v4.1-flash-1017",
             "messages": [{"role": "system", "content": system},
@@ -2135,9 +2128,14 @@ class HiganPlugin(Star):
         # Native continuations already own frozen images; never reconvert/rewrite their prefix.
         if messages is None:
             from .image_transcript import with_images
+            try:
+                origins = json.loads(prompt).get("attachments", {}).get("origins")
+            except (ValueError, AttributeError, TypeError):
+                origins = None
             request_messages = with_images([
                 {"role": "system", "content": system}, {"role": "user", "content": prompt}],
-                image_urls, self._as_llm_url, MAX_IMAGES_PER_CALL, initial=True)
+                image_urls, self._as_llm_url, MAX_IMAGES_PER_CALL, initial=True,
+                source_records=origins)
         else:
             request_messages = list(messages)
         payload = {
@@ -3140,7 +3138,8 @@ class HiganPlugin(Star):
             if not images_initialized:
                 # Enrich the loop's original user exactly once, before its first request.
                 messages[:] = with_images(messages, initial_refs, self._as_llm_url,
-                                          MAX_IMAGES_PER_CALL, initial=True)
+                                          MAX_IMAGES_PER_CALL, initial=True,
+                                          source_records=turn.get("image_sources", []))
                 images_initialized = True
             else:
                 # The loop has appended every tool result; new images cannot break tool pairing.

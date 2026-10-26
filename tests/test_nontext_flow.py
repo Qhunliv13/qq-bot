@@ -84,8 +84,10 @@ def _request_context(requests):
     content = users[0]["content"]
     if isinstance(content, str):
         return json.loads(content), []
-    assert [part["type"] for part in content].count("text") == 1
     texts = [part["text"] for part in content if part["type"] == "text"]
+    assert texts, "Original context must remain the first text part"
+    for label in texts[1:]:
+        assert json.loads(label)["source"] == "attachment_provenance"
     images = [part["image_url"]["url"] for part in content if part["type"] == "image_url"]
     return json.loads(texts[0]), images
 
