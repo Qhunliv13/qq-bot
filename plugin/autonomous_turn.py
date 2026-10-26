@@ -7,7 +7,7 @@ import asyncio
 from copy import deepcopy
 
 from .task_event import TaskEvent
-from .reply_selection import is_silence
+from .reply_selection import decode_reply, is_silence
 
 
 class AutonomyEvent(TaskEvent):
@@ -97,11 +97,15 @@ async def run_turn(plugin, scope, triggers, controller):
                 return {"status": "deferred", "reason": "opportunity_changed", "scope": scope}
             contexts[scope]["trigger"]["events"] = deepcopy(started)
             event = AutonomyEvent(plugin, scope, origin, started)
-            text = await plugin._decide_tools_first(event, scope, "", False)
+            raw = await plugin._decide_tools_first(event, scope, "", False)
+            selection = decode_reply(raw, [], allow_unattributed=True)
+            if selection["error"]:
+                return {"status": "failed", "reason": "reply_protocol_invalid", "scope": scope}
+            text = selection["text"]
             if is_silence(text):
                 return {"status": "completed", "scope": scope, "delivered": False}
             # Normal delivery rechecks the current policy and records actual visibility.
-            delivered = await plugin._send(event, scope, text)
+            delivered = await plugin._send(event, scope, text, decoded=True)
             if delivered is None or delivered is False:
                 return {"status": "failed", "reason": "delivery_not_confirmed", "scope": scope}
             return {"status": "completed", "scope": scope, "delivered": True}

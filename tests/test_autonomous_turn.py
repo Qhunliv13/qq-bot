@@ -44,8 +44,9 @@ def setup_turn(modules, tmp_path):
         calls.append((event, scope, text, has_image, dict(plugin._turn_context[scope])))
         return ""
 
-    async def send(event, scope, text):
-        """Record transport without producing external effects or duplicate history writes."""
+    async def send(event, scope, text, *, decoded=False):
+        """Verify one decoder boundary before transport, without external effects."""
+        assert decoded is True
         calls.append(("send", scope, text))
         return text
 
@@ -172,8 +173,9 @@ def test_failed_delivery_not_reported_as_success(modules, setup_turn):
         """Produce text that still requires normal confirmed delivery."""
         return "result"
 
-    async def blocked(*args):
-        """Represent the existing sender's lack of confirmed delivery."""
+    async def blocked(*args, decoded=False):
+        """Represent failed transport after exactly one reply protocol decoding."""
+        assert decoded is True
         return None
 
     plugin._decide_tools_first, plugin._send = decide, blocked

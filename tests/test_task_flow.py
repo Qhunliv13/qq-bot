@@ -165,8 +165,9 @@ def test_task_loop_claims_before_execution_marks_only_own_task(production, monke
             raise asyncio.CancelledError()
         return "confirmed task answer"
 
-    async def send(event, scope, text):
-        """Expose delivery ordering so failed sends cannot receive success acknowledgement."""
+    async def send(event, scope, text, *, decoded=False):
+        """Expose delivery ordering and verify task protocol is decoded exactly once."""
+        assert decoded is True
         assert isinstance(event, TaskEvent) and event.task["id"] == "owned"
         assert scope == "42" and text == "confirmed task answer"
         trace.append(("send", event.task["id"]))

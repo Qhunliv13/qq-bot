@@ -213,3 +213,132 @@ def test_parenthetical_sentinel_keeps_target_validation_first(targets):
     assert result["text"] == ""
     assert result["quote_id"] is None
     assert result["error"] == "invalid_reply_targets"
+
+
+@pytest.mark.parametrize("records", [None, []])
+@pytest.mark.parametrize("text", [
+    "", " \t\r\n", "SILENT", "silent", " SiLeNt! \n", "。SILENT！",
+    '"SILENT"', '""', '" \\tSiLeNt。\\n "', "（SILENT）", "(silent)",
+    " \t（ SiLeNt! ）\n", "( silent。 )", "（SILENT）！", ".(SILENT).",
+])
+def test_unattributed_empty_selection_accepts_silence_forms(records, text):
+    """Explicit no-batch tasks consume structured silence without producing quotes."""
+    raw = json.dumps({"reply_to": [], "text": text})
+    assert is_silence(raw) is False
+    result = decode_reply(raw, records, allow_unattributed=True)
+    assert result == {"text": "", "reply_to": [], "quote_id": None,
+                      "structured": True, "error": None}
+
+
+@pytest.mark.parametrize("records", [None, []])
+@pytest.mark.parametrize("text", ["自主任务完成", "I prefer silent mode", "SILENT?", "（SILENT?)"])
+def test_unattributed_empty_selection_allows_message(records, text):
+    """A no-current-record task may send literal prose without invented attribution."""
+    raw = json.dumps({"reply_to": [], "text": text, "extra": "unchanged"})
+    result = decode_reply(raw, records, allow_unattributed=True)
+    assert result == {"text": text, "reply_to": [], "quote_id": None,
+                      "structured": True, "error": None}
+
+
+@pytest.mark.parametrize("records", [None, []])
+@pytest.mark.parametrize("targets", [
+    [""], ["999"], [101], [True], [None], [[]], [{}], ["", "999"],
+    "", "101", None, {}, False, 0,
+])
+@pytest.mark.parametrize("text", ["", "SILENT", "（silent）", "task completed"])
+def test_unattributed_targets_cannot_name_any_message(records, targets, text):
+    """Empty/unknown IDs and wrong container types fail even for silence text."""
+    raw = json.dumps({"reply_to": targets, "text": text})
+    result = decode_reply(raw, records, allow_unattributed=True)
+    assert result == {"text": "", "reply_to": [], "quote_id": None,
+                      "structured": True, "error": "invalid_reply_targets"}
+
+
+@pytest.mark.parametrize("records", [None, []])
+@pytest.mark.parametrize("text", [None, True, 0, [], {"text": "SILENT"}])
+def test_unattributed_text_must_be_string(records, text):
+    """No-batch permission never widens the structured text schema."""
+    raw = json.dumps({"reply_to": [], "text": text})
+    result = decode_reply(raw, records, allow_unattributed=True)
+    assert result["structured"] is True
+    assert result["error"] == "invalid_reply_targets"
+    assert result["text"] == ""
+    assert result["quote_id"] is None
+
+
+@pytest.mark.parametrize("records", [None, []])
+@pytest.mark.parametrize("raw", [
+    '{"action":"silent"}', '{"text":"SILENT"}', '{"reply_to":[]}',
+    '[{"reply_to":[],"text":""}]',
+    '```json\n{"reply_to":[],"text":""}\n```',
+    'Here is my response: {"reply_to":[],"text":""}',
+    json.dumps('{"reply_to":[],"text":""}'),
+])
+def test_unattributed_mode_preserves_nonprotocol_json_and_wrappers(records, raw):
+    """Only a direct object containing both reserved keys opts into the schema."""
+    result = decode_reply(raw, records, allow_unattributed=True)
+    assert result == {"text": raw, "reply_to": [], "quote_id": None,
+                      "structured": False, "error": None}
+
+
+@pytest.mark.parametrize("records", [None, []])
+@pytest.mark.parametrize("text", [
+    '{"reply_to":[],"text":""}', '{"reply_to":[],"text":"SILENT"}',
+    '{"reply_to":["999"],"text":"literal nested reply"}',
+    json.dumps('{"reply_to":[],"text":""}'),
+])
+def test_unattributed_structured_text_is_unwrapped_once_only(records, text):
+    """Literal JSON within structured text is content, never another reply envelope."""
+    raw = json.dumps({"reply_to": [], "text": text})
+    result = decode_reply(raw, records, allow_unattributed=True)
+    assert result == {"text": text, "reply_to": [], "quote_id": None,
+                      "structured": True, "error": None}
+
+
+@pytest.mark.parametrize("records", [None, []])
+@pytest.mark.parametrize("text, expected", [
+    ("[quote:999]自主任务完成", "自主任务完成"),
+    ("[quote:999] SILENT", " SILENT"),
+    ("[quote:999]", ""),
+])
+def test_unattributed_structured_quote_cannot_fabricate_attribution(records, text, expected):
+    """Strip legacy quote markers only after validating the original structured text."""
+    raw = json.dumps({"reply_to": [], "text": text})
+    result = decode_reply(raw, records, allow_unattributed=True)
+    assert result == {"text": expected, "reply_to": [], "quote_id": None,
+                      "structured": True, "error": None}
+    legacy = decode_reply(text, records, allow_unattributed=True)
+    assert legacy["text"] == text
+    assert legacy["quote_id"] == "999"
+
+
+@pytest.mark.parametrize("targets, text, expected_error", [
+    ([], "", None), ([], "SILENT", "invalid_reply_targets"),
+    ([], "ordinary reply", "invalid_reply_targets"),
+    ([""], "", "invalid_reply_targets"), (["999"], "SILENT", "invalid_reply_targets"),
+    (["101"], "reply", None), (["101"], "SILENT", None),
+])
+def test_unattributed_opt_in_does_not_change_current_batch_rules(targets, text, expected_error):
+    """A real current batch always retains its existing required-target semantics."""
+    raw = json.dumps({"reply_to": targets, "text": text})
+    records = [{"id": "101"}, {"id": "102"}]
+    original = decode_reply(raw, records)
+    opted_in = decode_reply(raw, records, allow_unattributed=True)
+    assert opted_in == original
+    assert opted_in["error"] == expected_error
+
+
+@pytest.mark.parametrize("records", [None, []])
+@pytest.mark.parametrize("text", ["", "SILENT", "ordinary task message"])
+def test_default_no_batch_empty_targets_stay_legacy(records, text):
+    """Empty-target envelopes are still literal JSON unless permission is explicit."""
+    raw = json.dumps({"reply_to": [], "text": text})
+    result = decode_reply(raw, records)
+    assert result == {"text": raw, "reply_to": [], "quote_id": None,
+                      "structured": False, "error": None}
+
+
+def test_unattributed_opt_in_is_keyword_only():
+    """Callers must explicitly name the permission rather than pass an ambiguous bool."""
+    with pytest.raises(TypeError):
+        decode_reply('{"reply_to":[],"text":""}', [], True)

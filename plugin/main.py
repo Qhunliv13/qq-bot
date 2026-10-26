@@ -1460,7 +1460,7 @@ class HiganPlugin(Star):
                 if not reply:
                     return
         await self._send(event, group, reply,
-                            quote_id=getattr(self, "_last_quote", None))
+                            quote_id=getattr(self, "_last_quote", None), decoded=True)
 
     @staticmethod
     def _to_plain(reply: str) -> str:
@@ -2868,7 +2868,12 @@ class HiganPlugin(Star):
         scope = str(task.get("scope") or "")
         event = TaskEvent(self, task)
         text = str(task.get("resume_prompt") or task.get("goal") or task.get("title") or "")
-        return await self._decide_tools_first(event, scope, text, False, task_context=task)
+        from .reply_selection import decode_reply
+        raw = await self._decide_tools_first(event, scope, text, False, task_context=task)
+        selection = decode_reply(raw, [], allow_unattributed=True)
+        if selection["error"]:
+            raise RuntimeError("task_reply_protocol_invalid")
+        return selection["text"]
 
     async def _task_loop(self) -> None:
         """Claim one durable task, serialize desktop access, and acknowledge only its own outcome."""
@@ -2897,7 +2902,7 @@ class HiganPlugin(Star):
                             scope = str(task.get("scope") or "")
                             if text and scope:
                                 from .task_event import TaskEvent
-                                delivered = await self._send(TaskEvent(self, task), scope, text)
+                                delivered = await self._send(TaskEvent(self, task), scope, text, decoded=True)
                                 if not delivered:
                                     raise RuntimeError("task_reply_delivery_failed")
                             tasks.mark(task["id"], text[:200], success=True, claim_id=task["claim_id"])
@@ -3350,7 +3355,7 @@ class HiganPlugin(Star):
         return visible
 
     async def _send(self, event: AstrMessageEvent, group: str, reply: str,
-                    quote_id=None) -> str | None:
+                    quote_id=None, *, decoded: bool = False) -> str | None:
         """发送回复：**引用被回复的消息** + 文字 + 可选表情包（**发前先看一眼**）。
 
         引用（QQ 的"回复某条消息"）很关键：快速连发时，光看内容分不清在回哪一句，
@@ -3361,7 +3366,18 @@ class HiganPlugin(Star):
         `stop_event()`（用来拦掉默认 LLM），管线会中止、RespondStage 不会执行，
         `set_result` 的结果就发不出去了。`event.send` 是官方命令插件同样在用的直接发送。
         """
-        from .reply_selection import is_silence
+        from .reply_selection import decode_reply, is_silence
+        if not decoded:
+            # Every raw send entry shares one protocol decoder. An empty current
+            # batch may produce unattributed autonomous text, never fabricated IDs.
+            # Already-decoded text is not parsed again: literal JSON examples stay literal.
+            records = ((getattr(self, "_turn_context", {}) or {}).get(group, {}).get("messages") or [])
+            selection = decode_reply(reply, records, allow_unattributed=not records)
+            if selection["error"]:
+                logger.warning("[higan] 发送出口拒绝无效回复协议")
+                return None
+            reply = selection["text"]
+            quote_id = selection.get("quote_id") or quote_id
         if is_silence(reply) or not self._policy_allows(event, group):
             return None
         # Accepted later chat is queued; it cannot cancel an active operation or delivery.

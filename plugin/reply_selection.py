@@ -61,12 +61,14 @@ def _message_id(value: Any) -> str | None:
     return result if result else None
 
 
-def decode_reply(raw: str | None, records: Any) -> dict:
+def decode_reply(raw: str | None, records: Any, *, allow_unattributed: bool = False) -> dict:
     """Return text, reply_to, quote_id, structured, and error for one final reply.
 
     Only a JSON object with explicit ``reply_to`` and ``text`` keys enters the
-    structured protocol, and only when a current message batch exists. A task
-    with no current records retains legacy text, including JSON-shaped content.
+    structured protocol when a current batch exists or ``allow_unattributed``
+    explicitly opts a no-current-record task in. By default, no-current-record
+    replies retain legacy text, including JSON-shaped content. Opted-in tasks
+    require an empty target list and string text; they cannot fabricate quotes.
     Structured targets must all name actual current record IDs; invalid output
     fails closed rather than selecting a fabricated target or rerunning a model.
     Plain prose never implies a selection. Its explicit legacy quote may refer
@@ -85,11 +87,11 @@ def decode_reply(raw: str | None, records: Any) -> dict:
         payload = json.loads(text)
     except (json.JSONDecodeError, TypeError):
         payload = None
-    if records and isinstance(payload, dict) and "reply_to" in payload and "text" in payload:
+    if (records or allow_unattributed) and isinstance(payload, dict) and "reply_to" in payload and "text" in payload:
         result["structured"] = True
         targets = payload["reply_to"]
         reply_text = payload["text"]
-        current_ids = {_message_id(record.get("id")) for record in records
+        current_ids = {_message_id(record.get("id")) for record in (records or [])
                        if isinstance(record, dict)}
         current_ids.discard(None)
         valid = isinstance(targets, list) and isinstance(reply_text, str)
@@ -104,8 +106,11 @@ def decode_reply(raw: str | None, records: Any) -> dict:
                     break
                 if message_id not in selected:
                     selected.append(message_id)
-            # Nonempty prose without explicit current attribution is not valid.
-            valid = valid and (bool(selected) or not reply_text.strip())
+            # Current-batch replies still require attribution for nonempty text.
+            # Explicit no-batch tasks can speak without it, but the empty ID set
+            # above rejects every target rather than guessing a historical one.
+            if records:
+                valid = valid and (bool(selected) or not reply_text.strip())
         if not valid:
             result.update(text="", error="invalid_reply_targets")
             return result
