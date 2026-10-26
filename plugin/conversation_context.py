@@ -22,6 +22,7 @@ def build_context(
     observations: Any = None,
     other_scopes: Any = None,
     task: Any = None,
+    trigger: Any = None,
     image_refs: Any = None,
     attachment_origins: Any = None,
     anchor_message_id: Any = None,
@@ -53,6 +54,8 @@ def build_context(
         # that can be reused. Never freeze or round time to simulate cache hits.
         "timing": clock,
     }
+    if trigger is not None:
+        envelope["trigger"] = trigger
     if attachment_origins is not None:
         # Optional provenance remains source data; absent callers keep their exact
         # established envelope and no publisher is inferred from an image subject.

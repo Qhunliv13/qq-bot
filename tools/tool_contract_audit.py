@@ -35,11 +35,22 @@ if str(ROOT / "tests") not in sys.path:
     sys.path.insert(0, str(ROOT / "tests"))
 import test_production_integration as integration  # noqa: E402
 from plugin import browser_eval, memory, tasks  # noqa: E402
+from plugin.autonomy import AutonomousController  # noqa: E402
+from plugin.tool_catalog import NATIVE_TOOL_COUNT  # noqa: E402
+from plugin.qq_social import schema as social_schema  # noqa: E402
+from plugin.tool_context import redact  # noqa: E402
 
 # Every distinct advertised name must be reviewed here; schema additions cannot
 # silently acquire a generic mocked success. Strings resembling code are inert
 # payloads only: all VM transports and task execution are blocked before use.
 CASES = {
+    "autonomy_status": {},
+    "autonomy_schedule": {"scope": "42", "interval_seconds": 600, "enabled": True},
+    "qq_account_info": {},
+    "qq_set_signature": {"signature": "contract signature", "operation_id": "audit-signature"},
+    "qq_publish_post": {"content": "contract post", "visibility": "private", "operation_id": "audit-post"},
+    "qq_set_profile": {"nickname": "contract fixture", "operation_id": "audit-profile"},
+    "qq_social_status": {},
     "web_search": {"query": "contract nonce"},
     "web_fetch": {"url": "https://audit.invalid/page"},
     "tool_observations": {"limit": 8},
@@ -85,6 +96,14 @@ CASES = {
     "task_update": {"id": "SEEDED", "brief": "contract updated"},
 }
 FOREGROUND = {"group_files", "group_file_download"}
+# These expectations are independent of the social router and its schema metadata.
+EXPECTED_SOCIAL_ACTIONS = {
+    "qq_account_info": ["get_login_info", "get_stranger_info"],
+    "qq_set_signature": ["set_self_longnick", "get_login_info", "get_stranger_info"],
+    "qq_publish_post": ["send_qzone_msg"],
+    "qq_set_profile": ["set_qq_profile"],
+    "qq_social_status": [],
+}
 # Expected boundary contracts are independent of the production mapping AST: a
 # typo that routes one valid name to a different valid endpoint must be visible.
 EXPECTED_VM_PATHS = {
@@ -117,6 +136,14 @@ def schema_errors(schema):
 
     def check(node, path):
         """Check nested types, required names and enum shape deterministically."""
+        if isinstance(node, dict) and "anyOf" in node:
+            # Imported social target IDs deliberately support string/integer unions.
+            if not isinstance(node["anyOf"], list) or not node["anyOf"]:
+                errors.append(path + ":invalid_any_of")
+            else:
+                for index, branch in enumerate(node["anyOf"]):
+                    check(branch, path + ".anyOf[" + str(index) + "]")
+            return
         if not isinstance(node, dict) or node.get("type") not in {
                 "object", "array", "string", "integer", "number", "boolean", "null"}:
             errors.append(path + ":invalid_type")
@@ -187,6 +214,13 @@ def _handler_inventory():
                         result.setdefault(key.value, {"handler": "_dispatch_tool -> _vm_tool", "branch_line": key.lineno})
     for name in FOREGROUND:
         result[name] = {"handler": "_decide_tools_first._execute_tool (OneBot foreground)"}
+    # The imported schema owns its dispatcher; the native parent branch is shared.
+    social_branch = next(node for node in ast.walk(klass)
+                         if isinstance(node, ast.If) and "social_schema" in ast.dump(node.test))
+    for item in social_schema():
+        result[item["function"]["name"]] = {
+            "handler": "_dispatch_tool", "branch_line": social_branch.lineno,
+            "body_lines": [child.lineno for child in social_branch.body]}
     return result
 
 
@@ -198,8 +232,11 @@ class AuditHarness:
         self.root.mkdir(parents=True, exist_ok=True)
         self.edges, self.provider_replies, self.requests = [], [], []
         self.denied = []
+        self.signature = "contract signature"
         self.make_plugin = integration.production.__wrapped__(self.root, monkeypatch)
         self.plugin = self.make_plugin()
+        self.controller = AutonomousController(self.root / "autonomy.json")
+        self.plugin._autonomy_controller = lambda: self.controller
         namespace = self.plugin._dispatch_tool.__globals__
         namespace.update(BASE_DIR=str(ROOT / "plugin"), STICKER_DIR=self.root / "stickers")
         namespace["open"] = self.safe_open
@@ -280,7 +317,17 @@ class AuditHarness:
 
     def onebot(self, action, params):
         """Represent the synchronous OneBot edge without a socket."""
-        self.edges.append({"edge": "onebot_http", "action": action})
+        self.edges.append({"edge": "onebot_http", "action": action, "params": copy.deepcopy(params)})
+        if action == "set_self_longnick":
+            self.signature = params["longNick"]
+        social_data = {
+            "get_login_info": {"user_id": 90001, "nickname": "fixture"},
+            "get_stranger_info": {"long_nick": self.signature},
+            "set_self_longnick": None, "set_qq_profile": None,
+            "send_qzone_msg": {"tid": "offline-contract-post"},
+        }
+        if action in social_data:
+            return {"status": "ok", "retcode": 0, "data": copy.deepcopy(social_data[action])}
         return {"messages": [{"sender": {"nickname": "fixture"}, "message": [{"type": "text", "data": {"text": "contract"}}]}]}
 
     async def qq_send(self, *args):
@@ -329,10 +376,20 @@ class AuditHarness:
                 tasks.set_status(task["id"], "", "paused", "audit fixture")
             args["id"] = task["id"]
         event = integration.Event("contract audit")
+        # Identity is supplied only by the trusted fixture event, never tool arguments.
+        # This source owner ID remains independent of the production OWNER_QQS set.
+        if name in {"qq_set_signature", "qq_publish_post", "qq_set_profile", "autonomy_schedule"}:
+            event.get_sender_id = lambda: "2084526117"
         event.action_results = {
             "get_group_root_files": {"files": [{"file_name": "contract-nonce.txt", "file_id": "file-contract", "file_size": 10}], "folders": []},
             "get_group_file_url": {"url": "https://audit.invalid/file"},
             "get_forward_msg": self.onebot("fixture", {}),
+            # Social handlers require full native envelopes, not data-only stubs.
+            "get_login_info": {"status": "ok", "retcode": 0, "data": {"user_id": 90001, "nickname": "fixture"}},
+            "get_stranger_info": {"status": "ok", "retcode": 0, "data": {"long_nick": "contract signature"}},
+            "set_self_longnick": {"status": "ok", "retcode": 0, "data": None},
+            "set_qq_profile": {"status": "ok", "retcode": 0, "data": None},
+            "send_qzone_msg": {"status": "ok", "retcode": 0, "data": {"tid": "offline-contract-post"}},
         }
         return args, event
 
@@ -368,6 +425,7 @@ async def _audit(root, monkeypatch, batch_size):
     inventory = _handler_inventory()
     names = [schema["function"]["name"] for schema in effective]
     report = {"scope": "isolated executed-route contracts; external effects simulated, not validated",
+        "canonical_schema_count": NATIVE_TOOL_COUNT,
         "raw_schema_count": len(raw), "effective_schema_count": len(effective),
         "duplicate_schema_names": {name: count for name, count in counts.items() if count > 1},
         "unmapped_cases": sorted(set(names) - CASES.keys()), "stale_cases": sorted(CASES.keys() - set(names)),
@@ -405,8 +463,9 @@ async def _audit(root, monkeypatch, batch_size):
             else:
                 result = await harness.plugin._dispatch_tool(name, args, "42", event=event)
             entry["executed"] = True
+            # Grade the actual receipt before redaction, retaining no native secrets.
             entry["result_quality"] = _quality(result)
-            entry["result"] = result
+            entry["result"] = redact(result)
         except Exception as exc:
             entry["exception"] = {"type": type(exc).__name__, "message": str(exc)[:240]}
         finally:
@@ -414,7 +473,16 @@ async def _audit(root, monkeypatch, batch_size):
         entry["executed_source_lines"] = [{"function": function, "line": line} for function, line in sorted(executed_lines)]
         entry["stubbed_edges"] = harness.edges[start:]
         entry["onebot_actions"] = [action for action, _ in event.actions]
-        if name in EXPECTED_VM_PATHS:
+        if name in EXPECTED_SOCIAL_ACTIONS:
+            native_edges = [edge for edge in entry["stubbed_edges"] if edge["edge"] == "onebot_http"]
+            entry["boundary_contract_matches"] = [edge["action"] for edge in native_edges] == EXPECTED_SOCIAL_ACTIONS[name]
+            if name == "qq_set_signature":
+                entry["boundary_contract_matches"] = entry["boundary_contract_matches"] and native_edges[0]["params"] == {"longNick": args["signature"]} and result.get("verification") == {"state": "matched", "matched": True}
+            elif name == "qq_publish_post":
+                entry["boundary_contract_matches"] = entry["boundary_contract_matches"] and native_edges[0]["params"] == {"content": args["content"], "ugc_right": 64} and result.get("outcome") == "accepted" and result.get("tid") == "offline-contract-post"
+            elif name == "qq_set_profile":
+                entry["boundary_contract_matches"] = entry["boundary_contract_matches"] and native_edges[0]["params"] == {"nickname": args["nickname"]} and result.get("outcome") == "accepted"
+        elif name in EXPECTED_VM_PATHS:
             actual_paths = [edge["url"].removeprefix("http://127.0.0.1:18003")
                             for edge in entry["stubbed_edges"] if edge["edge"] == "vm_http_stub"]
             entry["boundary_contract_matches"] = actual_paths == [EXPECTED_VM_PATHS[name]]
@@ -435,11 +503,13 @@ async def _audit(root, monkeypatch, batch_size):
     for offset in range(0, len(names), batch_size):
         batch = [name for name in names[offset:offset + batch_size] if name in CASES]
         plugin = harness.make_plugin()
-        for attribute in ("manifest", "_tasks_mod", "_web_search", "_fetch_page", "_onebot_http", "_qq_send", "_deliver_media"):
+        for attribute in ("manifest", "_autonomy_controller", "_tasks_mod", "_web_search", "_fetch_page", "_onebot_http", "_qq_send", "_deliver_media"):
             setattr(plugin, attribute, getattr(harness.plugin, attribute))
         scope = str(4200 + offset)
         calls = [integration._call(name, harness.prepare(name)[0], "batch-%s-%s" % (offset, name)) for name in batch]
         event = harness.prepare("group_files")[1]
+        # The mixed batch contains owner-only mutations; use a genuine event identity.
+        event.get_sender_id = lambda: "2084526117"
         event.group = scope
         harness.provider_replies = [("discard tool draft", calls), ("Audit complete.", [])]
         request_start = len(harness.requests)

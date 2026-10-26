@@ -57,9 +57,23 @@ def test_catalog_exposes_unique_neutral_tool_schemas(report):
     """The common catalog now resolves legacy declarations before runtime exposure."""
     assert report["duplicate_schema_names"] == {}
     assert report["raw_schemas_unique"] is True
-    assert report["raw_schema_count"] == report["effective_schema_count"] == 64
+    assert report["raw_schema_count"] == report["effective_schema_count"] == AUDIT.NATIVE_TOOL_COUNT
     names = [tool["name"] for tool in report["tools"]]
     assert len(names) == len(set(names))
+
+
+def test_new_native_contracts_use_reviewed_receipts_and_actions(report):
+    """The seven additions execute trusted native routes, not generic success stubs."""
+    rows = {row["name"]: row for row in report["tools"]}
+    for name in {*AUDIT.EXPECTED_SOCIAL_ACTIONS, "autonomy_status", "autonomy_schedule"}:
+        assert rows[name]["handler_body_executed"], rows[name]
+        assert rows[name]["boundary_contract_matches"], rows[name]
+        assert rows[name]["result_quality"]["ok"] is True
+    assert rows["qq_set_signature"]["result"]["verification"] == {"state": "matched", "matched": True}
+    assert rows["qq_publish_post"]["result"]["outcome"] == "accepted"
+    assert rows["qq_publish_post"]["result"]["verification"]["published"] is None
+    assert rows["qq_social_status"]["result"]["runtime_verified"] is False
+    assert rows["autonomy_schedule"]["result"]["settings"]["interval_seconds"] == 600
 
 
 def test_schema_validator_detects_required_drift_and_type_errors():

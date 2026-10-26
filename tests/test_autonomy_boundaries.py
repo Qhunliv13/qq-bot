@@ -158,46 +158,53 @@ def test_observed_initialize_does_not_start_free_tick(production):
     assert "_free_tick" not in started and plugin._ready.is_set()
 
 
-def test_observed_bug_wake_at_same_time_next_day_never_refires(production):
-    """BUG: date-free group@HH:MM dedup treats next day's slot as already fired."""
+def test_observed_bug_wake_at_same_time_next_day_never_refires(production, tmp_path):
+    """Fixed regression: a daily wake is consumed once per date, not once forever."""
+    from datetime import datetime, timedelta, timezone
+    from plugin.autonomy import AutonomousController
+    from plugin.autonomous_turn import AutonomyEvent
+
     plugin = production()
     poll, namespace = _extra_method(plugin, "_poll_loop")
-    plugin._recent = {"42": ["harmless local history"]}
-    dates = iter(["2026-10-25", "2026-10-26"])
-    sampled_days, sent = [], []
-    config = json.dumps({"wake_at": {"42": ["09:00"]}})
+    zone = timezone(timedelta(hours=8))
+    days = [datetime(2026, 10, day, 9, tzinfo=zone).timestamp() for day in (25, 26)]
+    clock, calls = [days[0]], []
+    controller = AutonomousController(tmp_path / "autonomy.json", now=lambda: clock[0])
+    controller.observe("42", "offline-native:GroupMessage:42")
+    controller.schedule(enabled=False)
+    plugin._autonomy_controller = lambda: controller
+    config = json.load(io.StringIO('{"wake_at": {"42": ["09:00"]}}'))
+    plugin._group_policy = lambda scope: config
+    ticks = iter([days[0], days[0], days[1], days[1]])
 
     async def sleep(seconds):
-        """Sample two different simulated days, then stop the otherwise endless loop."""
+        """Repeat each date's slot to prove dedup while allowing the following date."""
+        assert seconds == 30
         try:
-            sampled_days.append(next(dates))
+            clock[0] = next(ticks)
         except StopIteration:
             raise asyncio.CancelledError
 
-    def clock_format(pattern):
-        """Both simulated days are the configured local wall-clock minute."""
-        assert pattern == "%H:%M"
-        return "09:00"
-
-    def local_open(path, *args, **kwargs):
-        """Only the expected policy read is available; never open real host config."""
-        assert path == "/root/higan/groups.json"
-        return io.StringIO(config)
-
-    async def model(*args):
-        """Return a deterministic visible choice without using any provider."""
-        return "local scheduled message"
-
-    async def send(*args):
-        """Record the attempted proactive delivery, never contact a transport."""
-        sent.append(args)
-        return {"ok": True}
+    async def model(event, scope, text, has_image):
+        """Inspect the actual typed autonomous entry without making a provider request."""
+        assert isinstance(event, AutonomyEvent)
+        assert scope == event.get_group_id() == "42"
+        assert event.unified_msg_origin == "offline-native:GroupMessage:42"
+        assert text == "" and not has_image
+        context = plugin._turn_context[scope]
+        assert context["messages"] == []
+        assert context["trigger"]["kind"] == "autonomous_opportunity"
+        calls.append(copy.deepcopy(context["trigger"]["events"]))
+        return "SILENT"
 
     namespace["asyncio"] = SimpleNamespace(sleep=sleep, CancelledError=asyncio.CancelledError)
-    namespace["time"] = SimpleNamespace(strftime=clock_format)
-    namespace["open"] = local_open
-    plugin._llm_plain, plugin._qq_send = model, send
+    plugin._decide_tools_first = model
     with pytest.raises(asyncio.CancelledError):
         asyncio.run(poll(plugin))
-    assert sampled_days == ["2026-10-25", "2026-10-26"]
-    assert len(sent) == 1 and plugin._wake_at_fired == {"42@09:00": True}
+    assert len(calls) == 2
+    assert [events[0]["kind"] for events in calls] == ["scheduled_time", "scheduled_time"]
+    assert [events[0]["event_id"] for events in calls] == [
+        "wake:42@09:00:2026-10-25", "wake:42@09:00:2026-10-26"]
+    assert controller.snapshot()["wake_slots"] == {"42@09:00": "2026-10-26"}
+    assert controller.opportunities(config) == []
+    assert plugin._turn_context == {}

@@ -783,7 +783,7 @@ class HiganPlugin(Star):
         history = list(turn.get("history", ()))
         from .message_batch import message_record
         from .conversation_context import build_context
-        records = turn.get("messages") or [message_record(event, text)]
+        records = turn["messages"] if "messages" in turn else [message_record(event, text)]
         records = [dict(record, sender=dict(record["sender"],
             role="owner" if str(record["sender"].get("id")) in OWNER_QQS else "member"))
             for record in records]
@@ -816,6 +816,7 @@ class HiganPlugin(Star):
         return build_context(scope=str(group), messages=records, history=history,
             clock=turn.get("clock", self._clock_context()), observations=observations,
             other_scopes=turn.get("other_scopes"), task=turn.get("task"),
+            trigger=turn.get("trigger"),
             image_refs=turn.get("image_refs", self._image_refs(event)),
             attachment_origins=origins if origins else None,
             anchor_message_id=str(getattr(getattr(event, "message_obj", None), "message_id", "") or ""))
@@ -1231,6 +1232,12 @@ class HiganPlugin(Star):
                 event.stop_event()
                 logger.info("[higan] source_notice attachment_history_only=True")
                 return
+            # Only real admitted chat can establish an authentic framework destination.
+            # State failures do not break foreground messages or fabricate an origin.
+            try:
+                self._autonomy_controller().observe(group, str(getattr(event, "unified_msg_origin", "") or ""))
+            except Exception as exc:
+                logger.warning("[higan] 自主会话来源未保存 type=%s", type(exc).__name__)
             # Compute wake eligibility now; reply probability applies once to the collected batch.
             _at_me_now = self._directly_mentioned(event)
             _woken_e = False
@@ -1730,6 +1737,7 @@ class HiganPlugin(Star):
                 "parameters": {"type": "object", "properties": props or {},
                                "required": required or []}}}
         from .tool_catalog import neutralize_schemas
+        from .qq_social import schema as social_schema
         return neutralize_schemas([
             _f("web_search", "搜索公开网页，返回来源标题、URL和摘要；按需要调用而非固定触发。",
                {"query": {"type": "string"}}, ["query"]),
@@ -1846,7 +1854,12 @@ class HiganPlugin(Star):
             _f("vm_slider_drag", "拟人拖拽：从 (x,y) 横向拖 distance 像素（过滑块用）",
                {"x": {"type": "integer"}, "y": {"type": "integer"},
                 "distance": {"type": "integer"}}, ["x", "y", "distance"]),
-        ] + list(self._task_tool_schemas()))
+            _f("autonomy_status", "查看主动观察的启用状态、间隔、下一次机会与已知会话范围。"),
+            _f("autonomy_schedule", "设置下一次主动观察时间、机会间隔或启用状态；不要求到点发言。",
+               {"scope": {"type": "string"}, "next_at": {"type": "number"},
+                "interval_seconds": {"type": "number"}, "enabled": {"type": "boolean"},
+                "reason": {"type": "string"}, "scopes": {"type": "array", "items": {"type": "string"}}}),
+        ] + list(self._task_tool_schemas()) + social_schema())
 
     def _as_llm_url(self, ref) -> str:
         """[img-url-fix] 把图片引用转成 LLM 能接受的 URL（data: / http(s)）✓。
@@ -1920,8 +1933,15 @@ class HiganPlugin(Star):
         import urllib.request
 
         try:
-            _url = "http://127.0.0.1:13000/"      # [onebot-local-url] 局部常量 ✓
-            payload = _json.dumps({"action": action, "params": params}).encode()
+            # Installed NapCat dispatches HTTP by /action; POST / can report
+            # status=ok with null data without executing the requested action.
+            # Restrict path syntax so an action can never change host or traverse.
+            if not isinstance(action, str) or not re.fullmatch(r"[A-Za-z0-9_]+", action):
+                raise ValueError("invalid_onebot_action")
+            if not isinstance(params, dict):
+                raise TypeError("onebot_parameters_must_be_object")
+            _url = "http://127.0.0.1:13000/" + action
+            payload = _json.dumps(params).encode("utf-8")
             req = urllib.request.Request(_url, data=payload, method="POST")
             req.add_header("Content-Type", "application/json")
             with urllib.request.urlopen(req, timeout=25) as resp:
@@ -1977,115 +1997,40 @@ class HiganPlugin(Star):
             logger.warning("[higan] 可选模型参数未加载：%s", type(exc).__name__)
         return extra
 
+    def _autonomy_controller(self):
+        """Use one persisted controller for real origins, opportunities and model rescheduling."""
+        from .autonomy import AutonomousController
+        if not hasattr(self, "_autonomy_state"):
+            self._autonomy_state = AutonomousController(Path(HIGAN_ROOT) / "autonomy.json")
+        return self._autonomy_state
+
     async def _poll_loop(self) -> None:
-        """Observe groups with configured periodic triggers through the common context contract."""
-        from .conversation_context import build_context, system_prompt
-        from .reply_selection import is_silence
-        while True:
+        """Offer scheduled and unprompted opportunities through the shared native tool loop.
+
+        A timer supplies observations, never an invented user command or mandatory
+        message. Busy foreground work retains priority; unapplied opportunities wait.
+        """
+        from .autonomous_turn import run_turn
+        while not getattr(self, "_stopping", False):
             try:
                 await asyncio.sleep(30)
-                conf = {}
-                try:
-                    with open("/root/higan/groups.json", encoding="utf-8") as handle:
-                        conf = json.load(handle)
-                except Exception:  # noqa: BLE001
-                    conf = {}
-                poll = (conf.get("poll_minutes") or {}) if isinstance(conf, dict) else {}
-                # [poll-heartbeat] 每轮心跳（证明循环在跑 ✓ 含条目数）
-                logger.info("[higan] 定时查看：心跳一轮（poll=%d 个）" % len(poll))
-
-                # [wake-at] 定点看一眼：wake_at = {"<群号>": ["09:00", "21:30"]}
-                try:
-                    _at_tbl = conf.get("wake_at") or {}
-                    _now_hm = time.strftime("%H:%M")
-                    _fired = getattr(self, "_wake_at_fired", None)
-                    if _fired is None:
-                        _fired = {}
-                        self._wake_at_fired = _fired
-                    for _g, _times in list(_at_tbl.items()):
-                        for _hm in (_times or []):
-                            if str(_hm).strip() != _now_hm:
-                                continue
-                            _key = "%s@%s" % (_g, _now_hm)
-                            if _fired.get(_key):
-                                continue
-                            _fired[_key] = True
-                            logger.info("[higan] 定点查看：群 %s 到点 %s（无论有无新消息）"
-                                        % (_g, _hm))
-                            if str(_g) in conf.get("mention_only", []) or str(_g) in conf.get("muted", []):
-                                continue
-                            _lines = list(self._recent.get(str(_g), []))[-20:]
-                            if not _lines:
-                                logger.info("[higan] 定点查看：该群还没有历史，跳过")
-                                continue
-                            _prompt = build_context(scope=str(_g), messages=[], history=_lines,
-                                clock={"sample": self._clock_context(), "trigger": "scheduled_time"})
-                            try:
-                                _out = await self._llm_plain(
-                                    system_prompt(self.persona), _prompt, [])
-                            except Exception as _exc:  # noqa: BLE001
-                                logger.warning("[higan] 定点查看决策失败：%r", str(_exc)[:100])
-                                continue
-                            _out = (_out or "").strip()
-                            if not _out or is_silence(_out):
-                                logger.info("[higan] 定点查看后选择沉默")
-                                continue
-                            try:
-                                await self._qq_send("group", _out, 0, str(_g))
-                                logger.info("[higan] 定点查看后发言：%s" % _out[:40])
-                            except Exception as _exc:  # noqa: BLE001
-                                logger.warning("[higan] 定点发言失败：%r", str(_exc)[:100])
-                    # 每小时清一次已触发标记，避免无限增长
-                    if len(_fired) > 500:
-                        _fired.clear()
-                except Exception as _aexc:  # noqa: BLE001
-                    logger.warning("[higan] 定点查看异常（继续）：%r", str(_aexc)[:100])
-
-                if not poll:
-                    continue
-                seen = getattr(self, "_poll_seen", None)
-                if seen is None:
-                    self._poll_seen = {}
-                    seen = self._poll_seen
-                now = time.time()
-                for group, mins in list(poll.items()):
-                    if str(group) in conf.get("mention_only", []) or str(group) in conf.get("muted", []):
-                        continue
-                    try:
-                        mins = max(1, int(mins))
-                    except Exception:  # noqa: BLE001
-                        continue
-                    last = float(seen.get(str(group)) or 0)
-                    if now - last < mins * 60:
-                        continue
-                    seen[str(group)] = now
-                    lines = list(self._recent.get(str(group), []))[-20:]
-                    # [poll-tick-log] 到点就先记一行（行数可能为 0 ✓ 便于确认定时器在跑）
-                    logger.info("[higan] 定时查看到点：群 %s（每 %d 分钟）｜历史 %d 行"
-                                % (group, mins, len(lines)))
-                    if not lines:
-                        continue
-                    prompt = build_context(scope=str(group), messages=[], history=lines,
-                        clock={"sample": self._clock_context(), "trigger": "poll_interval"})
-                    try:
-                        out = await self._llm_plain(
-                            system_prompt(self.persona), prompt, [])
-                    except Exception as exc:  # noqa: BLE001
-                        logger.warning("[higan] 定时查看决策失败：%r", str(exc)[:120])
-                        continue
-                    out = (out or "").strip()
-                    if not out or is_silence(out):
-                        logger.info("[higan] 定时查看后选择沉默 ✓")
-                        continue
-                    try:
-                        await self._qq_send("group", out, 0, str(group))
-                        logger.info("[higan] 定时查看后发言：%s" % out[:40])
-                    except Exception as exc:  # noqa: BLE001
-                        logger.warning("[higan] 定时发言失败：%r", str(exc)[:120])
+                if getattr(self, "_stopping", False):
+                    return
+                controller = self._autonomy_controller()
+                conf = self._group_policy("")
+                grouped = {}
+                for trigger in controller.opportunities(conf):
+                    grouped.setdefault(trigger["scope"], []).append(trigger)
+                for scope, triggers in grouped.items():
+                    if getattr(self, "_stopping", False):
+                        return
+                    result = await run_turn(self, scope, triggers, controller)
+                    logger.info("[higan] autonomy_turn status=%s triggers=%d",
+                                result.get("status"), len(triggers))
             except asyncio.CancelledError:
                 raise
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("[higan] 定时查看循环异常（继续）：%r", str(exc)[:120])
+            except Exception as exc:
+                logger.warning("[higan] 主动观察失败 type=%s", type(exc).__name__)
 
     async def _llm_plain(self, system: str, prompt: str, image_urls: list) -> str:
         """[direct-plain] 直连 relay 的纯文本对话（不带 tools / 不带思考参数 ✓）。
@@ -2297,6 +2242,54 @@ class HiganPlugin(Star):
         """统一工具入口；显式携带事件接口，工具结果不会改变用户身份。"""
         if not isinstance(args, dict):
             return {"ok": False, "error": "arguments_must_be_object"}
+        from .autonomous_turn import AutonomyEvent
+        from .qq_social import dispatch as social_dispatch, schema as social_schema
+        autonomous = isinstance(event, AutonomyEvent)
+        owner = str(event.get_sender_id() or "") in OWNER_QQS if event is not None else False
+        # Account-wide effects are owner-authorized or originate from our own
+        # typed autonomous turn, not a nickname, quoted text, JSON flag or tool result.
+        can_manage = owner or (autonomous and bool(event.unified_msg_origin)
+                               and self._policy_allows(event, scope))
+        if autonomous:
+            # Internal observation is not permission to rewrite the administrator's
+            # saved boundaries, impersonate wake people, or target unknown users.
+            if name == "group_policy" and str(args.get("mode") or "show") != "show":
+                return {"ok": False, "error": "autonomy_cannot_change_group_permissions"}
+            if name in ("wake_person_set", "wake_add", "wake_remove"):
+                return {"ok": False, "error": "autonomy_cannot_change_wake_permissions"}
+            if name in ("qq_send", "send_file", "send_shot"):
+                kind = str(args.get("kind") or ("private" if scope.startswith("private:") else "group"))
+                target = args.get("user_id") if kind == "private" else args.get("group_id")
+                destination = ("private:" if kind == "private" else "") + str(target or scope.split(":", 1)[-1])
+                if kind not in ("group", "private") or not self._autonomy_controller().origin(destination):
+                    return {"ok": False, "error": "autonomy_destination_not_observed"}
+                if not self._policy_allows(event, destination):
+                    return {"ok": False, "error": "destination_policy_denied"}
+        if name in {item["function"]["name"] for item in social_schema()}:
+            async def native_action(action, parameters):
+                """Use the existing native event bridge; never expose QQ session credentials."""
+                if event is None:
+                    raise RuntimeError("native_event_required")
+                # AstrBot strips the OneBot envelope. The existing local native
+                # HTTP bridge retains business status/retcode for write receipts;
+                # HTTP 200 alone must not claim that a social action was accepted.
+                return await asyncio.to_thread(self._onebot_http, action, parameters)
+            return await social_dispatch(name, args, native_action, can_write=can_manage,
+                                         audit_path=Path(HIGAN_ROOT) / "social.sqlite3")
+        if name in ("autonomy_status", "autonomy_schedule"):
+            controller = self._autonomy_controller()
+            if name == "autonomy_schedule":
+                if not can_manage:
+                    return {"ok": False, "error": "autonomy_management_not_authorized"}
+                try:
+                    return {"ok": True, "settings": controller.schedule(**args)}
+                except (ValueError, TypeError) as exc:
+                    return {"ok": False, "error": type(exc).__name__}
+            state = controller.snapshot()
+            # Origin strings are transport metadata, not model-facing identity or credentials.
+            return {"ok": True, "enabled": state["enabled"], "interval_seconds": state["interval_seconds"],
+                    "scopes": state["scopes"], "known_scopes": list(state["origins"]),
+                    "next_checks": state["next_checks"], "last_run": state["last_run"]}
         if name == "tool_observations":
             limit = max(1, min(20, int(args.get("limit") or 8)))
             return {"ok": True, "scope": scope, "observations": self._tool_evidence().recent(scope, limit)}
@@ -2783,10 +2776,24 @@ class HiganPlugin(Star):
         if name == "send_shot":
             return await self._vm_tool("vm_send_shot", args) or await self._vm_tool("send_shot", args)
         if name == "qq_send":
-            return await self._qq_send(str(args.get("kind") or "group"),
-                                       str(args.get("text") or ""),
-                                       int(args.get("user_id") or 0),
-                                       int(args.get("group_id") or 146045691))
+            # Resolve omitted destinations from the real current scope, never a
+            # hardcoded group. Cross-scope targets still undergo persisted policy.
+            kind = str(args.get("kind") or ("private" if scope.startswith("private:") else "group"))
+            key = "user_id" if kind == "private" else "group_id"
+            target = args.get(key)
+            if not target and scope.startswith("private:") == (kind == "private"):
+                target = scope.split(":", 1)[-1]
+            try:
+                if kind not in ("group", "private", "temp") or isinstance(target, bool) or int(target or 0) <= 0:
+                    raise ValueError("destination")
+            except (TypeError, ValueError):
+                return {"ok": False, "error": "explicit_destination_required"}
+            destination = ("private:" if kind == "private" else "") + str(target)
+            if not self._policy_allows(event, destination):
+                return {"ok": False, "error": "destination_policy_denied"}
+            return await self._qq_send(kind, str(args.get("text") or ""),
+                                       int(target) if kind == "private" else int(args.get("user_id") or 0),
+                                       int(target) if kind != "private" else 0)
         if name in ("task_add", "task_add_script") and tasks is not None:
             if name == "task_add_script" and not str(args.get("trigger_script") or "").strip():
                 return {"ok": False, "error": "trigger_script_required"}
@@ -2941,56 +2948,8 @@ class HiganPlugin(Star):
 
     # [proactive-social]
     async def _free_tick(self) -> None:
-        """[proactive-social] 自由活动节拍：每 ~12 分钟给她一次自主机会 ✓。
-
-        她可以：查点什么 / 发条消息给某人 / 继续自己的任务 / **什么都不做**（默认 ✓）。
-        节流：同一 scope 至少间隔 25 分钟；无兴趣时可静默 ✓ 不刷屏。
-        """
-        import asyncio
-
-        while True:
-            try:
-                await asyncio.sleep(12 * 60)
-                now = time.time()
-                last = float(getattr(self, "_last_free_tick", 0) or 0)
-                if now - last < 25 * 60:
-                    continue
-                scope = str(getattr(self, "_main_scope", "") or "146045691")
-                since = int(now - last) if last else 0
-                sysmsg = ("你是彼岸酱。现在没有人在叫你，这是你自己的时间。\n"
-                          "你可以：继续自己的任务、去看看虚拟机/网页、主动找某人说话，"
-                          "或者什么都不做（没人会催你 ✓）。\n"
-                          "要说话就输出 JSON：{\"action\":\"reply\",\"kind\":\"group|private|temp\","
-                          "\"user_id\":0,\"segments\":[\"...\"],\"reason\":\"...\"}；"
-                          "不想说就 {\"action\":\"silent\"}。")
-                prompt = ("【自由时间】距上次自主活动约 %d 分钟。现在想做什么？" % (since // 60))
-                text, calls = await self._llm_tools(sysmsg, prompt, [])
-                for call in calls or []:
-                    fn = ((call.get("function") or {}).get("name") or "")
-                    raw_args = ((call.get("function") or {}).get("arguments") or "{}")
-                    try:
-                        targs = json.loads(raw_args) if isinstance(raw_args, str) else (raw_args or {})
-                    except Exception:  # noqa: BLE001
-                        targs = {}
-                    await self._dispatch_tool(fn, targs, scope)
-                data = self._parse_decision(text or "", require_action=False)
-                self._last_free_tick = now
-                if not data or str(data.get("action")) != "reply":
-                    logger.info("[higan] 自由时间：她选择不说话 ✓")
-                    continue
-                segs = [str(s) for s in (data.get("segments") or []) if str(s).strip()]
-                msg = "\n".join(segs).strip()
-                if not msg:
-                    continue
-                kind = str(data.get("kind") or "group")
-                uid = int(data.get("user_id") or 0)
-                res = await self._qq_send(kind, msg, uid, int(scope) if scope.isdigit() else 146045691)
-                logger.info("[higan] 自由时间：她主动说了（%s）→ %s ｜%s"
-                            % (kind, msg[:50], json.dumps(res, ensure_ascii=False)[:100]))
-            except asyncio.CancelledError:
-                return
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("[higan] 自由节拍异常（继续）：%r", str(exc)[:160])
+        """Retired compatibility entry: the single poll controller owns autonomous opportunities."""
+        return None
 
     # [fix-tool-map] 2026-10-21 补齐 schema 与映射不一致的工具
     # [map-mail-legacy] 2026-10-21 补 mail_list/mail_code

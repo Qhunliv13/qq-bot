@@ -6,10 +6,14 @@ removes duplicate names; it does not implement tools or infer argument contracts
 """
 from copy import deepcopy
 
+from .qq_social import schema as social_schema
 
-# Keys are the 64 distinct names declared by the native schema builders. Values
+
+# Keys follow the distinct names declared by the native schema builders. Values
 # describe functionality rather than persona, tool-selection policy or protocol.
 TOOL_DESCRIPTIONS = {
+    "autonomy_status": "查看主动观察的启用状态、间隔、下一次机会与已知会话范围。",
+    "autonomy_schedule": "设置下一次主动观察时间、机会间隔或启用状态；不要求到点发言。",
     "web_search": "搜索公开网页，返回来源标题、URL 和摘要。",
     "web_fetch": "读取公开 HTTP(S) 网页正文及来源。",
     "tool_observations": "查看当前会话的工具执行结果、时间和执行状态。",
@@ -75,6 +79,12 @@ TOOL_DESCRIPTIONS = {
     "task_resume": "恢复指定已暂停后台任务的调度。",
     "task_update": "更新后台任务的目标、简述、续做提示、调度或触发配置。",
 }
+
+
+# Social schema ownership includes its neutral descriptions; do not duplicate them.
+TOOL_DESCRIPTIONS.update({item["function"]["name"]: item["function"]["description"]
+                          for item in social_schema()})
+NATIVE_TOOL_COUNT = len(TOOL_DESCRIPTIONS)
 
 
 def neutralize_schemas(schemas) -> list:

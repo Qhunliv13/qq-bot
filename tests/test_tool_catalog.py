@@ -8,7 +8,8 @@ import sys
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from plugin.tool_catalog import TOOL_DESCRIPTIONS, neutralize_schemas  # noqa: E402
+from plugin.qq_social import schema as social_schema  # noqa: E402
+from plugin.tool_catalog import NATIVE_TOOL_COUNT, TOOL_DESCRIPTIONS, neutralize_schemas  # noqa: E402
 
 
 @pytest.fixture
@@ -40,14 +41,16 @@ def native_schemas():
                                "properties": args[2] if len(args) > 2 else {},
                                "required": args[3] if len(args) > 3 else []},
             }})
+    # The native builder explicitly appends this import-owned schema list.
+    schemas.extend(social_schema())
     return schemas
 
 
-def test_exact_coverage_of_all_64_native_tool_names(native_schemas):
+def test_exact_coverage_of_all_native_tool_names(native_schemas):
     """A new or removed native tool requires an explicit metadata review."""
     names = {schema["function"]["name"] for schema in native_schemas}
-    assert len(names) == 64
-    assert len(TOOL_DESCRIPTIONS) == 64
+    assert len(names) == NATIVE_TOOL_COUNT
+    assert len(TOOL_DESCRIPTIONS) == NATIVE_TOOL_COUNT
     assert set(TOOL_DESCRIPTIONS) == names
     assert all(isinstance(text, str) and text.strip() for text in TOOL_DESCRIPTIONS.values())
 
@@ -65,7 +68,7 @@ def test_native_shapes_parameters_and_required_fields_are_preserved(native_schem
     original = deepcopy(native_schemas)
     latest = {schema["function"]["name"]: schema for schema in native_schemas}
     result = neutralize_schemas(native_schemas)
-    assert len(result) == 64
+    assert len(result) == NATIVE_TOOL_COUNT
     assert list(latest) == [schema["function"]["name"] for schema in result]
     for schema in result:
         name = schema["function"]["name"]
@@ -74,8 +77,10 @@ def test_native_shapes_parameters_and_required_fields_are_preserved(native_schem
         assert schema == expected
         parameters = schema["function"]["parameters"]
         assert set(parameters["required"]) <= set(parameters["properties"])
-        # Current native parameter metadata has no descriptions to rewrite.
-        assert all("description" not in prop for prop in parameters["properties"].values())
+        # Preserve imported native metadata too, including operation-ID descriptions.
+        assert parameters == latest[name]["function"]["parameters"]
+        if name not in {item["function"]["name"] for item in social_schema()}:
+            assert all("description" not in prop for prop in parameters["properties"].values())
     assert native_schemas == original
 
 
