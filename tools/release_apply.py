@@ -74,9 +74,20 @@ def apply(stage, target, commit, manifest_path, backup, report, credential):
         if not before and existing.exists():
             raise ValueError("new_file_already_exists: " + name)
     # Authentication and exact registered identity are required before any live file mutation.
-    installed = dashboard("/plugins/astrbot_plugin_higan", credential)
-    if "astrbot_plugin_higan" not in json.dumps(installed):
-        raise RuntimeError("exact_plugin_not_found")
+    # A failed plugin is absent from the live registry. The framework's ordinary
+    # reload(name) can fall through to reloading ALL plugins when name is absent;
+    # use its exact failed-only recovery endpoint instead, never that fallback.
+    failed = dashboard("/plugins/failed", credential)
+    failed_plugins = failed.get("data", failed)
+    if not isinstance(failed_plugins, dict):
+        raise RuntimeError("unexpected_failed_plugin_registry")
+    if "astrbot_plugin_higan" in failed_plugins:
+        reload_path = "/plugins/failed/astrbot_plugin_higan/reload"
+    else:
+        installed = dashboard("/plugins/astrbot_plugin_higan", credential)
+        if "astrbot_plugin_higan" not in json.dumps(installed):
+            raise RuntimeError("exact_plugin_not_found")
+        reload_path = "/plugins/astrbot_plugin_higan/reload"
     command(["/root/astrbot-venv/bin/python", "-m", "compileall", "-q", str(stage / "plugin")])
     before_pid = command(["systemctl", "show", "astrbot-186", "--property=MainPID", "--value"])
     napcat_before = command(["docker", "inspect", "--format", "{{.State.StartedAt}}", "napcat"])
@@ -101,7 +112,15 @@ def apply(stage, target, commit, manifest_path, backup, report, credential):
             if digest(target / row["name"]) != row["sha256"]:
                 raise RuntimeError("deployed_hash_mismatch")
         # Keep both service processes alive; candidate initialize drains old owned work.
-        dashboard("/plugins/astrbot_plugin_higan/reload", credential)
+        result["reload_path"] = reload_path
+        dashboard(reload_path, credential)
+        remaining = dashboard("/plugins/failed", credential)
+        failed_plugins = remaining.get("data", remaining)
+        if not isinstance(failed_plugins, dict) or "astrbot_plugin_higan" in failed_plugins:
+            raise RuntimeError("plugin_still_failed_after_reload")
+        installed = dashboard("/plugins/astrbot_plugin_higan", credential)
+        if "astrbot_plugin_higan" not in json.dumps(installed):
+            raise RuntimeError("plugin_missing_after_reload")
         result.update({"status": "active", "pid_after": command([
             "systemctl", "show", "astrbot-186", "--property=MainPID", "--value"]),
             "napcat_started_after": command(["docker", "inspect", "--format", "{{.State.StartedAt}}", "napcat"])})
