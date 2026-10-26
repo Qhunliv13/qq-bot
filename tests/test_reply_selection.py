@@ -1,5 +1,9 @@
-"""Pure tests for explicit positive current-batch reply targeting."""
-from plugin.reply_selection import decode_reply
+"""Pure tests for current-batch targeting and strict silence protocol handling."""
+import json
+
+import pytest
+
+from plugin.reply_selection import decode_reply, is_silence
 
 
 def test_structured_selection_quotes_first_nonfinal_target():
@@ -44,3 +48,168 @@ def test_plain_text_does_not_guess_current_target():
     result = decode_reply("普通回答", [{"id":"101"}, {"id":"102"}])
     assert result["reply_to"] == []
     assert result["quote_id"] is None
+
+
+@pytest.mark.parametrize("value", [
+    None, "", " \t\r\n", "SILENT", "silent", "SiLeNt", " silent \n",
+    "SILENT.", "silent!", "Silent。", "silent！", "。!SILENT！..",
+    '"SILENT"', ' "silent!" ', '" \\tSiLeNt。\\n "', '""',
+])
+def test_whole_output_silence_forms(value):
+    """Only full control tokens or absent text terminate the legacy reply."""
+    assert is_silence(value) is True
+    result = decode_reply(value, [{"id": "101"}])
+    assert result["text"] == ""
+    assert result["error"] is None
+    assert result["quote_id"] is None
+
+
+@pytest.mark.parametrize("text", [
+    "I prefer silent mode", "The word SILENT is a sentinel.",
+    "SILENT mode", "not SILENT", "SILENT\nnormal reply", "SILENT SILENT",
+    "SILENT?", "SILENT,", "SILENT... more", "SILENT .", "...", "！！",
+    "`SILENT`", "```\nSILENT\n```", "```json\n\"SILENT\"\n```",
+    "'SILENT'", '"SILENT" trailing', '"SILENT', '"SILENT".',
+    '"I prefer silent mode"', '["SILENT"]', '{"action":"silent"}',
+    '{"text":"SILENT"}', '"\\\"SILENT\\\""', "不回复", "（不回复）",
+])
+def test_nonprotocol_text_is_preserved(text):
+    """Mentions, unsupported wrappers, and near matches must not erase prose."""
+    assert is_silence(text) is False
+    result = decode_reply(text, [{"id": "101"}])
+    assert result["text"] == text
+    assert result["structured"] is False
+    assert result["error"] is None
+
+
+@pytest.mark.parametrize("value", [False, True, 0, 1, [], {}, {"action": "silent"}])
+def test_nonstring_values_are_not_control_tokens(value):
+    """Do not coerce unknown action objects or arbitrary values into silence."""
+    assert is_silence(value) is False
+
+
+@pytest.mark.parametrize("text", [
+    "SILENT", "silent", " SiLeNt! \n", "。SILENT！", '"SILENT"', "", " \t",
+])
+def test_valid_structured_silence_has_no_quote(text):
+    """Validated targets may explicitly select silence without delivery metadata."""
+    raw = json.dumps({"reply_to": [101, "102", 101], "text": text})
+    assert is_silence(raw) is False
+    result = decode_reply(raw, [{"id": 101}, {"id": "102"}, {"id": "103"}])
+    assert result == {"text": "", "reply_to": ["101", "102"],
+                      "quote_id": None, "structured": True, "error": None}
+
+
+@pytest.mark.parametrize("targets", [
+    ["999"], ["101", "999"], [True], [None], [[]], [{}], "101", None, [],
+])
+def test_structured_sentinel_does_not_bypass_target_validation(targets):
+    """Invalid attribution must fail closed even when the text requests silence."""
+    raw = json.dumps({"reply_to": targets, "text": "silent"})
+    result = decode_reply(raw, [{"id": "101"}])
+    assert result["structured"] is True
+    assert result["error"] == "invalid_reply_targets"
+    assert result["text"] == ""
+    assert result["reply_to"] == []
+    assert result["quote_id"] is None
+
+
+@pytest.mark.parametrize("text", ["I prefer silent mode", "`SILENT`", "SILENT?", '"SILENT" trailing'])
+def test_structured_silence_mentions_remain_replies(text):
+    """Whole-token recognition must not suppress ordinary validated responses."""
+    raw = json.dumps({"reply_to": ["101"], "text": text})
+    result = decode_reply(raw, [{"id": "101"}, {"id": "102"}])
+    assert result["text"] == text
+    assert result["reply_to"] == ["101"]
+    assert result["quote_id"] == "101"
+    assert result["error"] is None
+
+
+@pytest.mark.parametrize("text", [None, True, 0, [], {"action": "silent"}])
+def test_structured_nonstring_text_remains_invalid(text):
+    """Only string response text participates in the structured protocol."""
+    raw = json.dumps({"reply_to": ["101"], "text": text})
+    result = decode_reply(raw, [{"id": "101"}])
+    assert result["error"] == "invalid_reply_targets"
+    assert result["text"] == ""
+
+
+@pytest.mark.parametrize("records", [None, []])
+def test_json_response_without_current_batch_stays_legacy(records):
+    """Without current IDs, a JSON-shaped answer is not an actionable response."""
+    raw = '{"reply_to":["101"],"text":"SILENT"}'
+    result = decode_reply(raw, records)
+    assert result["text"] == raw
+    assert result["structured"] is False
+    assert result["error"] is None
+
+
+def test_fenced_structured_sentinel_is_not_guessed_as_protocol():
+    """Unspecified fenced wrappers remain literal, not a broadened control schema."""
+    raw = '```json\n{"reply_to":["101"],"text":"SILENT"}\n```'
+    result = decode_reply(raw, [{"id": "101"}])
+    assert result["text"] == raw
+    assert result["structured"] is False
+
+
+def test_legacy_quote_is_not_silently_removed_to_create_control_token():
+    """A control word with transport markup is not the whole original output."""
+    result = decode_reply("[quote:101] SILENT", [{"id": "101"}])
+    assert result["text"] == "[quote:101] SILENT"
+    assert result["quote_id"] == "101"
+
+
+def test_structured_quote_removal_does_not_reclassify_control_text():
+    """Validate the original text before stripping legacy attribution markers."""
+    raw = '{"reply_to":["101"],"text":"[quote:999] SILENT"}'
+    result = decode_reply(raw, [{"id": "101"}, {"id": "102"}])
+    assert result["text"] == " SILENT"
+    assert result["quote_id"] == "101"
+    assert result["error"] is None
+
+
+@pytest.mark.parametrize("text", [
+    "（SILENT）", "(SILENT)", "（silent）", "(SiLeNt)",
+    " \t（ SiLeNt! ）\n", "( silent。 )", "（SILENT）！", ".(SILENT).",
+])
+def test_one_balanced_parenthesis_pair_is_silence(text):
+    """Observed full-token parenthetical outputs terminate plain and JSON replies."""
+    for raw in (text, json.dumps(text)):
+        assert is_silence(raw) is True
+        result = decode_reply(raw, [{"id": "101"}])
+        assert result["text"] == ""
+        assert result["quote_id"] is None
+        assert result["error"] is None
+    raw = json.dumps({"reply_to": ["101"], "text": text})
+    result = decode_reply(raw, [{"id": "101"}, {"id": "102"}])
+    assert result == {"text": "", "reply_to": ["101"], "quote_id": None,
+                      "structured": True, "error": None}
+
+
+@pytest.mark.parametrize("text", [
+    "(silent mode)", "（I prefer silent mode）", "I prefer (SILENT)",
+    "(SILENT) is a sentinel", "(SILENT", "SILENT)", "（SILENT", "SILENT）",
+    "(SILENT）", "（SILENT)", "((SILENT))", "（（SILENT））",
+    "（(SILENT)）", "(（SILENT）)", "`（SILENT）`", "```\n(SILENT)\n```",
+    "()", "（ ）", "(SILENT?)", "( SILENT . )",
+])
+def test_parenthesis_boundary_preserves_prose_and_nonprotocol_forms(text):
+    """Only one matching pair around the whole token is protocol normalization."""
+    for raw in (text, json.dumps(text)):
+        assert is_silence(raw) is False
+        assert decode_reply(raw, [{"id": "101"}])["text"] == raw
+    raw = json.dumps({"reply_to": ["101"], "text": text})
+    result = decode_reply(raw, [{"id": "101"}, {"id": "102"}])
+    assert result["text"] == text
+    assert result["quote_id"] == "101"
+    assert result["error"] is None
+
+
+@pytest.mark.parametrize("targets", [["999"], ["101", "999"], []])
+def test_parenthetical_sentinel_keeps_target_validation_first(targets):
+    """Observed punctuation variants never grant invalid targets permission to reply."""
+    raw = json.dumps({"reply_to": targets, "text": "（SILENT）"})
+    result = decode_reply(raw, [{"id": "101"}])
+    assert result["text"] == ""
+    assert result["quote_id"] is None
+    assert result["error"] == "invalid_reply_targets"

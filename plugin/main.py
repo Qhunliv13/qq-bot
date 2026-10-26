@@ -1950,6 +1950,7 @@ class HiganPlugin(Star):
     async def _poll_loop(self) -> None:
         """Observe groups with configured periodic triggers through the common context contract."""
         from .conversation_context import build_context, system_prompt
+        from .reply_selection import is_silence
         while True:
             try:
                 await asyncio.sleep(30)
@@ -1996,7 +1997,7 @@ class HiganPlugin(Star):
                                 logger.warning("[higan] 定点查看决策失败：%r", str(_exc)[:100])
                                 continue
                             _out = (_out or "").strip()
-                            if not _out or _out.upper().strip("。.!！ ") == "SILENT":
+                            if not _out or is_silence(_out):
                                 logger.info("[higan] 定点查看后选择沉默")
                                 continue
                             try:
@@ -2043,7 +2044,7 @@ class HiganPlugin(Star):
                         logger.warning("[higan] 定时查看决策失败：%r", str(exc)[:120])
                         continue
                     out = (out or "").strip()
-                    if not out or out.upper().strip("。.!！ ") == "SILENT":
+                    if not out or is_silence(out):
                         logger.info("[higan] 定时查看后选择沉默 ✓")
                         continue
                     try:
@@ -2131,6 +2132,19 @@ class HiganPlugin(Star):
             payload["tools"] = _dedupe_tool_schemas(self._tool_schemas())
             payload["tool_choice"] = "auto"
         payload.update(self._llm_extra())   # [thinking-max] 思考拉满 ✓
+        # Compare only process-keyed prefix digests; logs contain numeric/boolean
+        # metrics, not prompts, image URLs, scope identifiers or API credentials.
+        # Byte reuse is local evidence, not a claim about provider cache tokens.
+        try:
+            from .prefix_metrics import PrefixTracker
+            if not hasattr(self, "_prefix_tracker"):
+                self._prefix_tracker = PrefixTracker()
+            prefix_metrics = self._prefix_tracker.observe(payload)
+            logger.info("[higan] prefix_metrics metrics=%s",
+                        json.dumps(prefix_metrics, separators=(",", ":")))
+        except Exception as exc:
+            # Optional diagnostics must never break a model request or change it.
+            logger.warning("[higan] prefix_metrics_unavailable type=%s", type(exc).__name__)
         body = json.dumps(payload).encode("utf-8")
 
         def _call() -> dict:
@@ -3231,7 +3245,8 @@ class HiganPlugin(Star):
         # Native loop already produced a result-aware answer. Never ask a second independent
         # model to rephrase it without the transcript (that could duplicate actions or lose evidence).
         # [focus-and-silence] 她可以选择不说 ✓
-        if (_out or "").strip().upper().strip("。.!！") == "SILENT":
+        from .reply_selection import is_silence
+        if is_silence(_out):
             logger.info("[higan] 她选择沉默（SILENT）✓")
             return ""
         _out = (_out or "").strip()
@@ -3259,7 +3274,8 @@ class HiganPlugin(Star):
         prompt = self._request_context(event, group, text, has_image)
         from .conversation_context import system_prompt
         out = await self._llm_plain(system_prompt(self.persona), prompt, refs)
-        if (out or "").strip().upper().strip("。.!！") == "SILENT":
+        from .reply_selection import is_silence
+        if is_silence(out):
             return ""
         return (out or "").strip()
 
@@ -3348,7 +3364,8 @@ class HiganPlugin(Star):
         `stop_event()`（用来拦掉默认 LLM），管线会中止、RespondStage 不会执行，
         `set_result` 的结果就发不出去了。`event.send` 是官方命令插件同样在用的直接发送。
         """
-        if not self._policy_allows(event, group):
+        from .reply_selection import is_silence
+        if is_silence(reply) or not self._policy_allows(event, group):
             return None
         # Accepted later chat is queued; it cannot cancel an active operation or delivery.
         # [strip-at-send] 发送前统一清洗：工具调用语法/DSML 一律不发到群里
@@ -3358,6 +3375,9 @@ class HiganPlugin(Star):
                 logger.info("[higan] 回复只剩工具语法，已拦下不发送")
                 return
             reply = _clean_reply
+            # Cleaning can expose a control token previously wrapped by tool syntax.
+            if is_silence(reply):
+                return None
             # 兜底：还有 <||DSML|| 残留就整行丢掉
             if "DSML" in reply:
                 reply = "\n".join(
@@ -3486,7 +3506,7 @@ class HiganPlugin(Star):
                                 % (sticker["file"], keywords, sticker.get("desc")))
                 else:
                     logger.warning("[higan] 表情包文件缺失：%s" % path)
-        if (not text and not has_image_output) or not self._policy_allows(event, group):
+        if (text.strip() and is_silence(text)) or (not text and not has_image_output) or not self._policy_allows(event, group):
             return None
         try:
             # [recall] 2026-10-19: 记录发出去的消息 id，供"自己撤回"使用
