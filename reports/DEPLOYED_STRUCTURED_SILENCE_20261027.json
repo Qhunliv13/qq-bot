@@ -1,0 +1,53 @@
+{
+  "date": "2026-10-27",
+  "timezone": "Asia/Shanghai",
+  "deployed_commit": "459282dd649ec845b04ecc7718b02f1f0bef3154",
+  "status": "active",
+  "incident": {
+    "exact_empty_envelope_history_occurrences": 21,
+    "affected_scope_count": 3,
+    "native_message_ids_verified_in_principal_scope": 9,
+    "observed_current_batch_entries": 0,
+    "source_path": "autonomous_turn -> raw _send without structured decode",
+    "durable_task_incident_proven": false,
+    "screenshot_four_exact_identity_proven": false
+  },
+  "repair": {
+    "single_shared_protocol_decoder": true,
+    "explicit_no_current_message_mode": true,
+    "empty_reply_targets_with_empty_text_silent": true,
+    "no_current_fabricated_targets_rejected": true,
+    "nonempty_autonomous_text_transported_without_raw_envelope": true,
+    "already_decoded_body_not_parsed_twice": true,
+    "chat_autonomy_task_and_raw_sender_covered": true,
+    "persona_or_model_parameters_changed": false,
+    "autonomous_capability_disabled": false
+  },
+  "verification": {
+    "pytest_passed": 1083,
+    "skipped": 17,
+    "subtests_passed": 18,
+    "pyflakes_compile_release_scan_clean": true,
+    "deployed_file_hashes_verified": 16,
+    "deployed_sender_probe_silent_invalid_cases": 5,
+    "deployed_sender_probe_side_effects": 0,
+    "deployed_sender_probe_qq_messages_sent": 0,
+    "deployed_sender_probe_model_calls": 0,
+    "native_readonly_tools_and_observation_recall_passed": true,
+    "group_policies_unchanged": true,
+    "mention_only_preserved": true,
+    "astrbot_pid_before_after": 714988,
+    "astrbot_restart_count": 0,
+    "napcat_started_before_after": "2026-10-25T02:31:45.216352424Z",
+    "postrelease_tracebacks": 0,
+    "postrelease_batch_failures": 0,
+    "postrelease_reload_errors": 0,
+    "temporary_plugin_access_revoked": true
+  },
+  "limits": [
+    "No public QQ test messages were sent; deployed source sender probe has forbidden side-effect callbacks.",
+    "Historical leaked messages were not recalled or otherwise modified.",
+    "Separate cache/history-window/scheduling/outcome recommendations were not included in this targeted fix.",
+    "This protocol repair does not guarantee every future natural-language model output is correct."
+  ]
+}
