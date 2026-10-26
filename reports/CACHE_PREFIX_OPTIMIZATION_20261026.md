@@ -60,6 +60,26 @@ precedence over this synthetic cache gain.
 No promise of fully cache-stable context is made. Future improvements require a separate
 conversation-history design that preserves freshness and bounded resource behavior.
 
+## Final conservative candidate comparison
+
+After restoring the original conversation-before-observations order, a separate matched
+experiment tested pre-rollover append-only history (118,119,120 records), not sliding.
+All six requests reported valid usage, no transport timeout:
+
+| Round | Old cached/input | Clock-last cached/input |
+|---|---:|---:|
+|0|4,096/22,604 =18.12%|5,632/22,604 =24.92%|
+|1|4,096/22,741 =18.01%|20,480/22,741 =90.06%|
+|2|4,096/22,871 =17.91%|21,376/22,871 =93.46%|
+
+All-round weighted:18.0134% ->69.6142%. Warm rounds1-2:17.9602% ->91.7653%.
+Same model/config/persona/tool schemas and semantic fields; no tools executed or QQ sends.
+No cache flush, small sample, synthetic traffic: this does not establish a long-term live
+rate. Rolling-history traffic is explicitly outside this experiment's improvement claim.
+Candidate also passed real native self_status, persisted result and new-instance recall
+before activation. The observations-first version failed those checks and was hot-reloaded
+back to the previous commit before this final version was approved.
+
 ## Regression and rollout requirements
 
 350 tests passed,17 platform-specific skipped,18 subtests passed; pyflakes,compile and
