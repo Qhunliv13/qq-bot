@@ -1,0 +1,47 @@
+{
+  "commit": "d0d03cb6d74ae67e35ba9ad14c0a44c2c8bf3f5c",
+  "deployed_at": "2026-10-26T21:58:00+08:00",
+  "activation": {
+    "status": "active",
+    "reload_endpoint": "/plugins/failed/astrbot_plugin_higan/reload",
+    "exact_failed_plugin_only": true,
+    "files_hash_verified": 13,
+    "astrbot_pid_before_after": "714988",
+    "napcat_started_before_after": "2026-10-25T02:31:45.216352424Z",
+    "astrbot_restart_count": 0,
+    "group_policy_unchanged": true,
+    "qq_messages_sent": 0,
+    "temporary_access_revoked": true
+  },
+  "verification": {
+    "full_tests_passed": 727,
+    "skipped": 17,
+    "subtests_passed": 18,
+    "pyflakes_clean": true,
+    "compile_clean": true,
+    "release_scan_clean": true,
+    "deployed_file_message_id": "1624335508",
+    "deployed_file_name_preserved": true,
+    "deployed_file_bytes": 46884,
+    "real_model_recognized_file_name_and_bytes": true,
+    "file_downloaded_or_html_executed": false,
+    "deployed_image_message_id": "1008020995",
+    "deployed_image_source_role": "member",
+    "deployed_image_origin_bound_to_actual_publisher": true,
+    "real_model_recognized_image_publisher_role": true,
+    "native_readonly_probe_tools": ["self_status"],
+    "native_readonly_probe_observations": 1,
+    "native_readonly_probe_qq_messages_sent": 0,
+    "batch_failures": 0,
+    "tracebacks": 0
+  },
+  "scope": {
+    "upload_notice_is_not_user_utterance": true,
+    "recognized_upload_metadata_history_only": true,
+    "native_file_and_caption_remain_real_opportunities": true,
+    "no_time_window_or_cross_id_file_dedup": true,
+    "no_persona_change_or_forced_wording_filter": true,
+    "image_sender_not_asserted_as_depicted_score_owner": true,
+    "natural_language_future_wording_guaranteed": false
+  }
+}
