@@ -2,6 +2,7 @@
 
 import copy
 import json
+import os.path
 from pathlib import Path
 import sys
 
@@ -62,6 +63,101 @@ def test_no_arbitrary_limits_or_mutation():
     assert parsed["task"] == inputs["task"]
     assert parsed["attachments"]["image_refs"] == images
     assert inputs == original
+
+
+@pytest.mark.parametrize("clocks", [
+    ({"now": "2026-10-26T09:00:00+08:00", "timezone": "Asia/Shanghai"},
+     {"now": "2026-10-26T09:00:01+08:00", "timezone": "Asia/Shanghai"}),
+    (123, 124),
+    (None, {"now": 125, "metadata": {"exact": True}}),
+])
+def test_clock_changes_preserve_complete_context_prefix(clocks):
+    """Fresh exact time cannot invalidate any otherwise unchanged context bytes."""
+    inputs = {
+        "scope": {"id": "群聊-雪", "private": False},
+        "history": [{"role": "assistant", "content": "历史\\\"\n原文"}],
+        "messages": [{"id": "m1", "body": "当前消息", "quote": {"body": "引用"}}],
+        "observations": [{"result": {"ok": False, "value": None, "text": "观察"}}],
+        "other_scopes": [{"scope": "other", "messages": [{"body": "另一个会话"}]}],
+        "task": {"id": "t1", "status": "running", "metadata": {"count": 0}},
+        "image_refs": ["图片\\路径.png", {"id": "img1", "caption": "附件"}],
+        "anchor_message_id": "m1",
+    }
+    original = copy.deepcopy(inputs)
+    # Assert the full values, not just ordering: cache locality must not freeze time,
+    # trim a collection, rewrite raw data, or change the existing envelope schema.
+    stable = {
+        "version": 1,
+        "source": {"name": "conversation_context", "trust": "untrusted_data"},
+        "observations": inputs["observations"],
+        "conversation": {"scope": inputs["scope"], "history": inputs["history"],
+                         "messages": inputs["messages"], "anchor": {"message_id": "m1"}},
+        "other_scopes": inputs["other_scopes"],
+        "task": inputs["task"],
+        "attachments": {"image_refs": inputs["image_refs"]},
+    }
+    before, after = [build_context(**inputs, clock=clock) for clock in clocks]
+    expected_prefix = json.dumps(stable, ensure_ascii=False, separators=(",", ":"))[:-1]
+    expected_prefix += ',"timing":'
+    shared = os.path.commonprefix([before, after])
+    assert shared.startswith(expected_prefix)
+    assert before != after
+    for serialized, clock in zip((before, after), clocks):
+        assert json.loads(serialized) == dict(stable, timing=clock)
+        assert list(json.loads(serialized)) == list(stable) + ["timing"]
+    assert inputs == original
+
+
+def test_history_rollover_preserves_complete_observations_prefix():
+    """Rolling history must leave all stable observations ahead of its first change."""
+    observations = [{"scope": "s", "tool_name": "lookup",
+                     "result": {"body": "稳定观察\\\"\n雪", "rows": [1, 2, 3]}}]
+    old_history = [{"id": "h1", "body": "oldest"}, {"id": "h2", "body": "kept"}]
+    new_history = old_history[1:] + [{"id": "h3", "body": "newest"}]
+    inputs = {"scope": "s", "messages": [{"id": "m", "body": "current"}],
+              "clock": {"now": 123}, "observations": observations}
+    before = build_context(**inputs, history=old_history)
+    after = build_context(**inputs, history=new_history)
+    # The expected prefix ends after the entire observation collection, so an
+    # accidentally earlier conversation block cannot pass on a partial match.
+    stable = {"version": 1,
+              "source": {"name": "conversation_context", "trust": "untrusted_data"},
+              "observations": observations}
+    expected_prefix = json.dumps(stable, ensure_ascii=False, separators=(",", ":"))[:-1]
+    expected_prefix += ',"conversation":'
+    assert os.path.commonprefix([before, after]).startswith(expected_prefix)
+    assert json.loads(before)["conversation"]["history"] == old_history
+    assert json.loads(after)["conversation"]["history"] == new_history
+    assert json.loads(before)["observations"] == observations
+    assert json.loads(after)["observations"] == observations
+    assert before != after
+
+
+def test_new_message_preserves_complete_preceding_history_prefix():
+    """Changing current messages must preserve every byte of preceding history."""
+    history = [{"role": "user", "content": "历史一\\\"\n雪"},
+               {"role": "assistant", "content": "历史二"}]
+    observations = [{"result": {"body": "稳定观察"}}]
+    inputs = {"scope": {"id": "s"}, "history": history, "observations": observations,
+              "clock": {"now": 123}}
+    old_messages = [{"id": "m1", "body": "before"}]
+    new_messages = [{"id": "m2", "body": "after"}]
+    before = build_context(**inputs, messages=old_messages)
+    after = build_context(**inputs, messages=new_messages)
+    stable = {"version": 1,
+              "source": {"name": "conversation_context", "trust": "untrusted_data"},
+              "observations": observations,
+              "conversation": {"scope": inputs["scope"], "history": history}}
+    # Remove only the two known closing object delimiters to reach messages;
+    # never split on text markers that untrusted history may itself contain.
+    expected_prefix = json.dumps(stable, ensure_ascii=False, separators=(",", ":"))[:-2]
+    expected_prefix += ',"messages":'
+    assert os.path.commonprefix([before, after]).startswith(expected_prefix)
+    assert json.loads(before)["conversation"] == {
+        "scope": inputs["scope"], "history": history, "messages": old_messages}
+    assert json.loads(after)["conversation"] == {
+        "scope": inputs["scope"], "history": history, "messages": new_messages}
+    assert before != after
 
 
 @pytest.mark.parametrize("status", ["pending", "running", "completed", "failed", "cancelled", "unknown"])

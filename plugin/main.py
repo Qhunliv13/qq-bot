@@ -1584,6 +1584,8 @@ class HiganPlugin(Star):
 
         try:
             data = await asyncio.to_thread(_call)
+            from .model_usage import log_usage
+            log_usage(logger, data, transport="plain")
             msg = ((data.get("choices") or [{}])[0].get("message") or {})
             return (msg.get("content") or "").strip()
         except Exception as exc:  # noqa: BLE001
@@ -2220,6 +2222,8 @@ class HiganPlugin(Star):
 
         try:
             data = await asyncio.to_thread(_call)
+            from .model_usage import log_usage
+            log_usage(logger, data, transport="plain")
             msg = ((data.get("choices") or [{}])[0].get("message") or {})
             return (msg.get("content") or "").strip()
         except Exception as exc:  # noqa: BLE001
@@ -2239,32 +2243,18 @@ class HiganPlugin(Star):
         if not base or not key:
             return "", []
 
-        # [string-content] 同上：无图用字符串，否则上游 400 ✗
-        if image_urls:
-            content: object = [{"type": "text", "text": prompt}]
-            for _ref in image_urls:
-                _url = self._as_llm_url(_ref)
-                if _url:
-                    content.append({"type": "image_url", "image_url": {"url": _url}})
+        # Native continuations already own frozen images; never reconvert/rewrite their prefix.
+        if messages is None:
+            from .image_transcript import with_images
+            request_messages = with_images([
+                {"role": "system", "content": system}, {"role": "user", "content": prompt}],
+                image_urls, self._as_llm_url, MAX_IMAGES_PER_CALL, initial=True)
         else:
-            content = prompt
+            request_messages = list(messages)
         payload = {
             "model": model or "deepseek-v4.1-flash-1017",
-            "messages": messages if messages is not None else [
-                {"role": "system", "content": system}, {"role": "user", "content": content}],
+            "messages": request_messages,
         }
-        if messages is not None and image_urls:
-            # Preserve native tool roles and IDs; update only the first user attachment payload.
-            payload["messages"] = [dict(item) for item in messages]
-            for item in payload["messages"]:
-                if item.get("role") == "user":
-                    parts = [{"type": "text", "text": str(item.get("content") or "")}]
-                    for ref in image_urls[-MAX_IMAGES_PER_CALL:]:
-                        url = self._as_llm_url(ref)
-                        if url:
-                            parts.append({"type": "image_url", "image_url": {"url": url}})
-                    item["content"] = parts
-                    break
         if allow_tools:
             payload["tools"] = _dedupe_tool_schemas(self._tool_schemas())
             payload["tool_choice"] = "auto"
@@ -2301,6 +2291,8 @@ class HiganPlugin(Star):
                 raise RuntimeError("model_transport_failed") from exc
             return "", []
         try:
+            from .model_usage import log_usage
+            log_usage(logger, data, transport="tools")
             msg = ((data.get("choices") or [{}])[0].get("message") or {})
             _txt = (msg.get("content") or "").strip()
             _tcs = (msg.get("tool_calls") or [])
@@ -3256,7 +3248,10 @@ class HiganPlugin(Star):
             refs, _desc = await self._refs_for(event, group, text, has_image)
         except Exception:  # noqa: BLE001
             refs = []
-        live_refs = list(refs or [])          # 会随截图增长 ⇒ 模型下一轮能看见 ✓
+        initial_refs = list(refs or [])       # Initial user attachments freeze before any tool runs.
+        live_refs = list(initial_refs)        # Screenshots append here until the next model request.
+        submitted_ref_count = len(initial_refs)  # A later screenshot may overwrite the same path.
+        images_initialized = False
         shots: list = []                      # 要发出去的图
 
         from .conversation_context import system_prompt
@@ -3281,8 +3276,23 @@ class HiganPlugin(Star):
             return await self._llm_tools(_sys, _prompt, live_refs)
 
         async def _llm_messages(messages, allow_tools):
-            """Send actual assistant/tool message pairs on every continuation."""
-            return await self._llm_tools(system, prompt, live_refs, messages, allow_tools)
+            """Persist frozen initial images and append tool image data after tool replies."""
+            nonlocal images_initialized, submitted_ref_count
+            from .image_transcript import with_images
+            if not images_initialized:
+                # Enrich the loop's original user exactly once, before its first request.
+                messages[:] = with_images(messages, initial_refs, self._as_llm_url,
+                                          MAX_IMAGES_PER_CALL, initial=True)
+                images_initialized = True
+            else:
+                # The loop has appended every tool result; new images cannot break tool pairing.
+                # Count tool observations, not filenames: a new screenshot may reuse
+                # the same path with different bytes. Old data URLs stay immutable.
+                new_refs = live_refs[submitted_ref_count:]
+                messages[:] = with_images(messages, new_refs, self._as_llm_url,
+                                          MAX_IMAGES_PER_CALL)
+                submitted_ref_count = len(live_refs)
+            return await self._llm_tools(system, prompt, [], messages, allow_tools)
 
         async def _execute_tool(name, args):
             # [group-files] 群文件走 AstrBot 的 OneBot 客户端（HTTP 口是空壳 ✗）

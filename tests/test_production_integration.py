@@ -604,8 +604,15 @@ def test_screenshot_continuation_uses_last_three_images_and_explicit_delivery(pr
         await plugin._send(event, "42", result)
 
     asyncio.run(scenario())
-    user = next(item for item in requests[-1]["messages"] if item["role"] == "user")
-    image_urls = [part["image_url"]["url"] for part in user["content"] if part["type"] == "image_url"]
+    # Initial source attachments freeze; screenshots are separate data after native tool results.
+    first_user = requests[0]["messages"][1]
+    assert requests[-1]["messages"][:len(requests[0]["messages"])] == requests[0]["messages"]
+    assert [part["image_url"]["url"] for part in first_user["content"] if part["type"] == "image_url"] == [
+        "old-image-1.png", "old-image-2.png", "old-image-3.png"]
+    observation = requests[-1]["messages"][-1]
+    assert observation["role"] == "user"
+    assert requests[-1]["messages"][-2]["role"] == "tool"
+    image_urls = [part["image_url"]["url"] for part in observation["content"] if part["type"] == "image_url"]
     assert image_urls == [str(shot) for shot in shots[-3:]]
     assert [item["tool_call_id"] for item in requests[-1]["messages"] if item["role"] == "tool"] == [
         f"shot-{number}" for number in range(4)]

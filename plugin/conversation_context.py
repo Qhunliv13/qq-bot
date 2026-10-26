@@ -41,13 +41,17 @@ def build_context(
     envelope = {
         "version": PROTOCOL_VERSION,
         "source": {"name": "conversation_context", "trust": "untrusted_data"},
-        "timing": clock,
-        "conversation": conversation,
-        # None means no supplied collection; other false-like values remain raw.
+        # Persisted observations are usually unchanged across ordinary chat turns.
+        # Keep them before rolling history; a changing clock must not invalidate
+        # either prefix. This changes serialization order only, not source values.
         "observations": [] if observations is None else observations,
+        "conversation": conversation,
         "other_scopes": [] if other_scopes is None else other_scopes,
         "task": task,
         "attachments": {"image_refs": [] if image_refs is None else image_refs},
+        # Fresh time remains exact and available, but is serialized after context
+        # that can be reused. Never freeze or round time to simulate cache hits.
+        "timing": clock,
     }
     return json.dumps(envelope, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
 
