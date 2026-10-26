@@ -874,6 +874,10 @@ class HiganPlugin(Star):
                 ref = str(media.get("url") or media.get("file") or "")
                 if ref and ref not in refs:
                     refs.append(ref)
+        nontext = getattr(event, "_higan_nontext_context", {}) or {}
+        for ref in nontext.get("image_refs") or []:
+            if ref and ref not in refs:
+                refs.append(ref)
         return refs
 
     def _remember_images(self, group: str, refs: list[str]) -> None:
@@ -1127,6 +1131,18 @@ class HiganPlugin(Star):
                 group = "private:" + sender
 
             text = (event.get_message_str() or "").strip()
+            # Plain rendering omits valid non-text components (faces, cards,
+            # voice/files and adapter-unknown segments). Preserve their actual
+            # source metadata instead of inventing an empty user utterance.
+            from .nontext_context import describe_event
+            nontext = describe_event(event)
+            event._higan_nontext_context = nontext
+            if nontext.get("recognized"):
+                text = (text + "\n" + json.dumps({"source": "message_components",
+                        "trust": "untrusted_data", "segments": nontext["segments"]},
+                        ensure_ascii=False, allow_nan=False)).strip()
+                logger.info("[higan] nontext_context segments=%d image_refs=%d",
+                            len(nontext["segments"]), len(nontext.get("image_refs") or []))
             # [read-forward] 合并转发 ⇒ 把里面的聊天记录读出来给她看 ✓
             try:
                 _fwd = await self._forward_to_text(event)
@@ -1264,7 +1280,7 @@ class HiganPlugin(Star):
             #    （见 `_send`），不能再依赖 set_result。
             event.stop_event()
             self._pending.setdefault(group, []).append(
-                (event, text, bool(images), bool(_woken_e or _at_me_now), history_snapshot))
+                (event, text, bool(images or self._image_refs(event)), bool(_woken_e or _at_me_now), history_snapshot))
             if self._busy.get(group):
                 return
             self._busy[group] = True
