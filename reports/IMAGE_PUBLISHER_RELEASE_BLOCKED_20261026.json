@@ -1,0 +1,61 @@
+{
+  "timezone": "Asia/Shanghai",
+  "candidate_commit": "3aa0df00c769159be5099669bb1209551fc4b940",
+  "previous_file_commit": "6bcf3cb905ed6b791155adb7dd5bd7b34cb73131",
+  "incident": {
+    "image_message_id": "1008020995",
+    "image_time": "2026-10-26T19:42:24+08:00",
+    "model_batch_started": "2026-10-26T19:42:26.521591+08:00",
+    "bot_message_id": "127847517",
+    "bot_sent_time": "2026-10-26T19:42:44+08:00",
+    "caption_sent_time": "2026-10-26T19:42:43+08:00",
+    "caption_processed_time": "2026-10-26T19:42:46+08:00",
+    "caption_not_in_offending_model_call": true,
+    "actual_publisher_is_owner": false,
+    "ingress_role_correctly_member": true,
+    "model_batch_entries": 1,
+    "model_batch_images": 1,
+    "persona_already_distinguishes_owner_and_members": true,
+    "original_full_model_payload_available": false
+  },
+  "candidate_validation": {
+    "pytest_passed": 692,
+    "skipped": 17,
+    "subtests_passed": 18,
+    "pyflakes_clean": true,
+    "compile_clean": true,
+    "release_scan_clean": true,
+    "actual_source_publisher_role_probe_passed": true,
+    "source_records": 1,
+    "actual_source_role": "member",
+    "real_model_identified_publisher_role": true,
+    "qq_test_messages_sent": 0,
+    "score_ownership_inferred": false,
+    "future_model_wording_guaranteed": false
+  },
+  "deployment": {
+    "status": "files_restored_activation_needs_review",
+    "successful_activation_proven": false,
+    "failure_class": "RuntimeError wrapping plugin initialization TimeoutError",
+    "failure_time": "2026-10-26T20:34:14+08:00",
+    "ssh_control_connection_subsequently_reset": true,
+    "auto_access_revocation_on_same_connection_failed": true,
+    "access_revocation_recovered_on_fresh_connection": true,
+    "temporary_plugin_key_revoked": true,
+    "main_previous_hash_restored": true,
+    "conversation_context_previous_hash_restored": true,
+    "image_transcript_previous_hash_restored": true,
+    "new_attachment_sources_module_absent_from_active_directory": true,
+    "astrbot_process_active": true,
+    "astrbot_pid_unchanged": 714988,
+    "astrbot_restart_count": 0,
+    "plugin_runtime_health_confirmed": false,
+    "service_restart_used_as_fallback": false,
+    "blind_reload_retry_performed": false
+  },
+  "open_items": [
+    "Inspect and recover the native plugin drain/initialization lifecycle without canceling active user operations or restarting services.",
+    "Only after runtime health is confirmed, deploy the committed provenance candidate through a new guarded release with backup and current baseline hashes.",
+    "Do not present the candidate's local tests or controlled role probe as proof the production repair is active."
+  ]
+}
