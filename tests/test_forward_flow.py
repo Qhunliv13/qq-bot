@@ -24,7 +24,10 @@ class Forward(SimpleNamespace):
 
 def _forward_nodes():
     """Supply five distinct real source records, not a synthesized empty message."""
-    return [{"sender": {"user_id": str(21000 + number), "nickname": f"Source {number}"},
+    # NapCat emits full message envelopes inside get_forward_msg, not minimal nodes.
+    return [{"post_type": "message", "message_type": "group", "self_id": 90001,
+             "message_id": 71000 + number, "group_id": 42, "time": 1700000000 + number,
+             "sender": {"user_id": str(21000 + number), "nickname": f"Source {number}"},
              "message": [{"type": "text", "data": {"text": f"forward-real-text-{number}"}}]}
             for number in range(5)]
 
@@ -102,6 +105,66 @@ def test_empty_forward_entry_sends_five_real_source_texts_to_provider(production
     assert all(f"forward-real-text-{number}" in body for number in range(5))
     assert event.actions == [("get_forward_msg", {"id": "forward-source"})]
     assert event.stopped and event.sent == []
+
+
+def test_raw_message_envelope_with_nested_native_forward_preserves_every_leaf(production, monkeypatch):
+    """A lossy component recovers the raw card id and expands full native nested envelopes."""
+    plugin, event = production(), Event(text="", components=[Forward()])
+    event.message_obj.raw_message = {
+        "post_type": "message", "message_type": "group", "self_id": 90001,
+        "message_id": 1234, "group_id": 42,
+        "sender": {"user_id": 10001, "nickname": "Current speaker"},
+        "message": [{"type": "forward", "data": {"id": 73001}}]}
+    outer, nested = _forward_nodes(), _forward_nodes()[:1]
+    nested[0]["message"] = [{"type": "text", "data": {"text": "nested-native-leaf-exact"}}]
+    outer[0]["message"].append({"type": "forward", "data": {"id": "nested-native"}})
+    responses = {"73001": {"status": "ok", "retcode": 0, "data": {"messages": outer}},
+                 "nested-native": {"status": "ok", "retcode": 0, "data": {"messages": nested}}}
+
+    async def native_forward(action, **parameters):
+        """Return only the explicit nested native resources, preserving request identity."""
+        event.actions.append((action, parameters))
+        assert action == "get_forward_msg"
+        assert isinstance(parameters["id"], str)
+        return responses[parameters["id"]]
+
+    event.bot.api.call_action = native_forward
+    requests = _provider(monkeypatch, [("SILENT", [])])
+    _run_chat(plugin, event, "on_message")
+
+    assert len(requests) == 1
+    envelope = json.loads(requests[0]["messages"][1]["content"])
+    body = envelope["conversation"]["messages"][0]["body"]
+    forwarded = json.loads(body)
+    result = forwarded["result"]
+    assert result["recognized"] and result["ok"] and result["error"] is None
+    expected = ["forward-real-text-0", "nested-native-leaf-exact", *[
+        f"forward-real-text-{number}" for number in range(1, 5)]]
+    assert [item["text"] for item in result["items"]] == expected
+    assert result["items"][0]["sender"] == {"id": "21000", "display_name": "Source 0"}
+    assert result["items"][1]["sender"] == {"id": "21000", "display_name": "Source 0"}
+    assert all(text in body for text in expected)
+    assert "empty_forward" not in body and "无正文消息" not in body
+    assert event.actions == [("get_forward_msg", {"id": "73001"}),
+                             ("get_forward_msg", {"id": "nested-native"})]
+    assert plugin._forward_flow_fallback_calls == [] and event.sent == []
+
+
+def test_plain_raw_message_envelope_is_not_promoted_to_forward(production, monkeypatch):
+    """Ordinary raw OneBot messages stay ordinary chat despite matching native node metadata."""
+    plugin, event = production(), Event(text="ordinary-native-message-exact")
+    event.message_obj.raw_message = {
+        "post_type": "message", "message_type": "group", "self_id": 90001,
+        "message_id": 1234, "sender": {"user_id": 10001, "nickname": "Current speaker"},
+        "message": [{"type": "text", "data": {"text": event.text}}]}
+    requests = _provider(monkeypatch, [("SILENT", [])])
+    _run_chat(plugin, event, "on_message")
+
+    assert len(requests) == 1 and event.actions == []
+    envelope = json.loads(requests[0]["messages"][1]["content"])
+    assert envelope["conversation"]["messages"][0]["body"] == event.text
+    assert "forwarded_messages" not in requests[0]["messages"][1]["content"]
+    assert plugin._forward_flow_fallback_calls == [] and event.sent == []
 
 
 def test_forward_image_metadata_reaches_visual_request_without_losing_source_text(production, monkeypatch):
@@ -192,6 +255,38 @@ def test_native_read_forward_and_expand_share_complete_items_without_http_bypass
     assert [item["text"] for item in results[0]["items"]] == [f"forward-real-text-{number}" for number in range(5)]
     assert [record["result"] for record in plugin._tool_evidence().recent("42")] == results
     assert event.sent == []
+
+
+@pytest.mark.parametrize("tool_name", ["read_forward", "forward_expand"])
+def test_forward_tool_images_follow_paired_source_observation(production, monkeypatch, tool_name):
+    """Native forward tools expose source text and image data only after their paired result."""
+    plugin, event = production(), Event("read the source forward")
+    nodes = _forward_nodes()
+    image_url = "https://offline.invalid/native-forward-tool-image.png"
+    nodes[0]["message"].append({"type": "image", "data": {"url": image_url}})
+    event.action_results["get_forward_msg"] = {"messages": nodes}
+    requests = _provider(monkeypatch, [
+        ("", [_call(tool_name, {"id": "tool-visual-source"}, "tool-visual-call")]),
+        ("SILENT", [])])
+
+    _run_chat(plugin, event, "_handle_one")
+
+    assert len(requests) == 2
+    messages = requests[1]["messages"]
+    observation_index = next(index for index, message in enumerate(messages) if message["role"] == "tool")
+    observation = json.loads(messages[observation_index]["content"])
+    assert messages[observation_index]["tool_call_id"] == "tool-visual-call"
+    assert observation["result"]["ok"]
+    assert [item["text"] for item in observation["result"]["items"]] == [
+        f"forward-real-text-{number}" for number in range(5)]
+    assert observation["result"]["items"][0]["media"] == [{"type": "image", "url": image_url}]
+    visual_messages = [message for message in messages[observation_index + 1:]
+                       if isinstance(message.get("content"), list)]
+    assert len(visual_messages) == 1 and visual_messages[0]["role"] == "user"
+    assert [part["image_url"]["url"] for part in visual_messages[0]["content"]
+            if part["type"] == "image_url"] == [image_url]
+    assert event.actions == [("get_forward_msg", {"id": "tool-visual-source"})]
+    assert plugin._forward_flow_fallback_calls == [] and event.sent == []
 
 
 @pytest.mark.parametrize("entry", ["_handle_one", "on_message"])

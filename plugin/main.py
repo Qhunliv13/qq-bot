@@ -311,7 +311,7 @@ class HiganPlugin(Star):
         # Propagate timeout so initialize cannot mark a replacement ready alongside active old work.
         await asyncio.wait_for(wait_quiet(), timeout=(TOOL_TURN_TIMEOUT or 600) + 120)
         for owner in owners:
-            for field in ("_recent", "_last_reply_at", "_reply_times", "_last_sent", "_my_recent"):
+            for field in ("_recent", "_history_origins", "_last_reply_at", "_reply_times", "_last_sent", "_my_recent"):
                 old = getattr(owner, field, None)
                 if isinstance(old, dict):
                     setattr(self, field, old.copy())
@@ -803,9 +803,9 @@ class HiganPlugin(Star):
         if not text.strip():
             return
         line = "彼岸酱：" + text.strip()
-        history = self._recent.setdefault(group, [])
-        history.append(line)
-        del history[:-2000]
+        from .history_window import append_history
+        self._history_origins = getattr(self, "_history_origins", {})
+        append_history(self._recent, self._history_origins, group, line)
         try:
             self._hist().append(group, line)
         except Exception as exc:
@@ -1186,9 +1186,10 @@ class HiganPlugin(Star):
                         logger.info("[higan] 已从磁盘恢复 %s 的历史 %d 行 ✓" % (group, len(_old)))
                 except Exception as _exc:  # noqa: BLE001
                     logger.warning("[higan] 恢复历史失败（忽略）：%r", _exc)
-            history_snapshot = tuple(history[-120:])
-            history.append(line)
-            del history[:-2000]
+            from .history_window import append_history, history_snapshot as stable_snapshot
+            self._history_origins = getattr(self, "_history_origins", {})
+            history_snapshot = stable_snapshot(history, self._history_origins.get(group, 0))
+            append_history(self._recent, self._history_origins, group, line)
             # [cross-group-ears] 同时进全局缓冲（带群标签 ✓）
             try:
                 self._all_recent.append("[群%s] %s" % (group, line))
@@ -3150,6 +3151,16 @@ class HiganPlugin(Star):
                 except Exception as exc:  # noqa: BLE001
                     return {"ok": False, "error": repr(exc)[:200]}
             res = await self._dispatch_tool(name, args, group, event=event)
+            if name in ("read_forward", "forward_expand") and isinstance(res, dict):
+                # A later explicit forward read must have the same visual input
+                # pathway as a directly received forward, after its native tool
+                # result. URLs alone in JSON are not evidence of visual access.
+                for item in res.get("items") or []:
+                    for media in item.get("media") or []:
+                        if media.get("type") == "image":
+                            ref = str(media.get("url") or media.get("file") or "")
+                            if ref:
+                                live_refs.append(ref)
             # [plugin-delivers-media] VM 说"交给你发" ⇒ 走插件通道（实测可用 ✓）
             try:
                 if isinstance(res, dict) and res.get("deliver") == "plugin":
@@ -4035,17 +4046,16 @@ class HiganPlugin(Star):
             return
         joined = [qq for qq in current if qq not in prev]
         left = [qq for qq in prev if qq not in current]
-        history = self._recent.setdefault(group, [])
+        from .history_window import append_history
+        self._history_origins = getattr(self, "_history_origins", {})
         for qq in joined:
             line = "【群动态】%s（QQ %s）加入了群聊" % (current[qq] or "某人", qq)
-            history.append(line)
+            append_history(self._recent, self._history_origins, group, line)
             logger.info("[higan] %s" % line)
         for qq in left:
             line = "【群动态】%s（QQ %s）退出了群聊" % (prev[qq] or "某人", qq)
-            history.append(line)
+            append_history(self._recent, self._history_origins, group, line)
             logger.info("[higan] %s" % line)
-        if joined or left:
-            del history[:-2000]
 
     @staticmethod
     async def _onebot(action: str, payload: dict) -> dict:

@@ -273,6 +273,57 @@ def test_parser_keeps_source_objects_unchanged_and_ignores_malformed_cards():
     assert parse_forward_descriptors({"type": "xml", "data": {"data": "<broken"}}) == []
 
 
+def full_napcat_node(text, uid=123, name="Alice"):
+    """Mirror observed NapCat source records, including legitimate event-like keys."""
+    return {"post_type": "message", "message_type": "group", "self_id": 90001,
+            "sender": {"user_id": uid, "nickname": name},
+            "message": [{"type": "text", "data": {"text": text}}]}
+
+
+def test_full_napcat_records_are_nodes_only_in_forward_context():
+    """The same shape is a current event outside, but a real source inside a forward."""
+    source = full_napcat_node("source text")
+    assert parse_forward_descriptors(source) == []
+    descriptors = parse_forward_descriptors([source], node_context=True)
+    assert len(descriptors) == 1 and descriptors[0]["kind"] == "node"
+    value = event([SimpleNamespace(type=ComponentType.Forward, id="r")],
+                  replies={("get_forward_msg", "r"): {"messages": [source]}})
+    result = run(value)
+    assert result["ok"] and result["text"] == "Alice: source text"
+    assert result["items"][0]["sender"]["id"] == 123
+
+
+def test_raw_inline_full_records_beat_lossy_forward_id_without_api():
+    """Actual raw inline content survives framework normalization and is not duplicated."""
+    inner = full_napcat_node("nested", uid=456, name="Bob")
+    outer = full_napcat_node("unused")
+    outer["message"] = [{"type": "forward", "data": {"id": "nested-r", "content": [inner]}}]
+    following = full_napcat_node("following")
+    raw = full_napcat_node("ordinary current text")
+    raw["message"] = [{"type": "forward", "data": {"id": "r", "content": [outer, following]}}]
+    value = event([SimpleNamespace(type=ComponentType.Forward, id="r")], raw=raw)
+    result = run(value)
+    assert result["ok"] and result["source"] == "event"
+    assert [item["text"] for item in result["items"]] == ["nested", "following"]
+    assert [item["sender"]["id"] for item in result["items"]] == [456, 123]
+    assert value.bot.api.calls == []
+
+
+def test_api_full_records_preserve_inline_nested_media_and_source_order():
+    """API payload nodes accept full fields while nested media stays attached to its sender."""
+    inner = full_napcat_node("caption", uid=456, name="Bob")
+    inner["message"].append({"type": "image", "data": {"url": "fixture-image"}})
+    outer = full_napcat_node("unused")
+    outer["message"] = [{"type": "forward", "data": {"id": "nested-r", "content": [inner]}}]
+    value = event(replies={("get_forward_msg", "r"): {"messages": [outer, full_napcat_node("last")]}})
+    result = run(value, forward_id="r")
+    assert result["ok"] and len(result["items"]) == 2
+    assert result["items"][0]["sender"]["id"] == 456
+    assert result["items"][0]["media"] == [{"type": "image", "url": "fixture-image"}]
+    assert result["text"] == "Bob: caption[image]\nAlice: last"
+    assert value.bot.api.calls == [("get_forward_msg", {"id": "r"})]
+
+
 def test_empty_source_nodes_do_not_create_empty_user_items():
     """Empty source content is visible as unavailable content, not fake dialogue."""
     result = run(event([node("")]))

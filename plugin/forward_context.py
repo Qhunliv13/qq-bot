@@ -105,28 +105,31 @@ def _card_descriptors(raw):
         {"kind": "forward", "id": None}]
 
 
-def parse_forward_descriptors(value):
+def parse_forward_descriptors(value, *, node_context=False):
     """Return ordered node/forward descriptors without API calls or input mutation.
 
     Node descriptors contain their original content and normalized sender. Only
     forward-shaped components/cards produce fetchable IDs; ordinary message ids
-    and ordinary text/media are deliberately ignored.
+    and ordinary text/media are deliberately ignored. Full NapCat message records
+    are nodes only inside an actual forward payload; ordinary event envelopes
+    remain containers even when their fields otherwise resemble source nodes.
     """
-    stack, descriptors, seen = [value], [], set()
+    stack, descriptors, seen = [(value, node_context)], [], set()
     while stack:
-        current = stack.pop()
+        current, in_nodes = stack.pop()
         if current is None:
             continue
         if not isinstance(current, (str, int, float, bool)):
-            if id(current) in seen:
+            identity = (id(current), in_nodes)
+            if identity in seen:
                 continue
-            seen.add(id(current))
+            seen.add(identity)
         if isinstance(current, (list, tuple)):
-            stack.extend(reversed(current))
+            stack.extend((child, in_nodes) for child in reversed(current))
             continue
         kind, data = _type(current), _data(current)
         if kind in ("node", "nodes") or (isinstance(current, Mapping)
-                and not any(key in current for key in ("post_type", "message_type", "self_id"))
+                and (in_nodes or not any(key in current for key in ("post_type", "message_type", "self_id")))
                 and any(key in current for key in ("sender", "user_id", "uin", "nickname"))
                 and ("content" in current or "message" in current)):
             content = _first(data, ("content", "message", "nodes"))
@@ -134,7 +137,7 @@ def parse_forward_descriptors(value):
                 content = _first(current, ("content", "message", "nodes"))
             # AstrBot Nodes is a container, not a fabricated sender/message.
             if kind == "nodes":
-                stack.append(content)
+                stack.append((content, True))
             else:
                 descriptors.append({"kind": "node", "sender": _sender(current),
                                     "content": content, "raw": current})
@@ -146,7 +149,7 @@ def parse_forward_descriptors(value):
             if content is None:
                 content = _first(current, ("content", "messages", "nodes"))
             if content:
-                stack.append(content)
+                stack.append((content, True))
             else:
                 descriptors.append({"kind": "forward", "id": str(fid) if fid is not None else None})
         elif kind in ("json", "xml", "card", "lightapp"):
@@ -158,7 +161,7 @@ def parse_forward_descriptors(value):
             # Raw event/get_msg envelopes are containers, never inferred forwards.
             for key in ("message", "messages", "raw_message"):
                 if key in current:
-                    stack.append(current[key])
+                    stack.append((current[key], in_nodes))
         elif isinstance(current, str) and current.lstrip().startswith(("{", "<")):
             descriptors.extend(_card_descriptors(current))
     return descriptors
@@ -216,12 +219,17 @@ def _unwrap(response):
 
 
 def _event_descriptors(event):
-    """Prefer parsed components, falling back to the original raw event dictionary."""
+    """Prefer complete raw source nodes when framework Forward retains only its id."""
     message = _get(event, "message_obj")
     descriptors = parse_forward_descriptors(_get(message, "message"))
+    raw = parse_forward_descriptors(_get(message, "raw_message"))
+    if raw and any(item["kind"] == "node" for item in raw) and not any(
+            item["kind"] == "node" for item in descriptors):
+        # The raw event preserves inline source records discarded by Forward.id.
+        # Replace rather than concatenate so a source is never rendered twice.
+        return raw
     if not descriptors or any(item["kind"] == "forward" and not item.get("id")
                               for item in descriptors):
-        raw = parse_forward_descriptors(_get(message, "raw_message"))
         if raw:
             # Raw IDs can recover lossy components without an unnecessary get_msg.
             descriptors = [item for item in descriptors if item["kind"] != "forward"
@@ -304,7 +312,9 @@ async def resolve(event, *, forward_id=None, message_id=None):
             if error:
                 result["errors"].append(error)
                 return
-            nested = parse_forward_descriptors(payload)
+            # Successful get_forward_msg payloads define a source-node context;
+            # NapCat legitimately includes event-like fields on each source node.
+            nested = parse_forward_descriptors(payload, node_context=True)
             if not nested:
                 result["errors"].append("empty_forward")
             for child in nested:
