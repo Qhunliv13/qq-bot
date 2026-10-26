@@ -1110,6 +1110,10 @@ class HiganPlugin(Star):
                 return
             if hasattr(self, "_ready"):
                 await self._ready.wait()
+            # Releasing a failed old instance's ready gate only lets it stop;
+            # it must not start work after a newer initialization marked it stopping.
+            if self._stopping:
+                return
             # [private-scope] 2026-10-19: 私聊也处理（用户要求「在哪对话都能回」）
             group_raw = str(event.get_group_id() or "")
             if group_raw:
@@ -1121,6 +1125,13 @@ class HiganPlugin(Star):
                 sender = str(event.get_sender_id() or "") or "unknown"
                 group = "private:" + sender
 
+            raw_event = getattr(getattr(event, "message_obj", None), "raw_message", None)
+            if isinstance(raw_event, str):
+                try:
+                    raw_event = json.loads(raw_event)
+                except (ValueError, TypeError):
+                    raw_event = None
+            source_notice = isinstance(raw_event, dict) and raw_event.get("post_type") == "notice"
             text = (event.get_message_str() or "").strip()
             # Plain rendering omits valid non-text components (faces, cards,
             # voice/files and adapter-unknown segments). Preserve their actual
@@ -1128,6 +1139,12 @@ class HiganPlugin(Star):
             from .nontext_context import describe_event
             nontext = describe_event(event)
             event._higan_nontext_context = nontext
+            if source_notice and not nontext.get("recognized"):
+                # Framework notice wrappers are not empty user chat. No guessed
+                # time-window or file-ID deduplication is used to suppress them.
+                event.stop_event()
+                logger.info("[higan] source_notice ignored_attachment_free=True")
+                return
             if nontext.get("recognized"):
                 text = (text + "\n" + json.dumps({"source": "message_components",
                         "trust": "untrusted_data", "segments": nontext["segments"]},
@@ -1208,6 +1225,12 @@ class HiganPlugin(Star):
             except Exception:  # noqa: BLE001
                 pass
 
+            if source_notice:
+                # Upload metadata is an observation, not a second utterance. The
+                # actual native file message remains its own normal opportunity.
+                event.stop_event()
+                logger.info("[higan] source_notice attachment_history_only=True")
+                return
             # Compute wake eligibility now; reply probability applies once to the collected batch.
             _at_me_now = self._directly_mentioned(event)
             _woken_e = False

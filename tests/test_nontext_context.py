@@ -209,3 +209,101 @@ def test_duplicate_actual_images_preserve_segments_but_share_vision_ref():
     result = describe_event(event(raw=raw))
     assert len(result["segments"]) == 2
     assert result["image_refs"] == ["https://example.test/image"]
+
+
+def test_group_upload_empty_canonical_preserves_complete_source_file():
+    """An explicit upload's file dictionary survives an empty adapter message."""
+    source_file = {"id": "/native-source-id", "name": "source.html", "size": 46884,
+                   "busid": 102, "unknown": {"retained": [True, 0, None]}}
+    raw = {"post_type": "notice", "notice_type": "group_upload", "group_id": 123,
+           "user_id": 456, "file": source_file, "time": 1793016253}
+    value = event([], raw)
+    before = repr(value)
+    assert describe_event(value) == {
+        "recognized": True, "segments": [{"type": "file", "file": source_file}], "image_refs": []}
+    assert repr(value) == before
+    assert value.message_str == "" and value.sender_id == "unchanged"
+    assert value.is_at_or_wake_command is False
+
+
+def test_group_upload_json_event_is_normalized_before_message_unwrap():
+    """JSON-encoded raw events share the single group-upload normalization path."""
+    source_file = {"id": "original", "name": "page.html", "size": 46884, "busid": 1}
+    raw = json.dumps({"post_type": "notice", "notice_type": "group_upload", "file": source_file})
+    assert describe_event(event([], raw)) == {
+        "recognized": True, "segments": [{"type": "file", "file": source_file}], "image_refs": []}
+
+
+def test_group_upload_source_metadata_overrides_lossy_canonical_file():
+    """Existing raw-kind authority also avoids duplicating an adapter projection."""
+    source_file = {"id": "source-id", "name": "source.html", "busid": 2}
+    result = describe_event(event([SimpleNamespace(type="file", id="synthetic-id", name="lossy")],
+                                  {"post_type": "notice", "notice_type": "group_upload",
+                                   "file": source_file}))
+    assert result["segments"] == [{"type": "file", "file": source_file}]
+    assert result["image_refs"] == []
+
+
+def test_group_upload_unknown_file_fields_remain_opaque_source_data():
+    """File type/data keys and image-looking metadata cannot override the segment."""
+    source_file = {"id": "source", "type": "image", "data": {"type": "image"},
+                   "url": "https://example.test/file.html", "path": "C:\\unread\\file.html",
+                   "nested": {"type": "image", "url": "https://example.test/not-an-image"}}
+    result = describe_event(event([], {"post_type": "notice", "notice_type": "group_upload",
+                                       "file": source_file}))
+    assert result == {"recognized": True, "segments": [{"type": "file", "file": source_file}],
+                      "image_refs": []}
+    assert result["segments"][0]["file"] is not source_file
+
+
+@pytest.mark.parametrize("notice_type", ["group_increase", "group_decrease", "notify", "random",
+                                         "offline_file", None])
+def test_unrelated_notice_file_field_is_not_attachment_evidence(notice_type):
+    """A file-shaped field alone must not turn unrelated/private notices into files."""
+    raw = {"post_type": "notice", "notice_type": notice_type, "file": {"id": "not-proven"}}
+    assert describe_event(event([], raw)) == {"recognized": False, "segments": [], "image_refs": []}
+
+
+@pytest.mark.parametrize("post_type", ["message", "request", "meta_event", None])
+def test_group_upload_requires_explicit_notice_post_type(post_type):
+    """An arbitrary object naming group_upload is not a proven upload event."""
+    raw = {"post_type": post_type, "notice_type": "group_upload", "file": {"id": "not-proven"}}
+    assert describe_event(event([], raw)) == {"recognized": False, "segments": [], "image_refs": []}
+
+
+def test_group_upload_missing_file_is_unrecognized():
+    """The notice discriminator cannot fabricate metadata when no file is supplied."""
+    raw = {"post_type": "notice", "notice_type": "group_upload", "group_id": 123}
+    assert describe_event(event([], raw)) == {"recognized": False, "segments": [], "image_refs": []}
+
+
+@pytest.mark.parametrize("source_file", [None, {}, [], [{"id": "nested"}], "file.html", 7, True])
+def test_group_upload_malformed_or_empty_file_is_unrecognized(source_file):
+    """Only a nonempty source mapping establishes upload metadata, never a guess."""
+    raw = {"post_type": "notice", "notice_type": "group_upload", "file": source_file}
+    assert describe_event(event([], raw)) == {"recognized": False, "segments": [], "image_refs": []}
+
+
+def test_existing_plain_and_raw_file_message_normalization_is_unchanged():
+    """Ordinary message arrays retain raw authority and exclude plain text as before."""
+    source_file = {"id": "native-file", "name": "existing.html", "size": 46884, "busid": 2}
+    raw = {"post_type": "message", "message": [{"type": "text", "data": {"text": "hello"}},
+                                               {"type": "file", "data": source_file}],
+           "file": {"id": "unrelated-top-field"}}
+    canonical = [SimpleNamespace(type="plain", text="hello"), SimpleNamespace(type="file", id="lossy")]
+    assert describe_event(event(canonical, raw)) == {
+        "recognized": True, "segments": [{"type": "file", **source_file}], "image_refs": []}
+    assert describe_event(event([SimpleNamespace(type="plain", text="hello")],
+                                {"message": [{"type": "text", "data": {"text": "hello"}}]})) == {
+        "recognized": False, "segments": [], "image_refs": []}
+
+
+def test_group_upload_does_not_deduplicate_separate_same_epoch_events():
+    """Normalization is stateless; shared timestamps never merge source events."""
+    source_file = {"id": "original-file", "name": "same.html", "size": 46884}
+    raw = {"post_type": "notice", "notice_type": "group_upload", "time": 1793016253,
+           "file": source_file}
+    first = describe_event(event([], raw))
+    second = describe_event(event([], dict(raw)))
+    assert first == second == {
+        "recognized": True, "segments": [{"type": "file", "file": source_file}], "image_refs": []}

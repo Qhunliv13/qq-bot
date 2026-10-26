@@ -81,12 +81,23 @@ def _primitive(value, ancestors=frozenset()):
 
 
 def _top_segments(value):
-    """Unwrap only a top-level event/message array, never nested component data."""
+    """Normalize explicit group-upload notices or unwrap top-level message evidence.
+
+    Only the OneBot group-upload discriminator proves a top-level file object is
+    attachment evidence; unrelated notices and nested component data stay opaque.
+    """
     if isinstance(value, str):
         try:
             value = json.loads(value)
         except (ValueError, TypeError, RecursionError):
             return []
+    if (isinstance(value, Mapping) and value.get("post_type") == "notice"
+            and value.get("notice_type") == "group_upload"
+            and isinstance(value.get("file"), Mapping) and value["file"]):
+        # OneBot uploads carry source metadata in file, not a message array.
+        # Retain that dictionary intact: its id/name/unknown keys are source data,
+        # never image evidence or a reason to read/download the uploaded content.
+        return [{"type": "file", "file": value["file"]}]
     if isinstance(value, Mapping) and not _kind(value):
         value = value.get("message")
         if isinstance(value, str):
