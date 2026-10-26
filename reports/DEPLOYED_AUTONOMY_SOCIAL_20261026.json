@@ -1,0 +1,67 @@
+{
+  "commit": "8eddb399004055436c1dabe5f348a68372952c0b",
+  "date": "2026-10-26",
+  "timezone": "Asia/Shanghai",
+  "status": "active",
+  "activation": {
+    "reload_path": "/plugins/astrbot_plugin_higan/reload",
+    "hashes_verified": 16,
+    "astrbot_pid_before_after": "714988",
+    "astrbot_restart_count": 0,
+    "napcat_started_before_after": "2026-10-25T02:31:45.216352424Z",
+    "group_policies_unchanged": true,
+    "saved_mention_only_preserved": true,
+    "temporary_access_revoked": true,
+    "tracebacks": 0,
+    "batch_failures": 0,
+    "reload_errors": 0
+  },
+  "offline_verification": {
+    "passed": 851,
+    "skipped": 17,
+    "subtests_passed": 18,
+    "advertised_tool_contracts": 71,
+    "pyflakes_clean": true,
+    "compile_clean": true,
+    "release_scan_clean": true,
+    "native_http_action_path_regression_added": true
+  },
+  "deployed_real_model_probe": {
+    "empty_current_messages_preserved": true,
+    "trigger_kind": "autonomous_opportunity",
+    "advertised_tools": 71,
+    "social_tools_advertised": true,
+    "native_read_tools_called": ["qq_account_info", "qq_social_status"],
+    "account_info_success": true,
+    "read_error_codes": [],
+    "qq_messages_sent": 0,
+    "signature_modified": false,
+    "qzone_published": false,
+    "persona_modified": false,
+    "runtime_state_isolated": true
+  },
+  "behavior": {
+    "default_opportunity_interval_seconds": 600,
+    "model_can_reschedule": true,
+    "real_framework_origin_required": true,
+    "new_scopes_learn_from_actual_messages_not_only_mentions": true,
+    "no_forced_speech_or_topic": true,
+    "no_new_tool_round_or_turn_duration_caps": true,
+    "same_execution_lock_as_chat_and_tasks": true,
+    "daily_schedule_uses_utc8_date": true,
+    "autonomous_policy_escalation_denied": true,
+    "muted_and_mention_only_targets_preserved": true
+  },
+  "capabilities_and_limits": {
+    "signature": "native set_self_longnick; accepted outcome plus separate readback match",
+    "profile": "native set_qq_profile; nickname and optional personal_note/sex",
+    "qzone_post": "native send_qzone_msg; text only, explicit visibility, accepted tid not published readback",
+    "write_authorization": "actual owner or typed internal autonomous event with observed origin and current scope permission",
+    "idempotency": "stable operation_id, persisted claims and receipts; unknown outcomes are terminal, not automatically retried",
+    "qzone_list_like_comment": "not advertised; installed registration not verified",
+    "qzone_images": "not supported in first release to avoid arbitrary file/URL exfiltration",
+    "live_social_write_success_verified": false,
+    "all_future_model_wording_or_silence_guaranteed": false,
+    "general_vm_is_security_sandbox": false
+  }
+}
