@@ -55,6 +55,30 @@ def run(value, **kwargs):
     return asyncio.run(resolve(value, **kwargs))
 
 
+def test_ordinary_raw_event_is_not_a_forward_node():
+    """OneBot event sender/message fields describe the current source, not a quoted node."""
+    raw = {"post_type": "message", "message_type": "group", "self_id": 90001,
+           "sender": {"user_id": 123, "nickname": "Alice"},
+           "message": [{"type": "text", "data": {"text": "ordinary"}}]}
+    value = event([SimpleNamespace(type=ComponentType.Plain, text="ordinary")], raw=raw)
+    result = run(value)
+    assert result["recognized"] is False
+    assert result["items"] == []
+    assert value.bot.api.calls == []
+
+
+def test_raw_event_with_nested_forward_still_recovers_resource():
+    """Skipping the event wrapper must still traverse its actual forward component."""
+    raw = {"post_type": "message", "message_type": "group", "self_id": 90001,
+           "sender": {"user_id": 123},
+           "message": [{"type": "forward", "data": {"id": "resource"}}]}
+    value = event(raw=raw, replies={("get_forward_msg", "resource"): {"messages": [node("hello")]}})
+    result = run(value)
+    assert result["recognized"] and result["ok"]
+    assert result["items"][0]["text"] == "hello"
+    assert value.bot.api.calls == [("get_forward_msg", {"id": "resource"})]
+
+
 def test_enum_forward_attribute_id_uses_existing_api():
     """Actual Forward.id is used even when component.data does not contain it."""
     component = SimpleNamespace(type=ComponentType.Forward, id="resource")

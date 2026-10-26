@@ -126,6 +126,7 @@ def parse_forward_descriptors(value):
             continue
         kind, data = _type(current), _data(current)
         if kind in ("node", "nodes") or (isinstance(current, Mapping)
+                and not any(key in current for key in ("post_type", "message_type", "self_id"))
                 and any(key in current for key in ("sender", "user_id", "uin", "nickname"))
                 and ("content" in current or "message" in current)):
             content = _first(data, ("content", "message", "nodes"))
