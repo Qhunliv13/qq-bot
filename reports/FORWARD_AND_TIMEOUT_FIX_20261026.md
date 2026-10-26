@@ -53,7 +53,7 @@ only, no new successful response returns it. A source constant alone is not an a
 
 ## Verification
 
-405tests passed,17platform-specific skipped,18subtests; pyflakes,compile,release scan clean.
+407tests passed,17platform-specific skipped,18subtests; pyflakes,compile,release scan clean.
 Includes29pure forward cases, actual-fixture offline verification, native admission/tool
 integration, recognized unreadable forwards, two consecutive synthetic timeouts with zero
 or one prior tool, no duplicate tool execution/no independent fallback, task failure state,
