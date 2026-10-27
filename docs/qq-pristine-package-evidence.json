@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "sample_date": "2026-10-27",
+  "scope": "Public software artifact download and local package metadata inspection only; no installation, execution, native loading or account data access.",
+  "discovery": {
+    "publisher_source": "https://raw.githubusercontent.com/NapNeko/NapCat-Docker/main/Dockerfile",
+    "source_is_mutable": true,
+    "source_is_tencent_authority": false,
+    "artifact_url_observed_in_source": true,
+    "dockerhub_digest_mapping_verified": false,
+    "note": "Unsubstantiated child statements about DockerHub index/architecture/layer mappings were retracted and are not used as evidence."
+  },
+  "artifact": {
+    "url": "https://qqdl.gtimg.cn/qqfile/QQNT/9.9.36/beta/9ee04bef/linuxqq_3.2.34-53644_amd64.deb",
+    "bytes": 187185496,
+    "sha256": "436c65e1dd28422e128a21cbddb5fe4e2e6c079d7f27fec2541e014d38cc336e",
+    "independent_official_digest_available": false,
+    "download_complete": true,
+    "anonymous_range_request_http_status": 206,
+    "content_range_probe": "bytes 0-65535/187185496",
+    "control_package": "linuxqq",
+    "control_version": "3.2.34-53644"
+  },
+  "original_manifest": {
+    "name": "QQ",
+    "version": "3.2.34-53644",
+    "buildVersion": "53644",
+    "main": "./application.asar/app_launcher/index.js",
+    "bytes": 2156,
+    "md5": "0c940cb5624561345e6a8dbe9a713b3e",
+    "sha256": "e7d8f160704a8704a4f531ef97602ea6fea8338f738f74ee9b10155cb9fc0a85",
+    "matches_installed_dpkg_original_manifest_hash": true
+  },
+  "installed_metadata": {
+    "dpkg_package": "linuxqq",
+    "dpkg_version": "3.2.34-53644",
+    "dpkg_original_manifest_md5": "0c940cb5624561345e6a8dbe9a713b3e",
+    "current_manifest_md5": "67457d0382556e12f1fec28255b9ec15",
+    "current_main": "./loadNapCat.js",
+    "apt_cached_debs_found": 0,
+    "reported_graphdriver_metadata": null,
+    "lower_layer_paths_offered": 0
+  },
+  "limits": [
+    "The matching manifest MD5 corroborates the recorded package metadata; it is not cryptographic publisher authentication or proof that every installed software byte matches this downloaded artifact.",
+    "The original main is now confirmed from package bytes; prior snapshots reporting it unknown remain historical evidence.",
+    "No claim is made that the archived bootstrap entry is ordinary readable JavaScript or independently loadable in generic Node.",
+    "The earlier release-address HTTP 403 and this distinct publisher-listed beta artifact HTTP 206 are different endpoint observations, not a claim of universal availability.",
+    "QQ host coupling, native API signatures, initialization, events and all personal-account features still require isolated runtime validation."
+  ],
+  "safety": {
+    "installed": false,
+    "executed": false,
+    "native_module_loaded": false,
+    "account_data_read": false,
+    "credentials_copied": false,
+    "production_files_written": false,
+    "production_transport_switched": false
+  },
+  "actual_static_preflight": {
+    "manifest_and_archive_only_staged": true,
+    "archive_bytes": 30361684,
+    "archive_entry_name": "app_launcher/index.js",
+    "archive_entry_size": 80,
+    "archive_entry_present": true,
+    "archive_entry_unpacked": false,
+    "coverage": "asar_entry_metadata_only_payload_uninspected",
+    "metadata_errors": [],
+    "native_libraries_staged": false,
+    "readiness_exit_code": 1
+  },
+  "native_backend_implemented": false,
+  "login_verified": false,
+  "full_feature_parity_verified": false,
+  "production_cutover_authorized": false
+}

@@ -245,3 +245,102 @@ def test_all_functions_documented_and_syntax():
         for node in ast.walk(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 assert ast.get_docstring(node), node.name
+
+
+def asar_main_fixture(app, entry=None, main="./application.asar/app_launcher/index.js"):
+    """Create a real bounded ASAR header and inert, never-executed payload."""
+    if entry is None:
+        entry = {"size": 15, "offset": "0"}
+    tree = {"files": {"app_launcher": {"files": {"index.js": entry}}}}
+    header = json.dumps(tree).encode("utf-8")
+    padding = bytes((-len(header)) % 4)
+    prefix = struct.pack("<4I", 4, 8 + len(header) + len(padding),
+                         4 + len(header) + len(padding), len(header))
+    archive = app / "application.asar"
+    archive.write_bytes(prefix + header + padding + b"NaPcAt payload!")
+    (app / "package.json").write_text(json.dumps({"main": main}), encoding="utf-8")
+    return archive, len(header)
+
+
+def test_asar_main_metadata_only(installation, monkeypatch):
+    """Confirm original QQ main from header, proving no entry payload is read."""
+    root, app = installation
+    archive, header_size = asar_main_fixture(app)
+    original = Path.open
+    reads = []
+
+    class HeaderGuard(io.BytesIO):
+        """Expose prefix and JSON only, rejecting payload consumption."""
+
+        def read(self, size=-1):
+            """Require exactly the parser's bounded prefix and JSON reads."""
+            reads.append(size)
+            assert reads in ([16], [16, header_size])
+            return super().read(size)
+
+    raw = archive.read_bytes()
+
+    def guarded_open(path, *args, **kwargs):
+        """Instrument only the synthetic archive, leaving other metadata alone."""
+        if path == archive:
+            return HeaderGuard(raw)
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", guarded_open)
+    report = preflight.inspect_installation(root)
+    assert report["package"]["main"] == "resources/app/application.asar/app_launcher/index.js"
+    assert report["archive_entry"]["present"] is True
+    assert report["archive_entry"]["name"] == "app_launcher/index.js"
+    assert report["archive_entry"]["kind"] == "file"
+    assert report["archive_entry"]["unpacked"] is False
+    assert report["archive_entry"]["size"] == 15
+    assert report["bootstrap_coverage"] == "asar_entry_metadata_only_payload_uninspected"
+    assert "bootstrap_uninspected" not in report["errors"]
+    assert report["observed_napcat_bootstrap_reference"] is False
+    assert report["backend_independence_status"] == "unverified"
+    assert reads == [16, header_size]
+    assert_closed(report)
+
+
+@pytest.mark.parametrize("failure", ["missing_archive", "missing_entry", "link", "unpacked", "oversized"])
+def test_asar_main_fail_closed(installation, failure):
+    """Missing, linked, external, or invalid metadata cannot confirm packed main."""
+    root, app = installation
+    entry = {"link": "private-account.js"} if failure == "link" else None
+    if failure == "unpacked":
+        entry = {"size": 15, "unpacked": True}
+    main = "./application.asar/app_launcher/missing.js" if failure == "missing_entry" else "./application.asar/app_launcher/index.js"
+    archive, _ = asar_main_fixture(app, entry, main)
+    if failure == "missing_archive":
+        archive.unlink()
+    elif failure == "oversized":
+        archive.write_bytes(struct.pack("<4I", 4, 20, 16, 9 * 1024 * 1024))
+    report = preflight.inspect_installation(root)
+    assert "bootstrap_uninspected" in report["errors"]
+    assert "archive_entry" not in report
+    assert report["bootstrap_coverage"] == "unknown"
+    assert "private-account" not in json.dumps(report)
+    assert_closed(report)
+
+
+def test_asar_main_cli_import(installation):
+    """Direct script imports work outside the repo and retain non-ready exit 1."""
+    root, app = installation
+    asar_main_fixture(app)
+    completed = subprocess.run([__import__("sys").executable, str(SOURCE), "--qq-root", str(root)],
+                               cwd=root, capture_output=True, text=True, check=False)
+    assert completed.returncode == 1, completed.stderr
+    report = json.loads(completed.stdout)
+    assert report["archive_entry"]["present"] is True
+    assert_closed(report)
+
+
+@pytest.mark.parametrize("main", ["./application.asar/../../private.js", "./application.asar_backup/app_launcher/index.js"])
+def test_asar_boundary_and_traversal(installation, main):
+    """Reject traversal and do not treat a partial ASAR suffix as an archive."""
+    root, app = installation
+    asar_main_fixture(app, main=main)
+    report = preflight.inspect_installation(root)
+    assert "archive_entry" not in report
+    assert report["errors"]
+    assert_closed(report)

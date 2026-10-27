@@ -197,16 +197,50 @@ The native software boundary was inspected without loading libraries or starting
   the package does not exist or is unavailable everywhere. No mirror, authentication
   bypass or QQ account credentials were used.
 
-**Practical gate:** obtain an authorized pristine matching-version QQ software package
-and establish the actual official host/bootstrap prerequisites before a runtime
-experiment. Do not guess an API from exported C++ names, call a native constructor in
+The preceding 403 observations apply to the public-release URL checked in that phase;
+a later exact build URL succeeded, as recorded below. **Practical gate:** establish
+the actual official host/bootstrap prerequisites before a runtime experiment. Do not guess an API from exported C++ names, call a native constructor in
 the live process, use generic Node `require` as a parity demonstration, or retain
 NapCat's loader under a new name. Login and all 180 base actions remain unimplemented.
+
+## Pristine package recovery (2026-10-27)
+
+`qq-pristine-package-evidence.json` records a complete **187,185,496-byte** download
+from the exact public Tencent-hosted build URL explicitly present in the upstream
+publisher Dockerfile. An ordinary anonymous range request returned HTTP 206; the
+package was saved only outside the repository. No installation scripts, native library
+or QQ executable were run. Package-control metadata confirms `linuxqq 3.2.34-53644`.
+
+The original 2,156-byte QQ manifest declares:
+
+```text
+./application.asar/app_launcher/index.js
+```
+
+Its MD5 `0c940cb5624561345e6a8dbe9a713b3e` matches the installed DPKG original-file
+record, unlike the currently modified NapCat manifest. SHA-256 is recorded for the
+package and manifest; no independent Tencent-published checksum was available. The
+MD5 match corroborates package metadata, not publisher authenticity or equality of
+every installed application byte. The original entry is now established, superseding
+older snapshots where it was unknown. Native initialization and JS APIs remain unknown.
+
+Unverified child claims about DockerHub index/architecture/layer mappings were
+explicitly retracted and are not evidence. Container/image GraphDriver metadata was
+actually null; no lower-layer mount, image rebuild or production modification was used.
+
+The static preflight must treat `application.asar/app_launcher/index.js` as an archived
+entry, not an ordinary host file. Archive entry existence is checked through the
+single header-only ASAR implementation; it does not read the entry's payload or prove
+that it can be executed, and all login/cutover readiness flags remain false.
+An actual local run against the pristine manifest and 30,361,684-byte archive found
+`app_launcher/index.js`, an 80-byte packed entry, with no metadata errors. Only these
+two software files were staged: native libraries and executable were not copied into
+this static lab. The intentional non-ready exit code remained 1.
 
 ## Next validation gates
 
 1. Complete the installed backend API/event inventory and preserve configuration mappings.
-2. Obtain an isolated, version-matched QQ software environment without live account data.
+2. Safely stage the now-downloaded matching-version QQ software in an isolated environment without live account data; downloading a DEB is not an initialized runtime.
 3. Prove independent native bootstrap and event binding without NapCat loading.
 4. Only with separately authorized test-account access, verify login and actual action/event
    behavior. Do not assume production-account use is acceptable for an experiment.

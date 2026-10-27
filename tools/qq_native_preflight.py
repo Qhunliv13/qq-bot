@@ -11,6 +11,15 @@ import re
 import stat
 import struct
 
+# Reuse the sole metadata parser for package imports and direct CLI execution.
+try:
+    from tools.qq_asar_inventory import inspect_archive
+except ModuleNotFoundError as exc:
+    if exc.name != "tools":
+        # Do not mask a missing dependency inside the inventory implementation.
+        raise
+    from qq_asar_inventory import inspect_archive
+
 
 # Bounds prevent unexpectedly large metadata/bootstrap reads; native reads are 64 bytes.
 PACKAGE_LIMIT = 1024 * 1024
@@ -153,11 +162,34 @@ def inspect_installation(qq_root):
         report["observed_napcat_bootstrap_reference"] = marker
         report["package"]["main"] = (Path("resources/app") / main).as_posix()
         try:
-            main_path = checked_file(root, Path("resources/app") / main)
-            bootstrap = read_bounded(main_path, BOOTSTRAP_LIMIT).decode("utf-8")
-            report["bootstrap_coverage"] = "entry_literal_only_framework_uninspected"
-            marker = marker or "napcat" in bootstrap.casefold()
-        except (InspectionError, UnicodeError, OSError):
+            parts = PurePosixPath(main).parts
+            archive_index = next((index for index, part in enumerate(parts)
+                                  if part.endswith(".asar")), None)
+            if archive_index is not None:
+                # Resolve only the outer archive through the existing strict guard;
+                # entries are header metadata, never filesystem paths or payloads.
+                archive_relative = Path("resources/app", *parts[:archive_index + 1])
+                archive_path = checked_file(root, archive_relative)
+                entry_name = "/".join(parts[archive_index + 1:])
+                inventory = inspect_archive(archive_path)
+                entry = next((item for item in inventory["entries"]
+                              if item["name"] == entry_name), None)
+                if entry is None or entry["kind"] != "file" or entry["unpacked"]:
+                    # Links and unpacked entries do not prove a packed main exists.
+                    raise InspectionError("unconfirmed_asar_main")
+                report["archive_entry"] = {"archive_path": archive_relative.as_posix(),
+                                           "name": entry_name, "kind": entry["kind"],
+                                           "unpacked": entry["unpacked"],
+                                           "size": entry["size"], "present": True}
+                report["bootstrap_coverage"] = (
+                    "asar_entry_metadata_only_payload_uninspected")
+            else:
+                # Preserve bounded literal inspection for ordinary unpacked JS main.
+                main_path = checked_file(root, Path("resources/app") / main)
+                bootstrap = read_bounded(main_path, BOOTSTRAP_LIMIT).decode("utf-8")
+                report["bootstrap_coverage"] = "entry_literal_only_framework_uninspected"
+                marker = marker or "napcat" in bootstrap.casefold()
+        except (InspectionError, ValueError, UnicodeError, OSError, RecursionError):
             # Missing QQ framework and unknown loaders never imply zero references.
             report["errors"].append("bootstrap_uninspected")
         report["observed_napcat_bootstrap_reference"] = marker

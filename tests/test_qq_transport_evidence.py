@@ -32,8 +32,8 @@ def test_abi_snapshot_records_host_coupling_without_runtime_claims():
     assert 'full JavaScript export object and method signatures' in evidence['unknown']
 
 
-def test_bootstrap_snapshot_keeps_original_entry_and_native_api_unknown():
-    """Launcher filenames or binary ASAR entries cannot establish native API signatures."""
+def test_bootstrap_historical_snapshot_keeps_then_unknown_entry_and_native_api():
+    """Preserve the earlier snapshot; subsequent pristine evidence supersedes its missing main."""
     bootstrap = read_document('qq-native-bootstrap-evidence.json')
     abi = read_document('qq-native-abi-evidence.json')
     assert bootstrap['installed_package']['version'] == abi['software']['package_version']
@@ -86,3 +86,25 @@ def test_event_snapshot_matches_installed_bundle_without_schema_claims():
     types = {entry['type'] for definition in definitions for entry in definition['entries']}
     assert {'text', 'image', 'record', 'reply', 'node', 'forward'} <= types
     assert all(type(item['class_line']) is int and item['class_line'] > 0 for item in events['events'])
+
+
+def test_pristine_package_confirms_original_main_without_runtime_claims():
+    """Matching original manifest metadata does not establish independently working QQ."""
+    pristine = read_document('qq-pristine-package-evidence.json')
+    abi = read_document('qq-native-abi-evidence.json')
+    original = pristine['original_manifest']
+    installed = pristine['installed_metadata']
+    assert pristine['artifact']['download_complete'] is True
+    assert pristine['artifact']['control_version'] == original['version'] == installed['dpkg_version']
+    assert original['version'] == abi['software']['package_version']
+    assert original['matches_installed_dpkg_original_manifest_hash'] is True
+    assert original['md5'] == installed['dpkg_original_manifest_md5']
+    assert original['md5'] != installed['current_manifest_md5']
+    assert original['main'] == './application.asar/app_launcher/index.js'
+    assert original['main'] != installed['current_main']
+    assert len(pristine['artifact']['sha256']) == len(original['sha256']) == 64
+    assert pristine['artifact']['independent_official_digest_available'] is False
+    assert all(value is False for value in pristine['safety'].values())
+    for flag in ('native_backend_implemented', 'login_verified', 'full_feature_parity_verified',
+                 'production_cutover_authorized'):
+        assert pristine[flag] is False
