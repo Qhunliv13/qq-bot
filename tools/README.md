@@ -35,6 +35,7 @@ python tools/validate_release.py
 |---|---|
 | 模型与工具回路 | [production_probe.py](production_probe.py)、[batch_model_probe.py](batch_model_probe.py)、[model_simulation_audit.py](model_simulation_audit.py) |
 | 回复与群策略 | [interim_reply_probe.py](interim_reply_probe.py)、[reply_finish_probe.py](reply_finish_probe.py)、[structured_silence_probe.py](structured_silence_probe.py)、[mention_policy_probe.py](mention_policy_probe.py) |
+| 转发与复制粘贴 | [message_transfer_probe.py](message_transfer_probe.py)：真实分发、剪贴板与防重流程，平台接口替换为本地记录器，不执行真实转发 |
 | 上下文与附件 | [attachment_read_probe.py](attachment_read_probe.py)、[forward_read_probe.py](forward_read_probe.py)、[nontext_read_probe.py](nontext_read_probe.py)、[file_source_probe.py](file_source_probe.py) |
 | 能力与主动观察 | [capability_probe.py](capability_probe.py)、[dsh_capability_probe.py](dsh_capability_probe.py)、[autonomy_read_probe.py](autonomy_read_probe.py) |
 | 缓存与历史 | [cache_layout_probe.py](cache_layout_probe.py)、[cache_prefix_probe.py](cache_prefix_probe.py)、[history_cache_probe.py](history_cache_probe.py) |
