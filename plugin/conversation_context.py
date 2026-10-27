@@ -114,7 +114,9 @@ def system_prompt(persona: str) -> str:
             "transport": {
                 "image": (
                     "[发图:path] denotes an image attachment at the supplied path; "
-                    "[发图] denotes the latest available image."
+                    "[发图] denotes the latest available image. "
+                    "[下图:public_image_url] requests downloading and attaching that explicit image URL; "
+                    "metadata candidates are not evidence that their image bytes were observed."
                 ),
                 "quote": (
                     "An optional [quote:id] marker selects one existing message ID for transport quoting; "

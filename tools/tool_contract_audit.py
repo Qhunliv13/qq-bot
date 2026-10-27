@@ -18,6 +18,7 @@ from collections import Counter
 import copy
 import importlib.util
 import io
+import html
 import json
 import os
 from pathlib import Path
@@ -26,6 +27,7 @@ import subprocess
 import sys
 import tempfile
 import urllib.request
+from urllib.parse import parse_qs, urlsplit
 
 # This command intentionally depends on pytest: it reuses the tested fixture and
 # its reversible MonkeyPatch rather than maintaining a second production loader.
@@ -35,7 +37,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT / "tests") not in sys.path:
     sys.path.insert(0, str(ROOT / "tests"))
 import test_production_integration as integration  # noqa: E402
-from plugin import browser_eval, memory, tasks, workspace_tools, tool_discovery, delegation, task_planning  # noqa: E402
+from plugin import browser_eval, memory, tasks, workspace_tools, tool_discovery, delegation, task_planning, image_search  # noqa: E402
 import base64
 import hashlib
 from plugin.autonomy import AutonomousController  # noqa: E402
@@ -78,6 +80,9 @@ CASES = {
     "qq_publish_post": {"content": "contract post", "visibility": "private", "operation_id": "audit-post"},
     "qq_set_profile": {"nickname": "contract fixture", "operation_id": "audit-profile"},
     "qq_social_status": {},
+    # Generic non-topic-specific input checks query forwarding, not semantic relevance.
+    "image_search": {"query": "contract image nonce", "limit": 1},
+    "page_images": {"url": "https://example.org/article", "limit": 1},
     "web_search": {"query": "contract nonce"},
     "web_fetch": {"url": "https://audit.invalid/page"},
     "tool_observations": {"limit": 8},
@@ -301,6 +306,9 @@ class AuditHarness:
         self.plugin._tasks_mod = lambda: tasks
         self.plugin._web_search = self.search
         self.plugin._fetch_page = self.fetch
+        # Replace only public HTML transport: both native image parsers and their
+        # async parent routes execute unchanged, with no DNS/image-byte requests.
+        self.patch.setattr(image_search, "get_public", self.image_metadata_fetch)
         self.plugin._onebot_http = self.onebot
         self.plugin._qq_send = self.qq_send
         self.plugin._deliver_media = self.deliver
@@ -417,6 +425,24 @@ class AuditHarness:
         """Return local text without resolving or opening a URL."""
         self.edges.append({"edge": "web_fetch", "url": url})
         return "contract nonce offline page"
+
+    def image_metadata_fetch(self, url):
+        """Supply escaped index/page HTML at the module's sole HTTP transport seam."""
+        self.edges.append({"edge": "image_metadata_http", "url": url})
+        if url.startswith("https://www.bing.com/images/search?"):
+            # Bing stores JSON inside an HTML attribute; parsing either layer is
+            # required to recover the original URL and source-page provenance.
+            record = {"murl": "https://cdn.example.org/contract-image.jpg",
+                      "turl": "https://cdn.example.org/contract-thumb.jpg",
+                      "purl": "https://example.org/article", "t": "Contract & image"}
+            body = '<a class="iusc" m="' + html.escape(json.dumps(record), quote=True) + '"></a>'
+        elif url == "https://example.org/article":
+            body = '<html><head><meta property="og:image" content="/contract-page.jpg"></head></html>'
+        else:
+            # An unexpected endpoint is an honest audit failure, not generic HTML.
+            self.denied.append("unapproved image metadata endpoint")
+            raise AssertionError("unexpected image metadata URL")
+        return {"body": body, "final_url": url, "content_type": "text/html"}
 
     def onebot(self, action, params):
         """Represent the synchronous OneBot edge without a socket."""
@@ -620,6 +646,28 @@ async def _audit(root, monkeypatch, batch_size):
                 entry["actual_send_executed"] and sent_text == [args["text"]]
                 and isinstance(result, dict) and result.get("delivered") is True
                 and result.get("text") == args["text"] and result.get("quote_id") is None)
+        elif name in {"image_search", "page_images"}:
+            # Native parsing must produce the exact declared URL, not fabricated
+            # success or automatic media delivery. Only HTML transport is fake.
+            native_edges = [edge for edge in entry["stubbed_edges"] if edge["edge"] == "image_metadata_http"]
+            expected_url = ("https://cdn.example.org/contract-image.jpg" if name == "image_search"
+                            else "https://example.org/contract-page.jpg")
+            images = result.get("images", []) if isinstance(result, dict) else []
+            entry["boundary_contract_matches"] = (
+                len(native_edges) == 1 and len(images) == 1
+                and images[0].get("image_url") == expected_url
+                and images[0].get("source_page") == "https://example.org/article"
+                and images[0].get("verified_image_bytes") is False
+                and not event.sent and not entry["onebot_actions"]
+                and not any(edge["edge"] == "media_delivery" for edge in entry["stubbed_edges"]))
+            if name == "image_search":
+                entry["boundary_contract_matches"] &= (bool(images) and bool(native_edges)
+                    and result.get("query") == args["query"]
+                    and parse_qs(urlsplit(native_edges[0]["url"]).query).get("q") == [args["query"]]
+                    and images[0].get("thumbnail_url") == "https://cdn.example.org/contract-thumb.jpg"
+                    and images[0].get("title") == "Contract & image")
+            else:
+                entry["boundary_contract_matches"] &= bool(native_edges) and native_edges[0]["url"] == args["url"]
         elif name in EXPECTED_SOCIAL_ACTIONS:
             native_edges = [edge for edge in entry["stubbed_edges"] if edge["edge"] == "onebot_http"]
             entry["boundary_contract_matches"] = [edge["action"] for edge in native_edges] == EXPECTED_SOCIAL_ACTIONS[name]

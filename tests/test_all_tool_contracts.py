@@ -81,7 +81,7 @@ def test_new_native_contracts_use_reviewed_receipts_and_actions(report):
 def test_imported_workspace_discovery_and_workers_execute_real_contracts(report):
     """All additive classes require native receipts and locally exercised helpers."""
     rows = {row["name"]: row for row in report["tools"]}
-    assert report["effective_schema_count"] == report["canonical_schema_count"] == 93
+    assert report["effective_schema_count"] == report["canonical_schema_count"] == 95
     assert report["workspace_helpers_executed"] >= 20
     assert report["native_worker_calls"]
     assert {row["status"] for row in report["native_worker_receipts"]} == {"completed", "cancelled"}
@@ -108,6 +108,25 @@ def test_reply_now_runs_native_send_with_only_event_transport_simulated(report):
                              "text": "Contract interim reply.", "quote_id": None}
     assert not row["onebot_actions"]
     assert not row["stubbed_edges"]
+
+
+def test_native_image_routes_parse_transport_html_without_sending(report):
+    """Real image parsers expose candidate metadata, never unsolicited image sends."""
+    rows = {row["name"]: row for row in report["tools"]}
+    for name in ("image_search", "page_images"):
+        row = rows[name]
+        assert row["handler_body_executed"], row
+        assert row["boundary_contract_matches"], row
+        assert row["result_quality"]["ok"] is True, row
+        assert [edge["edge"] for edge in row["stubbed_edges"]] == ["image_metadata_http"]
+        assert not row["onebot_actions"]
+        images = row["result"]["images"]
+        assert len(images) == 1
+        assert images[0]["verified_image_bytes"] is False
+        assert images[0]["source_page"] == "https://example.org/article"
+    assert rows["image_search"]["result"]["query"] == AUDIT.CASES["image_search"]["query"]
+    assert rows["image_search"]["result"]["images"][0]["image_url"] == "https://cdn.example.org/contract-image.jpg"
+    assert rows["page_images"]["result"]["images"][0]["image_url"] == "https://example.org/contract-page.jpg"
 
 
 def test_schema_validator_detects_required_drift_and_type_errors():
@@ -196,7 +215,7 @@ def test_native_provider_honors_explicit_worker_schema_snapshot(tmp_path, monkey
     assert requests[0]["tools"] == snapshot
     assert requests[1]["tools"] == parent
     assert len(requests[0]["tools"]) == 1
-    assert len(requests[1]["tools"]) == 93
+    assert len(requests[1]["tools"]) == 95
     assert explicit == snapshot
     assert plugin._tool_schemas() == parent
 

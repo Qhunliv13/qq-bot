@@ -1743,6 +1743,7 @@ class HiganPlugin(Star):
         from .delegation import schema as delegation_schema
         from .task_planning import schema as planning_schema
         from .interim_reply import schema as interim_schema
+        from .image_search import schema as image_schema
         return neutralize_schemas([
             _f("web_search", "搜索公开网页，返回来源标题、URL和摘要；按需要调用而非固定触发。",
                {"query": {"type": "string"}}, ["query"]),
@@ -1866,7 +1867,7 @@ class HiganPlugin(Star):
                 "reason": {"type": "string"}, "scopes": {"type": "array", "items": {"type": "string"}}}),
             _f("vm_job_list", "列出机器人虚拟机内受管后台脚本的状态摘要，不读取输出日志。",
                {"offset": {"type": "integer"}, "limit": {"type": "integer"}}),
-        ] + list(self._task_tool_schemas()) + social_schema() + workspace_schema() + discovery_schema() + delegation_schema() + planning_schema() + interim_schema())
+        ] + list(self._task_tool_schemas()) + social_schema() + workspace_schema() + discovery_schema() + delegation_schema() + planning_schema() + interim_schema() + image_schema())
 
     def _as_llm_url(self, ref) -> str:
         """[img-url-fix] 把图片引用转成 LLM 能接受的 URL（data: / http(s)）✓。
@@ -2362,6 +2363,16 @@ class HiganPlugin(Star):
         if name == "tool_observations":
             limit = max(1, min(20, int(args.get("limit") or 8)))
             return {"ok": True, "scope": scope, "observations": self._tool_evidence().recent(scope, limit)}
+        if name in ("image_search", "page_images"):
+            from .image_search import search, extract_page
+            try:
+                if name == "image_search":
+                    return await asyncio.to_thread(search, args.get("query"), args.get("limit", 6))
+                return await asyncio.to_thread(extract_page, args.get("url"), args.get("limit", 12))
+            except (ValueError, TypeError) as exc:
+                return {"ok": False, "error": "invalid_arguments", "error_type": type(exc).__name__}
+            except Exception as exc:
+                return {"ok": False, "error": "image_discovery_failed", "error_type": type(exc).__name__}
         if name == "web_search":
             query = str(args.get("query") or "").strip()
             if not query:
@@ -3857,28 +3868,12 @@ class HiganPlugin(Star):
 
     @staticmethod
     def _web_image_search(query: str, limit: int = 6) -> list[str]:
-        """Bing **图片搜索**，返回图片直链列表（用户 2026-09-19 要求"上网搜索看图"）。"""
-        import html
-        import urllib.parse
-        import urllib.request
-        url = "https://cn.bing.com/images/search?" + urllib.parse.urlencode(
-            {"q": query, "count": limit + 6, "mkt": "zh-CN", "setlang": "zh-hans"})
-        req = urllib.request.Request(url, headers={
-            "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                           "AppleWebKit/537.36 (KHTML, like Gecko) "
-                           "Chrome/126.0.0.0 Safari/537.36 Edg/126.0.0.0"),
-            "Accept-Language": "zh-CN,zh;q=0.9"})
-        with urllib.request.urlopen(req, timeout=SEARCH_TIMEOUT) as resp:
-            page = resp.read().decode("utf-8", "replace")
-        # 结果里每张图都带 murl（原图直链）
-        urls: list[str] = []
-        for m in re.finditer(r'murl&quot;:&quot;(.*?)&quot;', page):
-            link = html.unescape(m.group(1)).replace("\\/", "/")
-            if link.startswith("http") and link not in urls:
-                urls.append(link)
-            if len(urls) >= limit:
-                break
-        return urls
+        """Use the same metadata search as the native tool; legacy markers keep their signature."""
+        from .image_search import search
+        result = search(query, limit)
+        if not result.get("ok"):
+            raise RuntimeError("image_search_unavailable")
+        return [item["image_url"] for item in result.get("images", [])]
 
     async def _download_image(self, ref: str) -> Path | None:
         """下载一张图到本地（支持 http 直链或关键词 → 先搜图再下第一张）。
