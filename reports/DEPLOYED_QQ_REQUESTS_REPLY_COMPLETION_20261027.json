@@ -1,0 +1,74 @@
+{
+  "date": "2026-10-27",
+  "timezone": "Asia/Shanghai",
+  "deployed_commit": "477467da9a18712fc439b3bd8e5d3eb0d00d68d6",
+  "baseline_commit": "cc483c443c51cd6433a26ef867c25fec3dcb5d92",
+  "status": "active",
+  "screenshot_incident": {
+    "message_id": "665828746",
+    "time": "2026-10-27T13:51:29+08:00",
+    "preceding_substantive_reply_message_id": "1474745498",
+    "preceding_reply_time": "2026-10-27T13:51:06+08:00",
+    "cause": "A confirmed reply_now delivery was followed by a distinct status-only final completion; exact-body deduplication did not match it.",
+    "not_a_task_fallback": true,
+    "correlated_native_history_tool_observation_and_journal": true
+  },
+  "reply_control": {
+    "optional_explicit_finish": true,
+    "default_continues": true,
+    "no_phrase_filter": true,
+    "confirmed_delivery_required": true,
+    "all_current_tool_siblings_and_observations_preserved": true,
+    "arbitrary_tool_result_cannot_end_turn": true,
+    "not_a_guarantee_against_any_status_reply_if_model_chooses_to_continue": true
+  },
+  "application_tools": {
+    "native_tool_count": 101,
+    "request_tool_count": 6,
+    "supported": ["qq_request_capabilities", "qq_requests", "qq_request_decide"],
+    "unavailable_on_installed_api": ["qq_join_group", "qq_answer_group_question", "qq_add_friend"],
+    "native_backend": "NapCat4.18.37",
+    "native_bundle_sha256": "96934cbd3a4a7ad4d50bfeeaa10adb600fd142cbb4f1be00ce427287fd5926fb",
+    "owner_only_list_and_decide": true,
+    "captured_native_request_events_only": true,
+    "native_backlog_complete": false,
+    "flags_exposed_to_model": false,
+    "durable_operation_and_request_claims": true,
+    "unknown_outcomes_auto_retried": false,
+    "acceptance_is_membership_proof": false,
+    "live_application_actions_during_verification": 0
+  },
+  "validation": {
+    "pytest_passed": 2071,
+    "skipped": 25,
+    "subtests_passed": 25,
+    "offline_contracts": 101,
+    "simulated_acknowledged_contracts": 98,
+    "honestly_unavailable_contracts": 3,
+    "deployed_hashes_verified": 36,
+    "astrbot_pid_before_after": 714988,
+    "napcat_started_before_after": "2026-10-25T02:31:45.216352424Z",
+    "temporary_release_access_revoked": true,
+    "group_reply_policies_unchanged": true,
+    "postrelease_tracebacks": 0,
+    "postrelease_batch_failures": 0,
+    "postrelease_reload_errors": 0
+  },
+  "isolated_actual_model_probe": {
+    "passed": true,
+    "native_model_requests": 1,
+    "finish_argument_true": true,
+    "locally_recorded_public_replies": 1,
+    "final_text_chars": 0,
+    "provider_requests_after_finish": 0,
+    "qq_messages_sent": 0,
+    "platform_send_replaced_with_local_recorder": true
+  },
+  "readonly_request_probe": {
+    "owner_gate_preserved": true,
+    "native_actions_called": 0,
+    "qq_messages_sent": 0,
+    "model_requests": 0,
+    "real_request_databases_modified": false
+  }
+}
