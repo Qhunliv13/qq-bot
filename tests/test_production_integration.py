@@ -63,10 +63,14 @@ class MessageChain:
 class Event:
     """Deterministic current-event fixture with inspectable OneBot and send edges."""
 
-    def __init__(self, text="current question", message_id="1234", group="42", components=None):
-        self.text, self.group = text, group
+    def __init__(self, text="current question", message_id="1234", group="42", components=None,
+                 sender_id="10001", raw_message=None):
+        self.text, self.group, self.sender_id = text, group, sender_id
+        # Native requests are transport metadata, never parsed from human chat text.
+        self.raw_message = raw_message
         self.components = components or []
-        self.message_obj = SimpleNamespace(message_id=message_id, message=self.components)
+        self.message_obj = SimpleNamespace(message_id=message_id, message=self.components,
+                                           raw_message=raw_message)
         self.unified_msg_origin = "offline:42"
         self.bot = SimpleNamespace(api=SimpleNamespace(call_action=self.action))
         self.actions, self.sent = [], []
@@ -95,7 +99,7 @@ class Event:
 
     def get_sender_id(self):
         """Keep the actual current sender distinct from quoted/tool identities."""
-        return "10001"
+        return self.sender_id
 
     def get_sender_name(self):
         """Expose a harmless fixture nickname, not runtime user information."""

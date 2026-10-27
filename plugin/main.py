@@ -1045,6 +1045,25 @@ class HiganPlugin(Star):
             # it must not start work after a newer initialization marked it stopping.
             if self._stopping:
                 return
+            raw_request = getattr(getattr(event, "message_obj", None), "raw_message", None)
+            if isinstance(raw_request, str):
+                try:
+                    raw_request = json.loads(raw_request)
+                except (ValueError, TypeError):
+                    raw_request = None
+            if isinstance(raw_request, dict) and raw_request.get("post_type") == "request":
+                from .qq_request_store import RequestStore
+                try:
+                    platform = str(getattr(event, "unified_msg_origin", "") or "").split(":", 1)[0]
+                    captured = RequestStore(Path(HIGAN_ROOT) / "qq_requests" / "requests.sqlite").capture(
+                        raw_request, platform=platform or None)
+                    logger.info("[higan] native_request captured=%s", bool(captured))
+                except Exception as exc:
+                    logger.warning("[higan] native_request_capture_failed type=%s", type(exc).__name__)
+                # A pending account request is source data, not an empty human
+                # chat, a model prompt, or authorization to approve it.
+                event.stop_event()
+                return
             # 私聊按独立会话处理。
             group_raw = str(event.get_group_id() or "")
             if group_raw:
@@ -1639,6 +1658,7 @@ class HiganPlugin(Star):
         from .task_planning import schema as planning_schema
         from .interim_reply import schema as interim_schema
         from .image_search import schema as image_schema
+        from .qq_requests import schema as requests_schema
         return neutralize_schemas([
             _f("web_search", "搜索公开网页，返回来源标题、URL和摘要；按需要调用而非固定触发。",
                {"query": {"type": "string"}}, ["query"]),
@@ -1763,7 +1783,7 @@ class HiganPlugin(Star):
                 "reason": {"type": "string"}, "scopes": {"type": "array", "items": {"type": "string"}}}),
             _f("vm_job_list", "列出机器人虚拟机内受管后台脚本的状态摘要，不读取输出日志。",
                {"offset": {"type": "integer"}, "limit": {"type": "integer"}}),
-        ] + list(self._task_tool_schemas()) + social_schema() + workspace_schema() + discovery_schema() + delegation_schema() + planning_schema() + interim_schema() + image_schema())
+        ] + list(self._task_tool_schemas()) + social_schema() + workspace_schema() + discovery_schema() + delegation_schema() + planning_schema() + interim_schema() + image_schema() + requests_schema())
 
     def _as_llm_url(self, ref) -> str:
         """把图片引用转成 LLM 能接受的 URL（data: / http(s)）。
@@ -2179,6 +2199,17 @@ class HiganPlugin(Star):
                     return {"ok": False, "error": "autonomy_destination_not_observed"}
                 if not self._policy_allows(event, destination):
                     return {"ok": False, "error": "destination_policy_denied"}
+        from .qq_requests import dispatch as request_dispatch, schema as request_schema
+        if name in {item["function"]["name"] for item in request_schema()}:
+            from .qq_request_store import RequestStore
+            async def request_action(action, parameters):
+                """Invoke only the installed native action through the existing bridge."""
+                return await asyncio.to_thread(self._onebot_http, action, parameters)
+            return await request_dispatch(
+                name, args, request_action, can_manage=owner,
+                store=RequestStore(Path(HIGAN_ROOT) / "qq_requests" / "requests.sqlite"),
+                audit_path=Path(HIGAN_ROOT) / "qq_requests" / "operations.sqlite",
+                expected_self_id=str(event.get_self_id() or "") if event is not None else None)
         if name == "reply_now":
             if event is None:
                 return {"ok": False, "delivered": False, "error": "current_event_required"}
@@ -3292,10 +3323,18 @@ class HiganPlugin(Star):
                     return {"ok": False, "error": "task_not_active", "status": state}
             return await _execute_tool(name, args)
 
+        def completion_check(name, arguments, result):
+            """Honor explicit confirmed terminal replies, never arbitrary tool-result text."""
+            return (name == "reply_now" and isinstance(arguments, dict)
+                    and arguments.get("finish") is True and isinstance(result, dict)
+                    and result.get("ok") is True and result.get("delivered") is True
+                    and result.get("finish") is True)
+
         try:
             _out, _used = await asyncio.wait_for(
                 _loop.run(system, prompt, _llm, _tool, max_rounds=TOOL_ROUNDS,
-                          llm_messages=_llm_messages, observation_callback=_observe),
+                          llm_messages=_llm_messages, observation_callback=_observe,
+                          completion_check=completion_check),
                 timeout=TOOL_TURN_TIMEOUT)
         except _loop.ModelCompletionUnavailable as exc:
             # The same transcript has already made its one no-tools finalization

@@ -36,7 +36,7 @@ def test_every_advertised_name_executes_real_route(report):
         assert tool["handler"] is not None, tool["name"]
         assert tool["handler_body_executed"], tool["name"]
         assert tool["executed_source_lines"], tool["name"]
-        assert tool["result_quality"]["ok"] is True, tool
+        assert tool["result_quality"]["contract_satisfied"] is True, tool
 
 
 def test_provider_all_calls_have_paired_ids_and_retained_observations(report):
@@ -50,7 +50,7 @@ def test_provider_all_calls_have_paired_ids_and_retained_observations(report):
         assert batch["exact_id_pairing"], batch
         assert batch["all_observations_retained"], batch
         assert batch["paired_results_match_archive"], batch
-        assert batch["all_results_successful"], batch["failed_results"]
+        assert batch["all_result_contracts_satisfied"], batch["failed_results"]
         names.extend(batch["names"])
     assert names == [tool["name"] for tool in report["tools"]]
 
@@ -78,10 +78,61 @@ def test_new_native_contracts_use_reviewed_receipts_and_actions(report):
     assert rows["autonomy_schedule"]["result"]["settings"]["interval_seconds"] == 600
 
 
+def test_request_contracts_distinguish_unavailable_from_route_errors(report):
+    """All six native handlers execute while exactly three remain honestly unavailable."""
+    rows = {row["name"]: row for row in report["tools"]}
+    assert report["result_quality_counts"] == {"acknowledged": 98, "capability_unavailable": 3}
+    for name in AUDIT.REQUEST_NAMES:
+        assert rows[name]["handler_body_executed"] and rows[name]["boundary_contract_matches"], rows[name]
+        assert rows[name]["result_quality"]["contract_satisfied"] is True
+    for name in AUDIT.EXPECTED_UNAVAILABLE:
+        row = rows[name]
+        assert row["result"]["ok"] is False and row["result"]["supported"] is False
+        assert row["result_quality"]["expected_unavailable"] is True
+        assert row["stubbed_edges"] == [] and row["onebot_actions"] == []
+    assert rows["qq_request_decide"]["result"]["outcome"] == "accepted"
+    assert rows["qq_request_decide"]["result"]["membership"] == "unknown"
+    assert sum(batch["expected_unavailable_count"] for batch in report["provider_batches"]) == 3
+
+
+@pytest.mark.parametrize("name,result", [
+    ("qq_send", {"ok": False, "error": "native_capability_unavailable", "supported": False,
+                 "capability": "proactive_friend_add"}),
+    ("qq_add_friend", {"ok": False, "error": "permission_denied"}),
+    ("qq_add_friend", {"ok": False, "error": "native_capability_unavailable", "supported": True,
+                      "capability": "proactive_friend_add"}),
+    ("qq_join_group", {"ok": False, "error": "native_capability_unavailable", "supported": False,
+                      "capability": "proactive_friend_add"}),
+])
+def test_expected_unavailable_quality_never_weakens_other_errors(name, result):
+    """Mutation controls reject generic, unauthorized, or wrong-capability receipts."""
+    assert AUDIT._quality(result, name)["contract_satisfied"] is False
+
+
+def test_generic_success_stub_for_unavailable_request_action_is_a_route_gap(tmp_path, monkeypatch):
+    """An unsupported native action cannot pass by returning an invented success object."""
+    original = AUDIT.qq_requests.dispatch
+
+    async def generic_success(name, *args, **kwargs):
+        """Mutate one real native handler seam only, leaving all other routes intact."""
+        if name == "qq_join_group":
+            return {"ok": True, "joined": True}
+        return await original(name, *args, **kwargs)
+
+    monkeypatch.setattr(AUDIT.qq_requests, "dispatch", generic_success)
+    with pytest.MonkeyPatch.context() as edges:
+        mutated = AUDIT.audit(tmp_path, edges)
+    row = next(row for row in mutated["tools"] if row["name"] == "qq_join_group")
+    assert row["handler_body_executed"] is True
+    assert row["boundary_contract_matches"] is False
+    assert "qq_join_group" in {gap["name"] for gap in mutated["gaps"]}
+    assert mutated["route_contracts_pass"] is False
+
+
 def test_imported_workspace_discovery_and_workers_execute_real_contracts(report):
     """All additive classes require native receipts and locally exercised helpers."""
     rows = {row["name"]: row for row in report["tools"]}
-    assert report["effective_schema_count"] == report["canonical_schema_count"] == 95
+    assert report["effective_schema_count"] == report["canonical_schema_count"] == 101
     assert report["workspace_helpers_executed"] >= 20
     assert report["native_worker_calls"]
     assert {row["status"] for row in report["native_worker_receipts"]} == {"completed", "cancelled"}
@@ -332,7 +383,7 @@ def test_native_provider_honors_explicit_worker_schema_snapshot(tmp_path, monkey
     assert requests[0]["tools"] == snapshot
     assert requests[1]["tools"] == parent
     assert len(requests[0]["tools"]) == 1
-    assert len(requests[1]["tools"]) == 95
+    assert len(requests[1]["tools"]) == 101
     assert explicit == snapshot
     assert plugin._tool_schemas() == parent
 

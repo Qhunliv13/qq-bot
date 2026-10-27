@@ -15,12 +15,13 @@ def schema() -> list[dict]:
     """Offer one optional public-reply action without phases or canned wording."""
     return [{"type": "function", "function": {
         "name": "reply_now",
-        "description": "向当前会话发送模型自行决定的中途公开回复；发送后工具回路继续，后续可继续调用或最终回复。无需每轮发送，不含固定话术。只发送面向用户的内容，非思考过程。",
+        "description": "向当前会话发送模型自行决定的公开回复；默认 finish=false，发送后工具回路继续，可多次调用。仅当面向用户的回复已完整结束时可显式设 finish=true：确认实际发送成功后，完成当前批次所有工具与记录，再停止后续模型生成。无需每轮发送，不含固定话术。只发送面向用户的内容，非思考过程。",
         "parameters": {
             "type": "object", "additionalProperties": False,
             "properties": {
                 "text": {"type": "string"},
-                "reply_to": {"type": "array", "items": {"type": "string"}}},
+                "reply_to": {"type": "array", "items": {"type": "string"}},
+                "finish": {"type": "boolean", "default": False}},
             "required": ["text"]}}}]
 
 
@@ -38,8 +39,9 @@ async def deliver(
     string is the actual delivered body; None or an exception confirms nothing.
     """
     # Reject schema violations before parsing or calling any side-effecting code.
-    if (not isinstance(args, dict) or set(args) - {"text", "reply_to"}
-            or not isinstance(args.get("text"), str)):
+    if (not isinstance(args, dict) or set(args) - {"text", "reply_to", "finish"}
+            or not isinstance(args.get("text"), str)
+            or ("finish" in args and not isinstance(args["finish"], bool))):
         return {"ok": False, "delivered": False, "error": "invalid_arguments"}
     if "reply_to" in args and (
             not isinstance(args["reply_to"], list)
@@ -71,8 +73,13 @@ async def deliver(
                 "exception_type": type(exc).__name__}
     if not isinstance(actual, str) or not actual.strip():
         return {"ok": False, "delivered": False, "error": "delivery_not_confirmed"}
-    return {"ok": True, "delivered": True, "text": actual,
-            "quote_id": decoded["quote_id"]}
+    result = {"ok": True, "delivered": True, "text": actual,
+              "quote_id": decoded["quote_id"]}
+    # Only confirmed nonempty delivery can carry this explicit completion signal;
+    # omit the default to preserve the established reply result contract.
+    if args.get("finish") is True:
+        result["finish"] = True
+    return result
 
 
 def already_delivered(final: str, delivered_bodies: Iterable[str]) -> bool:

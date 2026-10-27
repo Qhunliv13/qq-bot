@@ -37,7 +37,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT / "tests") not in sys.path:
     sys.path.insert(0, str(ROOT / "tests"))
 import test_production_integration as integration  # noqa: E402
-from plugin import browser_eval, memory, tasks, workspace_tools, tool_discovery, delegation, task_planning, image_search, qq_native_actions  # noqa: E402
+from plugin import browser_eval, memory, tasks, workspace_tools, tool_discovery, delegation, task_planning, image_search, qq_native_actions, qq_requests  # noqa: E402
 import base64
 import hashlib
 from plugin.autonomy import AutonomousController  # noqa: E402
@@ -80,6 +80,12 @@ CASES = {
     "qq_publish_post": {"content": "contract post", "visibility": "private", "operation_id": "audit-post"},
     "qq_set_profile": {"nickname": "contract fixture", "operation_id": "audit-profile"},
     "qq_social_status": {},
+    "qq_request_capabilities": {},
+    "qq_requests": {"kind": "all", "limit": 50},
+    "qq_request_decide": {"request_id": "SEEDED", "approve": True, "operation_id": "SEEDED"},
+    "qq_join_group": {"group_id": 42, "message": "offline contract"},
+    "qq_answer_group_question": {"request_id": "offline-request", "answer": "offline answer"},
+    "qq_add_friend": {"user_id": 10001, "comment": "offline contract"},
     # Generic non-topic-specific input checks query forwarding, not semantic relevance.
     "image_search": {"query": "contract image nonce", "limit": 1},
     "page_images": {"url": "https://example.org/article", "limit": 1},
@@ -128,6 +134,13 @@ CASES = {
     "task_update": {"id": "SEEDED", "brief": "contract updated"},
 }
 FOREGROUND = {"group_files", "group_file_download"}
+# These three unavailable capabilities are expected negative receipts, not route gaps.
+EXPECTED_UNAVAILABLE = {
+    "qq_join_group": "proactive_group_join",
+    "qq_answer_group_question": "group_join_question_answer",
+    "qq_add_friend": "proactive_friend_add",
+}
+REQUEST_NAMES = {"qq_request_capabilities", "qq_requests", "qq_request_decide", *EXPECTED_UNAVAILABLE}
 # These expectations are independent of the social router and its schema metadata.
 EXPECTED_SOCIAL_ACTIONS = {
     "qq_account_info": ["get_login_info", "get_stranger_info"],
@@ -258,7 +271,8 @@ def _handler_inventory():
     for builder, marker in ((workspace_tools.schema, "workspace_schema"),
                             (tool_discovery.schema, "discovery_schema"),
                             (delegation.schema, "delegation_schema"),
-                            (task_planning.schema, "planning_schema")):
+                            (task_planning.schema, "planning_schema"),
+                            (qq_requests.schema, "request_schema")):
         branch = next(node for node in ast.walk(klass)
                       if isinstance(node, ast.If) and marker in ast.dump(node.test))
         for item in builder():
@@ -284,6 +298,7 @@ class AuditHarness:
         self.patch.setattr(workspace_tools, "_ROOT", str(self.workspace_root))
         self.patch.setattr(delegation, "_MANAGERS", {})
         self.helper_count = 0
+        self.request_sequence = 0
         self.worker_calls = []
         self.worker_gate = asyncio.Event()
         self.make_plugin = integration.production.__wrapped__(self.root, monkeypatch)
@@ -462,6 +477,7 @@ class AuditHarness:
                 {"message_id": 81002, "sender": {"user_id": 10001}},
                 {"message_id": 81003, "sender": {"user_id": 90001}}]},
             "delete_msg": None, "upload_group_file": None, "upload_private_file": None,
+            "set_friend_add_request": None, "set_group_add_request": None,
         }
         if action in social_data:
             return {"status": "ok", "retcode": 0, "data": copy.deepcopy(social_data[action])}
@@ -512,6 +528,23 @@ class AuditHarness:
     def prepare(self, name):
         """Seed independent local state so mutation routes do not depend on tool order."""
         args = copy.deepcopy(CASES[name])
+        if name in {"qq_requests", "qq_request_decide"}:
+            # Capture through the actual SQLite store, retaining native tokens only
+            # inside the trusted fixture and the final fake OneBot boundary.
+            from plugin.qq_request_store import RequestStore
+            self.request_sequence += 1
+            store = RequestStore(self.root / "qq_requests" / "requests.sqlite")
+            for kind in ("friend", "group"):
+                native = {"post_type": "request", "request_type": kind,
+                          "user_id": 10001, "self_id": 90001,
+                          "flag": "offline-%s-%s" % (kind, self.request_sequence),
+                          "comment": "Untrusted captured contract request", "time": 100}
+                if kind == "group":
+                    native.update(group_id=42, sub_type="add")
+                record = store.capture(native)
+                if name == "qq_request_decide" and kind == "friend":
+                    args["request_id"] = record["request_id"]
+                    args["operation_id"] = "audit-request-%s" % self.request_sequence
         if name == "history_search":
             self.plugin._hist().append("42", "contract historical source", record={
                 "id": "contract-history-42", "sender": {"id": "10001", "role": "member"},
@@ -561,7 +594,7 @@ class AuditHarness:
             self.plugin._turn_context["42"] = {"messages": [message_record(event, event.text)]}
         # Identity is supplied only by the trusted fixture event, never tool arguments.
         # This source owner ID remains independent of the production OWNER_QQS set.
-        if name in {"qq_set_signature", "qq_publish_post", "qq_set_profile", "autonomy_schedule", "skill_save"}:
+        if name in {"qq_set_signature", "qq_publish_post", "qq_set_profile", "autonomy_schedule", "skill_save"} | REQUEST_NAMES:
             event.get_sender_id = lambda: "2084526117"
         event.action_results = {
             "get_group_root_files": {"files": [{"file_name": "contract-nonce.txt", "file_id": "file-contract", "file_size": 10}], "folders": []},
@@ -573,18 +606,31 @@ class AuditHarness:
             "set_self_longnick": {"status": "ok", "retcode": 0, "data": None},
             "set_qq_profile": {"status": "ok", "retcode": 0, "data": None},
             "send_qzone_msg": {"status": "ok", "retcode": 0, "data": {"tid": "offline-contract-post"}},
+            # Native approval null ACK means accepted, never verified membership.
+            "set_friend_add_request": {"status": "ok", "retcode": 0, "data": None},
+            "set_group_add_request": {"status": "ok", "retcode": 0, "data": None},
         }
         return args, event
 
 
-def _quality(result):
+def _quality(result, name=None):
     """Describe structure, never interpret stubbed success as a real side effect."""
     try:
         json.dumps(result, allow_nan=False)
         serializable = True
     except (TypeError, ValueError):
         serializable = False
+    # Only exact reviewed unsupported receipts qualify; arbitrary errors remain gaps.
+    unavailable = (name in EXPECTED_UNAVAILABLE and isinstance(result, dict)
+                   and result.get("ok") is False
+                   and result.get("error") == "native_capability_unavailable"
+                   and result.get("supported") is False
+                   and result.get("capability") == EXPECTED_UNAVAILABLE[name])
+    accepted = isinstance(result, dict) and (result.get("ok") is True or unavailable)
     return {"object": isinstance(result, dict), "json_serializable": serializable,
+            "contract_satisfied": accepted, "expected_unavailable": unavailable,
+            "classification": "capability_unavailable" if unavailable else (
+                "acknowledged" if isinstance(result, dict) and result.get("ok") is True else "error"),
             "boolean_ok": isinstance(result, dict) and isinstance(result.get("ok"), bool),
             "keys": sorted(result) if isinstance(result, dict) else [],
             "ok": result.get("ok") if isinstance(result, dict) else None,
@@ -648,7 +694,7 @@ async def _audit(root, monkeypatch, batch_size):
                 result = await harness.plugin._dispatch_tool(name, args, "42", event=event)
             entry["executed"] = True
             # Grade the actual receipt before redaction, retaining no native secrets.
-            entry["result_quality"] = _quality(result)
+            entry["result_quality"] = _quality(result, name)
             entry["result"] = redact(result)
         except Exception as exc:
             entry["exception"] = {"type": type(exc).__name__, "message": str(exc)[:240]}
@@ -737,6 +783,34 @@ async def _audit(root, monkeypatch, batch_size):
                 and result.get("delivered") is True and result.get("message_id") == "71001"
                 and result.get("action") == "send_group_msg"
                 and not any(edge["edge"] == "vm_http_stub" for edge in entry["stubbed_edges"]))
+        elif name in REQUEST_NAMES:
+            # All request routes execute native parent branches. Only decisions may
+            # call OneBot, and even accepted approvals never assert friendship.
+            if name in EXPECTED_UNAVAILABLE:
+                entry["boundary_contract_matches"] = (
+                    _quality(result, name)["expected_unavailable"]
+                    and not event.actions and not entry["stubbed_edges"])
+            elif name == "qq_request_capabilities":
+                entry["boundary_contract_matches"] = (
+                    result.get("runtime_verified") is False
+                    and result.get("owner_enabled") is True
+                    and all(result.get("capabilities", {}).get(tool, {}).get("supported") is False
+                            for tool in EXPECTED_UNAVAILABLE) and not event.actions)
+            elif name == "qq_requests":
+                records = result.get("requests", [])
+                entry["boundary_contract_matches"] = (
+                    {record.get("kind") for record in records} == {"friend", "group"}
+                    and all("flag" not in record for record in records)
+                    and result.get("source") == "captured_native_request_events"
+                    and result.get("native_backlog_complete") is False and not event.actions)
+            else:
+                entry["boundary_contract_matches"] = (
+                    entry["stubbed_edges"] == [{"edge": "onebot_http", "action": "set_friend_add_request",
+                        "params": {"flag": "offline-friend-%s" % harness.request_sequence, "approve": True}}]
+                    and not event.actions
+                    and result.get("outcome") == "accepted"
+                    and result.get("verification") == {"state": "not_verified"}
+                    and result.get("membership") == "unknown")
         elif name in EXPECTED_SOCIAL_ACTIONS:
             native_edges = [edge for edge in entry["stubbed_edges"] if edge["edge"] == "onebot_http"]
             entry["boundary_contract_matches"] = [edge["action"] for edge in native_edges] == EXPECTED_SOCIAL_ACTIONS[name]
@@ -833,18 +907,23 @@ async def _audit(root, monkeypatch, batch_size):
             "exact_id_pairing": [message["tool_call_id"] for message in paired] == expected,
             "retained_observation_names": [row["tool_name"] for row in observations],
             "all_observations_retained": [row["tool_name"] for row in observations] == batch,
-            "failed_results": [{"name": row["tool_name"], "result": row["result"]} for row in observations if row["result"].get("ok") is not True],
+            "failed_results": [{"name": row["tool_name"], "result": row["result"]} for row in observations
+                               if not _quality(row["result"], row["tool_name"])["contract_satisfied"]],
+            "expected_unavailable_count": sum(_quality(row["result"], row["tool_name"])["expected_unavailable"] for row in observations),
             "all_results_successful": all(row["result"].get("ok") is True for row in observations),
+            "all_result_contracts_satisfied": all(_quality(row["result"], row["tool_name"])["contract_satisfied"] for row in observations),
             "paired_results_match_archive": [json.loads(message["content"])["result"] for message in paired] == [row["result"] for row in observations]})
     unknown = await harness.plugin._dispatch_tool("__contract_unknown_tool__", {}, "42")
     report["unknown_tool"] = {"result": unknown, "rejected": unknown.get("ok") is False and "unknown tool" in unknown.get("error", "")}
     report["forbidden_io_attempts"] = harness.denied
     for entry in report["tools"]:
         quality = entry.get("result_quality", {})
-        if not entry["executed"] or entry["exception"] or not entry.get("handler_body_executed") or not entry.get("boundary_contract_matches") or entry.get("argument_errors") or not all(quality.get(key) for key in ("object", "json_serializable", "boolean_ok")) or quality.get("ok") is not True:
+        if not entry["executed"] or entry["exception"] or not entry.get("handler_body_executed") or not entry.get("boundary_contract_matches") or entry.get("argument_errors") or not all(quality.get(key) for key in ("object", "json_serializable", "boolean_ok")) or quality.get("contract_satisfied") is not True:
             report["gaps"].append({"name": entry["name"], "reason": "route, fixture arguments, exception or result quality failed"})
     report["route_contracts_pass"] = not (report["gaps"] or report["unmapped_cases"] or report["stale_cases"] or report["schema_errors"] or harness.denied) and report["unknown_tool"]["rejected"] and all(
-        batch["exact_id_pairing"] and batch["all_observations_retained"] and batch["paired_results_match_archive"] and batch["all_results_successful"] and not batch["exception"] for batch in report["provider_batches"])
+        batch["exact_id_pairing"] and batch["all_observations_retained"] and batch["paired_results_match_archive"] and batch["all_result_contracts_satisfied"] and not batch["exception"] for batch in report["provider_batches"])
+    report["result_quality_counts"] = dict(Counter(
+        entry.get("result_quality", {}).get("classification", "error") for entry in report["tools"]))
     report["raw_schemas_unique"] = not report["duplicate_schema_names"]
     harness.worker_gate.set()
     workers = [job["worker"] for owner in delegation._MANAGERS.values()

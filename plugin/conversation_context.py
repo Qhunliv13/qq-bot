@@ -99,9 +99,13 @@ def system_prompt(persona: str) -> str:
                 "options": ["text", "SILENT"],
                 "intermediate_delivery": (
                     "reply_now optionally publishes user-facing text to this conversation and then returns "
-                    "control to the same tool loop. Its delivery receipt is an observation. "
-                    "Neither the timing nor number of updates is prescribed; tool-call commentary is not "
-                    "automatically published. A final reply may contain new information or choose silence."
+                    "control to the same tool loop by default. Setting finish=true explicitly completes "
+                    "the turn after confirmed delivery and the current tool batch, without another final "
+                    "model reply. Use this when the public answer is complete; leave it false to continue "
+                    "working or send further substantive updates. Its receipt is an observation, not a "
+                    "new human message to acknowledge. Neither timing nor number of updates is prescribed. "
+                    "A later final reply is optional and may supply new information or choose silence; "
+                    "delivery acknowledgements alone need not be published as another user-facing reply."
                 ),
                 "silence": (
                     "An unquoted, unfenced standalone final line SILENT makes the entire completion silent; "

@@ -25,7 +25,8 @@ def test_schema_has_one_optional_free_form_action():
     assert tool["function"]["name"] == "reply_now"
     parameters = tool["function"]["parameters"]
     assert parameters["required"] == ["text"]
-    assert set(parameters["properties"]) == {"text", "reply_to"}
+    assert set(parameters["properties"]) == {"text", "reply_to", "finish"}
+    assert parameters["properties"]["finish"] == {"type": "boolean", "default": False}
     assert parameters["properties"]["reply_to"]["items"] == {"type": "string"}
     assert parameters["additionalProperties"] is False
     assert "无需每轮发送" in tool["function"]["description"]
@@ -36,6 +37,41 @@ def test_default_target_uses_last_actual_record_and_returns_transport_body():
     result, send = run({"text": "任意模型表达"})
     send.assert_awaited_once_with("任意模型表达", None)
     assert result == {"ok": True, "delivered": True, "text": "actual body", "quote_id": None}
+
+
+@pytest.mark.parametrize("finish", [None, 0, 1, "true", [], {}])
+def test_finish_requires_actual_boolean(finish):
+    """Completion must not be authorized by JSON truthiness or coercion."""
+    result, send = run({"text": "回答", "finish": finish})
+    assert result["error"] == "invalid_arguments"
+    send.assert_not_awaited()
+
+
+def test_confirmed_delivery_carries_explicit_completion_only():
+    """The opt-in flag follows the actual transport body, not model claims."""
+    result, _ = run({"text": "回答", "finish": True})
+    assert result == {"ok": True, "delivered": True, "text": "actual body",
+                      "quote_id": None, "finish": True}
+    result, _ = run({"text": "回答", "finish": False})
+    assert "finish" not in result
+
+
+@pytest.mark.parametrize("text,actual", [("SILENT", "body"), ("", "body"),
+                                          ("回答", None), ("回答", " ")])
+def test_finish_is_not_confirmed_by_silence_or_transport_suppression(text, actual):
+    """A requested terminal reply without real delivery cannot stop generation."""
+    result, _ = run({"text": text, "finish": True}, send=AsyncMock(return_value=actual))
+    assert result["delivered"] is False
+    assert "finish" not in result
+
+
+def test_finish_is_not_confirmed_after_sender_failure():
+    """Uncertain transport outcomes remain failures even with a finish request."""
+    result, send = run({"text": "回答", "finish": True},
+                       send=AsyncMock(side_effect=RuntimeError("private")))
+    assert result["delivered"] is False
+    assert "finish" not in result
+    assert send.await_count == 1
 
 
 def test_earlier_current_target_supplies_validated_quote():

@@ -91,7 +91,8 @@ async def run(system: str, prompt: str,
               max_rounds: int | None = MAX_ROUNDS, *,
               llm_messages: Callable | None = None,
               transcript: list[dict] | None = None,
-              observation_callback: Callable | None = None) -> tuple:
+              observation_callback: Callable | None = None,
+              completion_check: Callable | None = None) -> tuple:
     """Run until model completion or an optional positive limit; return text, names.
 
     None and nonpositive max_rounds leave completion to the model. A positive
@@ -104,6 +105,10 @@ async def run(system: str, prompt: str,
     selection and archive paths; no observations are promoted into durable facts.
     Failed forced finalization raises ModelCompletionUnavailable, preserving the
     transcript and exception cause instead of appending a fabricated final reply.
+    completion_check(name, args, result) is an opt-in trusted host predicate,
+    sync or async, evaluated only after an actual tool returns successfully.
+    A true decision ends generation silently after all sibling calls and their
+    observations are complete; arbitrary tool output never controls this loop.
     """
     messages = transcript if transcript is not None else []
     messages.extend([{"role": "system", "content": system}, {"role": "user", "content": prompt}])
@@ -160,7 +165,11 @@ async def run(system: str, prompt: str,
         normalized = [_normalize_call(call, seen_ids) for call in calls]
         messages.append({"role": "assistant", "content": str(redact(text or "")),
                          "tool_calls": [item[0] for item in normalized]})
+        # Completion is remembered, not acted upon mid-batch: every native call
+        # must receive its paired result and persistence attempt before returning.
+        batch_complete = False
         for call, name, raw_args in normalized:
+            invoked_successfully = False
             try:
                 args = _parse_arguments(raw_args)
                 if not name:
@@ -175,6 +184,8 @@ async def run(system: str, prompt: str,
                 except Exception as exc:
                     # The observation remains failure evidence, not a claimed success.
                     result = {"ok": False, "error": "tool_execution_failed", "message": str(exc)}
+                else:
+                    invoked_successfully = True
             observation = make_observation(prompt, name or "invalid_tool", args, result,
                                            observation_id=call["id"])
             messages.append({"role": "tool", "tool_call_id": call["id"],
@@ -186,5 +197,18 @@ async def run(system: str, prompt: str,
                         await pending
                 except Exception:
                     _LOG.warning("Tool observation persistence failed for %s", call["id"], exc_info=True)
+            if completion_check is not None and invoked_successfully:
+                try:
+                    decision = completion_check(name, args, result)
+                    if inspect.isawaitable(decision):
+                        decision = await decision
+                    # Do not short-circuit later callbacks after a prior decision.
+                    batch_complete = bool(decision) or batch_complete
+                except Exception:
+                    # Host callback failure cannot silently grant completion.
+                    _LOG.warning("Tool completion check failed for %s", call["id"], exc_info=True)
+        if batch_complete:
+            # No synthetic assistant acknowledgement and no forced final LLM call.
+            return "", used
         _round += 1
     return await finish()
