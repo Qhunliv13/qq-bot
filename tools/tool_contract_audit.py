@@ -512,6 +512,11 @@ class AuditHarness:
     def prepare(self, name):
         """Seed independent local state so mutation routes do not depend on tool order."""
         args = copy.deepcopy(CASES[name])
+        if name == "history_search":
+            self.plugin._hist().append("42", "contract historical source", record={
+                "id": "contract-history-42", "sender": {"id": "10001", "role": "member"},
+                "body": "contract historical source"})
+            self.plugin._hist().append("private:80001", "contract foreign private secret")
         if name == "send_file":
             # The native upload validates an actual local file before its fake edge.
             upload = self.root / "contract-upload.txt"
@@ -686,6 +691,13 @@ async def _audit(root, monkeypatch, batch_size):
                     and images[0].get("title") == "Contract & image")
             else:
                 entry["boundary_contract_matches"] &= bool(native_edges) and native_edges[0]["url"] == args["url"]
+        elif name == "history_search":
+            hits = result.get("hits", []) if isinstance(result, dict) else []
+            entry["boundary_contract_matches"] = (
+                bool(hits) and all(hit.get("scope") == "42" for hit in hits)
+                and any(hit.get("record", {}).get("id") == "contract-history-42" for hit in hits)
+                and all(hit.get("source") == {"name": "cross_scope_history", "trust": "untrusted_data"} for hit in hits)
+                and "foreign private secret" not in json.dumps(hits))
         elif name == "vm_recall":
             native_edges = [edge for edge in entry["stubbed_edges"] if edge["edge"] == "onebot_http"]
             entry["boundary_contract_matches"] = (

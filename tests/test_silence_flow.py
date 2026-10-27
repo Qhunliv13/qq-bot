@@ -129,7 +129,7 @@ def test_direct_send_rejects_silence_exposed_by_cleanup(silence_plugin):
 def test_direct_send_rejects_silence_exposed_by_quote_removal(silence_plugin):
     """The final-text guard catches control output after legacy quote extraction."""
     plugin, event = silence_plugin, Event()
-    assert asyncio.run(plugin._send(event, "42", "silent [quote:1234]")) is None
+    assert asyncio.run(plugin._send(event, "42", "[quote:1234] silent")) is None
     _assert_quiet(plugin, event)
 
 

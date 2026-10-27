@@ -1,7 +1,7 @@
 """Decode explicit current-batch selections without guessing intent from prose.
 
 This pure boundary performs no model calls, delivery, scheduling, or I/O. Legacy
-text remains intact so the existing transport can handle its optional quote tag.
+quote controls share one lexical parser with the native transport.
 """
 
 import json
@@ -9,8 +9,42 @@ import re
 from typing import Any
 
 
-# Keep the existing platform quote transport's decimal-ID syntax unchanged.
-_LEGACY_QUOTE = re.compile(r"\[quote:(\d{2,20})\]")
+# Reserve only complete raw leading controls; malformed IDs must not leak into
+# outgoing prose, while examples inside quotes, fences, or sentences stay literal.
+_LEGACY_QUOTE_PREFIX = re.compile(r"\s*\[quote:([^\r\n\[\]]*)\]")
+# Native QQ IDs use positive ASCII decimal syntax, never Unicode digits or hex.
+_NATIVE_QUOTE_ID = re.compile(r"[0-9]{2,20}")
+
+
+def extract_legacy_quote(text: str, *, allowed_ids=None) -> tuple[str, str | None]:
+    """Consume raw leading quote controls and return cleaned text and a native ID.
+
+    Repeated leading ``[quote:...]`` controls are reserved transport syntax, even
+    when their ID is malformed or unauthorized. Select only the first positive
+    ASCII decimal ID of 2–20 digits permitted by ``allowed_ids``. ``None`` keeps
+    legacy historical-ID compatibility; an empty collection permits no target.
+    Callers supply authoritative conversation-scoped IDs when validation is
+    needed; this helper never extracts IDs from history prose or guesses a target.
+    Quoted, fenced, inline, and incomplete markers are literal content. No English
+    or Chinese keyword heuristics, NLP, model calls, or other I/O are involved.
+    Whitespace following the last consumed marker remains part of the body.
+    """
+    allowed = None if allowed_ids is None else {str(value) for value in allowed_ids}
+    offset = 0
+    quote_id = None
+    while True:
+        marker = _LEGACY_QUOTE_PREFIX.match(text, offset)
+        if marker is None:
+            break
+        candidate = marker.group(1)
+        # Invalid prefixes are removed without substituting any current record;
+        # later authorized prefixes can still provide the first usable target.
+        if (quote_id is None and _NATIVE_QUOTE_ID.fullmatch(candidate)
+                and int(candidate) > 0
+                and (allowed is None or candidate in allowed)):
+            quote_id = candidate
+        offset = marker.end()
+    return text[offset:], quote_id
 
 
 def _has_terminal_silence(text: str) -> bool:
@@ -106,8 +140,9 @@ def decode_reply(raw: str | None, records: Any, *, allow_unattributed: bool = Fa
     require an empty target list and string text; they cannot fabricate quotes.
     Structured targets must all name actual current record IDs; invalid output
     fails closed rather than selecting a fabricated target or rerunning a model.
-    Plain prose never implies a selection. Its explicit legacy quote may refer
-    to history and is left in the original text for the existing transport.
+    Plain prose never implies a selection. Its leading legacy controls are
+    removed, and a native decimal quote may still refer to historical messages.
+    The transport remains responsible for conversation-scoped authorization.
     """
     text = "" if raw is None else raw
     result = {"text": text, "reply_to": [], "quote_id": None,
@@ -159,14 +194,12 @@ def decode_reply(raw: str | None, records: Any, *, allow_unattributed: bool = Fa
         quote_id = next((message_id for message_id in selected if message_id != last_id), None)
         # Structured attribution is the single source of truth. An embedded legacy
         # marker must not silently redirect this reply to an unrelated message.
-        reply_text = _LEGACY_QUOTE.sub("", reply_text)
+        reply_text, _ = extract_legacy_quote(reply_text, allowed_ids=())
         result.update(text=reply_text if reply_text.strip() else "", reply_to=selected,
                       quote_id=quote_id)
         return result
 
-    # Legacy quotes deliberately are not validated against the current batch:
-    # historical message references were already supported by the transport.
-    quote = _LEGACY_QUOTE.search(text)
-    if quote:
-        result["quote_id"] = quote.group(1)
+    # Historical IDs remain compatible; the transport can validate their scope.
+    # Do not rerun silence or JSON parsing after removing transport controls.
+    result["text"], result["quote_id"] = extract_legacy_quote(text)
     return result

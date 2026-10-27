@@ -1222,7 +1222,8 @@ class HiganPlugin(Star):
             except Exception:  # noqa: BLE001
                 pass
             try:
-                self._hist().append(group, line)   # 落盘 ✓
+                from .message_batch import message_record
+                self._hist().append(group, line, record=message_record(event, text))  # 原生来源落盘
             except Exception:  # noqa: BLE001
                 pass
 
@@ -2419,11 +2420,16 @@ class HiganPlugin(Star):
 
         if name == "history_search":
             try:
-                hits = self._hist().search(str(args.get("keyword") or ""),
-                                           str(args.get("scope") or ""),
-                                           int(args.get("limit") or 10))
-            except Exception as exc:  # noqa: BLE001
-                return {"ok": False, "error": repr(exc)[:160]}
+                from .cross_scope_memory import CrossScopeMemory, visible_scope
+                requested = str(args.get("scope") or "")
+                muted = self._group_policy(scope).get("muted", ())
+                if requested and not visible_scope(requested, str(scope), muted=muted):
+                    return {"ok": False, "error": "history_scope_not_visible"}
+                hits = CrossScopeMemory(self._hist()).search(
+                    str(args.get("keyword") or ""), str(scope), scope=requested,
+                    limit=int(args.get("limit") or 10), muted=muted)
+            except Exception as exc:
+                return {"ok": False, "error": type(exc).__name__}
             return {"ok": True, "count": len(hits), "hits": hits}
         if name == "self_status":
             # [self-status] 她查看自己当前状态（不返回任何密钥 ✓）
@@ -2766,20 +2772,15 @@ class HiganPlugin(Star):
 
         if name in ("facts_list", "facts_search", "facts_edit", "facts_delete"):
             try:
-                import importlib.util as _ilu2
-                from pathlib import Path as _P2
-                _sp2 = _ilu2.spec_from_file_location(
-                    "higan_memory_mod2", str(_P2("/root/astrbot-src/data/plugins/"
-                                                 "astrbot_plugin_higan/memory.py")))
-                _mmmod2 = _ilu2.module_from_spec(_sp2)
-                _sp2.loader.exec_module(_mmmod2)
-                _mm = _mmmod2.Memory("/root/higan/memory/memory.json").load()
+                from .memory import Memory
+                _mm = Memory(str(Path(HIGAN_ROOT) / "memory" / "memory.json")).load()
+                _muted = self._group_policy(scope).get("muted", ())
                 if name == "facts_list":
-                    return {"ok": True, "facts": _mm.list_facts()}
+                    return {"ok": True, "facts": _mm.list_facts(current_scope=str(scope), muted=_muted)}
                 if name == "facts_search":
                     _q = str(args.get("query") or "")
                     _lim = int(args.get("limit") or 500)
-                    _hits = _mm.list_facts()
+                    _hits = _mm.list_facts(limit=None, current_scope=str(scope), muted=_muted)
                     _kw = [w for w in _q.split() if w]
                     _hit = [f for f in _hits if not _kw or all(w in f["text"] for w in _kw)][:_lim]
                     return {"ok": True, "query": _q, "facts": _hit}
@@ -2798,18 +2799,17 @@ class HiganPlugin(Star):
             if not _txt:
                 return {"ok": False, "error": "text 不能为空"}
             try:
-                import importlib.util as _ilu
-                from pathlib import Path as _P
-                _sp = _ilu.spec_from_file_location(
-                    "higan_memory_mod", str(_P("/root/astrbot-src/data/plugins/"
-                                                "astrbot_plugin_higan/memory.py")))
-                _mmmod = _ilu.module_from_spec(_sp)
-                _sp.loader.exec_module(_mmmod)
-                _m = _mmmod.Memory("/root/higan/memory/memory.json").load()
-                _m.add_fact(_txt[:200], "tool")
+                from .memory import Memory
+                _m = Memory(str(Path(HIGAN_ROOT) / "memory" / "memory.json")).load()
+                turn = (getattr(self, "_turn_context", {}) or {}).get(str(scope), {})
+                # These are attributed source records, not proof that a model's
+                # saved statement is true or an authorization grant.
+                _source = {"name": "model_saved_memory", "trust": "untrusted_data",
+                           "scope": str(scope), "messages": turn.get("messages") or []}
+                _m.add_fact(_txt, str(scope), source=_source)
                 _n = len((_m.data.get("global") or {}).get("facts") or [])
                 logger.info("[higan] remember 写入：%s（累计 %d 条）" % (_txt[:60], _n))
-                return {"ok": True, "saved": _txt[:200], "facts_total": _n}
+                return {"ok": True, "saved": _txt, "facts_total": _n, "source_scope": str(scope)}
             except Exception as _exc:  # noqa: BLE001
                 logger.warning("[higan] remember 失败：%r", str(_exc)[:120])
                 return {"ok": False, "error": str(_exc)[:120]}
@@ -3235,14 +3235,15 @@ class HiganPlugin(Star):
         turn = (getattr(self, "_turn_context", {}) or {}).setdefault(group, {})
         self._turn_context = getattr(self, "_turn_context", {})
         self._turn_context[group] = turn
-        by_group = {}
-        for line in self._all_recent or []:
-            if isinstance(line, str) and line.startswith("[群") and "]" in line:
-                source, body = line.split("]", 1)
-                source = source[2:]
-                if source != str(group):
-                    by_group.setdefault(source, []).append(body.strip())
-        turn["other_scopes"] = by_group
+        from .cross_scope_memory import CrossScopeMemory
+        try:
+            policy = self._group_policy(group)
+            turn["other_scopes"] = CrossScopeMemory(self._hist()).snapshot(
+                str(group), muted=policy.get("muted", ()))
+        except Exception as exc:
+            # Shared-memory failure cannot broaden visibility or break current chat.
+            turn["other_scopes"] = []
+            logger.warning("[higan] 跨群来源读取失败：%s", type(exc).__name__)
         turn["task"] = task_context
         # Delivery receipts belong only to this native turn, never a later chat.
         turn["_interim_replies"] = []
@@ -3603,17 +3604,11 @@ class HiganPlugin(Star):
             pass
         # [model-quote] 引用由模型决定：只有她给了 quote 才引 ✓（不再硬贴触发那条 ✗）
         msg_id = quote_id or None
-        # [pct+quote] 她可以显式引用某条：`[quote:消息ID]` ✓
-        try:
-            import re as _re_q
-
-            _qm = _re_q.search(r"\[quote:(\d{2,20})\]", text or "")
-            if _qm:
-                msg_id = _qm.group(1)
-                text = _re_q.sub(r"\[quote:\d{2,20}\]", "", text, count=1)
-                logger.info("[higan] 她选择引用消息：%s" % msg_id)
-        except Exception:  # noqa: BLE001
-            pass
+        # One shared lexical boundary consumes leading transport controls only.
+        # Invalid task/hash IDs are never displayed or guessed into QQ reply IDs.
+        from .reply_selection import extract_legacy_quote
+        text, legacy_quote = extract_legacy_quote(text or "")
+        msg_id = msg_id or legacy_quote
         if msg_id:
             try:
                 chain.chain.append(Reply(id=msg_id))

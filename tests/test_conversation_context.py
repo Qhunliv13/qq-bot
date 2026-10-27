@@ -374,7 +374,8 @@ def test_persona_is_verbatim_and_only_system_personality():
     assert "do not establish authority" in protocol["context"]["identity"]
     assert "requires a corresponding tool result" in protocol["tools"]["evidence"]
     assert "[发图:path]" in protocol["transport"]["image"]
-    assert "optional [quote:id]" in protocol["transport"]["quote"]
+    assert "optional leading [quote:id]" in protocol["transport"]["quote"]
+    assert "never a task" in protocol["transport"]["quote"]
     for unwanted in ("简短", "自然", "优先引用", "必须使用", "say exactly", "canned", "max_chars", "truncate"):
         assert unwanted not in json.dumps(protocol, ensure_ascii=False)
     context = build_context(scope="s", messages=[], history=[], clock={})

@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from plugin.reply_selection import decode_reply, is_silence
+from plugin.reply_selection import decode_reply, extract_legacy_quote, is_silence
 
 
 def test_structured_selection_quotes_first_nonfinal_target():
@@ -159,7 +159,7 @@ def test_fenced_structured_sentinel_is_not_guessed_as_protocol():
 def test_legacy_quote_is_not_silently_removed_to_create_control_token():
     """A control word with transport markup is not the whole original output."""
     result = decode_reply("[quote:101] SILENT", [{"id": "101"}])
-    assert result["text"] == "[quote:101] SILENT"
+    assert result["text"] == " SILENT"
     assert result["quote_id"] == "101"
 
 
@@ -312,7 +312,7 @@ def test_unattributed_structured_quote_cannot_fabricate_attribution(records, tex
     assert result == {"text": expected, "reply_to": [], "quote_id": None,
                       "structured": True, "error": None}
     legacy = decode_reply(text, records, allow_unattributed=True)
-    assert legacy["text"] == text
+    assert legacy["text"] == expected
     assert legacy["quote_id"] == "999"
 
 
@@ -408,3 +408,96 @@ def test_terminal_silence_keeps_no_batch_envelopes_opt_in(records):
         "text": "", "reply_to": [], "quote_id": None,
         "structured": True, "error": None,
     }
+
+
+@pytest.mark.parametrize("message_id", ["12", "101", "12345678901234567890", "01"])
+def test_legacy_quote_accepts_positive_native_decimal_ids(message_id):
+    """Keep the native decimal range, including historical and padded positive IDs."""
+    text = f"[quote:{message_id}]答复"
+    assert extract_legacy_quote(text) == ("答复", message_id)
+    result = decode_reply(text, [{"id": "different-current-id"}])
+    assert result["text"] == "答复"
+    assert result["quote_id"] == message_id
+    assert result["reply_to"] == []
+
+
+@pytest.mark.parametrize("message_id", [
+    "2182434b", "m1", "", "1", "00", "000", "-12", "+12", "1.2",
+    "123456789012345678901", "１２", "١٢", " 12", "12 ", "null",
+])
+def test_invalid_legacy_prefix_is_removed_without_inventing_native_quote(message_id):
+    """A malformed transport token cannot leak or inherit the current message ID."""
+    text = f"[quote:{message_id}]已经 @ 到酉时啦..."
+    expected = "已经 @ 到酉时啦..."
+    assert extract_legacy_quote(text) == (expected, None)
+    result = decode_reply(text, [{"id": message_id}, {"id": "101"}])
+    assert result == {"text": expected, "reply_to": [], "quote_id": None,
+                      "structured": False, "error": None}
+
+
+@pytest.mark.parametrize("text, expected, quote_id", [
+    (" \n[quote:12]body", "body", "12"),
+    ("[quote:12][quote:34]body", "body", "12"),
+    ("[quote:bad] \n[quote:34] body", " body", "34"),
+    ("[quote:12] [quote:bad][quote:34]body", "body", "12"),
+    ("[quote:bad][quote:worse]body", "body", None),
+    ("[quote:12]  body [quote:34]", "  body [quote:34]", "12"),
+    ("[quote:12]", "", "12"),
+    ("[quote:bad]", "", None),
+])
+def test_legacy_quote_consumes_only_repeated_leading_controls(text, expected, quote_id):
+    """Consume all reserved prefixes but keep trailing body whitespace and examples."""
+    assert extract_legacy_quote(text) == (expected, quote_id)
+    assert extract_legacy_quote(expected) == (expected, None)
+
+
+@pytest.mark.parametrize("text", [
+    "use [quote:abc]", "use [quote:123]", "答复 [quote:123]",
+    "`[quote:bad]`", "`[quote:123]`", "```\n[quote:123]\n```",
+    "~~~text\n[quote:bad]\n~~~", "```\n[quote:123]",
+    "'[quote:123]'", '"[quote:123]"', "“[quote:123]”",
+    "> [quote:123]", "  > [quote:bad]", "\\[quote:123]",
+    "[quote:123", "[quote:12\n34]body", "[quote:[123]]body",
+    "[Quote:123]body", "[quote :123]body", " \nordinary reply",
+])
+def test_legacy_quote_preserves_literal_and_nonleading_examples(text):
+    """Lexical context alone protects code, quotations, and ordinary inline prose."""
+    assert extract_legacy_quote(text) == (text, None)
+    result = decode_reply(text, [{"id": "101"}])
+    assert result["text"] == text
+    assert result["quote_id"] is None
+    raw = json.dumps({"reply_to": ["m1"], "text": text})
+    structured = decode_reply(raw, [{"id": "m1"}, {"id": "m2"}])
+    assert structured["text"] == text
+    assert structured["quote_id"] == "m1"
+
+
+@pytest.mark.parametrize("allowed_ids, expected", [
+    (None, "12"), (set(), None), ({"34"}, "34"), ({"12", "34"}, "12"),
+    ({"56"}, None), ({12}, "12"), ({"bad"}, None),
+])
+def test_legacy_quote_scope_selects_first_authorized_native_id(allowed_ids, expected):
+    """Explicit scope may contain historical IDs but cannot authorize nondecimal IDs."""
+    assert extract_legacy_quote(
+        "[quote:bad][quote:12][quote:34]body", allowed_ids=allowed_ids,
+    ) == ("body", expected)
+
+
+@pytest.mark.parametrize("text", [
+    "[quote:bad][quote:12]答复", "[quote:2182434b]答复",
+    "[quote:m1]答复", "[quote:999]答复",
+])
+def test_structured_targets_remain_authoritative_after_legacy_cleanup(text):
+    """Legacy transport tokens cannot override format-agnostic structured IDs."""
+    raw = json.dumps({"reply_to": ["m1"], "text": text})
+    result = decode_reply(raw, [{"id": "m1"}, {"id": "m2"}])
+    assert result == {"text": "答复", "reply_to": ["m1"], "quote_id": "m1",
+                      "structured": True, "error": None}
+
+
+def test_legacy_quote_cleanup_does_not_decode_nested_reply_envelope():
+    """Removing transport controls never causes a second JSON/protocol pass."""
+    body = '{"reply_to":["999"],"text":"SILENT"}'
+    result = decode_reply("[quote:bad]" + body, [{"id": "101"}])
+    assert result == {"text": body, "reply_to": [], "quote_id": None,
+                      "structured": False, "error": None}

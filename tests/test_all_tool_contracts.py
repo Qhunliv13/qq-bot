@@ -216,6 +216,17 @@ def test_native_mutation_root_health_ack_cannot_pass_audit(tmp_path, monkeypatch
     assert report["forbidden_io_attempts"] == []
 
 
+def test_history_search_uses_typed_persisted_source_and_excludes_foreign_private(report):
+    """Native history retrieval retains source IDs and cannot search unrelated private stores."""
+    row = next(row for row in report["tools"] if row["name"] == "history_search")
+    assert row["boundary_contract_matches"] and row["handler_body_executed"]
+    hits = row["result"]["hits"]
+    assert hits and all(hit["scope"] == "42" for hit in hits)
+    assert any(hit.get("record", {}).get("id") == "contract-history-42" for hit in hits)
+    assert all(hit["source"]["trust"] == "untrusted_data" for hit in hits)
+    assert "foreign private secret" not in str(hits)
+
+
 def test_native_image_routes_parse_transport_html_without_sending(report):
     """Real image parsers expose candidate metadata, never unsolicited image sends."""
     rows = {row["name"]: row for row in report["tools"]}

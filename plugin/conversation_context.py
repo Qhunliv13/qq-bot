@@ -120,8 +120,10 @@ def system_prompt(persona: str) -> str:
                     "metadata candidates are not evidence that their image bytes were observed."
                 ),
                 "quote": (
-                    "An optional [quote:id] marker selects one existing message ID for transport quoting; "
-                    "at most one quote marker is supported per response."
+                    "Structured reply_to selects actual current message IDs. An optional leading "
+                    "[quote:id] control uses an existing native decimal message ID, never a task, "
+                    "observation, or memory ID. Inline, quoted, or fenced examples are literal text; "
+                    "quote_id transport metadata is separate from the visible body."
                 ),
             },
             "tools": {

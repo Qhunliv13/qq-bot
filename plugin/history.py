@@ -14,6 +14,8 @@
 
 from __future__ import annotations
 
+from collections import deque
+from copy import deepcopy
 import json
 import os
 import re
@@ -39,15 +41,19 @@ class Recorder:
         safe = re.sub(r"[^0-9A-Za-z_.-]", "_", str(scope or "default"))[:60]
         return os.path.join(self.root, safe + ".jsonl")
 
-    def append(self, scope: str, line: str) -> None:
-        """追加一条（失败静默 ✓ 不影响聊天）。"""
+    def append(self, scope: str, line: str, *, record: dict | None = None) -> None:
+        """Append compatible text plus optional untouched source metadata, without inferring identities."""
         try:
             text = str(line or "").strip()
             if not text:
                 return
+            item = {"ts": int(time.time()), "line": text[:2000]}
+            if record is not None:
+                # Freeze native event metadata; never derive identity/authority from text.
+                item["record"] = deepcopy(record)
+            encoded = json.dumps(item, ensure_ascii=False)
             with open(self._path(scope), "a", encoding="utf-8") as handle:
-                handle.write(json.dumps({"ts": int(time.time()), "line": text[:2000]},
-                                        ensure_ascii=False) + "\n")
+                handle.write(encoded + "\n")
         except Exception:                                  # noqa: BLE001
             pass
 
@@ -70,6 +76,46 @@ class Recorder:
             return [x for x in lines if x][-limit:]
         except Exception:                                  # noqa: BLE001
             return []
+
+    def group_scopes(self) -> list[str]:
+        """Discover only existing positive ASCII-numeric group stores, never private filename guesses."""
+        try:
+            # Numeric filenames are the existing group naming contract, not a business allowlist.
+            scopes = [name[:-6] for name in os.listdir(self.root)
+                      if name.endswith(".jsonl")
+                      and re.fullmatch(r"[0-9]+", name[:-6])
+                      and int(name[:-6]) > 0
+                      and os.path.isfile(os.path.join(self.root, name))]
+            return sorted(scopes, key=lambda scope: (int(scope), scope))
+        except OSError:
+            # Missing/unreadable history must not create files or interrupt replies.
+            return []
+
+    def load_records(self, scope: str, limit: int | None = 20) -> list[dict]:
+        """Read exact stored text/metadata; legacy lines have no invented sender or message ID."""
+        if limit is not None and limit <= 0:
+            return []
+        records = deque(maxlen=limit)
+        try:
+            with open(self._path(scope), encoding="utf-8") as handle:
+                for raw in handle:
+                    try:
+                        item = json.loads(raw)
+                    except (ValueError, TypeError):
+                        # A partial or corrupt JSONL entry does not erase neighboring evidence.
+                        continue
+                    if not isinstance(item, dict) or not isinstance(item.get("line"), str):
+                        continue
+                    if not item["line"]:
+                        continue
+                    row = {"scope": str(scope), "ts": item.get("ts"), "line": item["line"]}
+                    if "record" in item:
+                        # Keep optional metadata exactly as stored, including nested quote provenance.
+                        row["record"] = deepcopy(item["record"])
+                    records.append(row)
+        except (OSError, UnicodeError):
+            return []
+        return list(records)
 
     def search(self, keyword: str, scope: str = "", limit: int = 10) -> list:
         """按关键词找记录（跨 scope ✓ 返回 [{scope, line}]）。"""

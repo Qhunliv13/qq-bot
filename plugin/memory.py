@@ -31,6 +31,13 @@ MAX_SUMMARY_CHARS = 100000
 MAX_FACTS = 2000
 
 
+def _fact_scope(item: dict) -> str:
+    """Resolve only explicit scope evidence; never derive it from identity or text."""
+    provenance = item.get("source")
+    scope = provenance.get("scope") if isinstance(provenance, dict) else None
+    return str(scope if scope is not None else item.get("source_scope") or "")
+
+
 class Memory:
     """按 scope 组织的小型记忆库（JSON 落盘）。"""
 
@@ -118,13 +125,44 @@ class Memory:
             i += 1
         return "f%03d" % i
 
-    def list_facts(self, limit: int = 500) -> list[dict]:
-        """列出全部事实（含 id，便于编辑/删除）。"""
+    def facts_for_scope(self, current_scope: str, *, muted=()) -> list[dict]:
+        """Return detached visible facts; unknown legacy labels remain grandfathered.
+
+        Provenance is evidence, never an owner role or permission grant. A known
+        private first origin stays private even if another scope repeats its text.
+        """
+        from .cross_scope_memory import visible_scope
+
         bucket = (self.data.get("global") or {}).get("facts") or []
         out = []
+        for item in bucket:
+            scope = _fact_scope(item)
+            # Unknown legacy labels stay readable, without fabricating provenance.
+            # Known scope namespaces must pass the shared visibility policy.
+            known = scope.isascii() and scope.isdigit() or scope.startswith(("private:", "group:", "private_"))
+            if known and not visible_scope(scope, current_scope, muted):
+                continue
+            out.append(json.loads(json.dumps(item, ensure_ascii=False, allow_nan=False)))
+        return out
+
+    def list_facts(self, limit: Optional[int] = 500, *, current_scope=None,
+                   muted=()) -> list[dict]:
+        """List detached facts; None removes only the historical 500-row view cap.
+
+        No current_scope preserves the legacy global view. The source string is
+        kept for callers; provenance separately exposes the actual source record.
+        """
+        bucket = ((self.data.get("global") or {}).get("facts") or []
+                  if current_scope is None else self.facts_for_scope(current_scope, muted=muted))
+        out = []
         for it in bucket[:limit]:
-            out.append({"id": it.get("id") or "", "text": it.get("text") or "",
-                        "at": it.get("at") or 0, "source": it.get("source_scope") or ""})
+            row = {"id": it.get("id") or "", "text": it.get("text") or "",
+                   "at": it.get("at") or 0, "source": it.get("source_scope") or "",
+                   "source_scope": it.get("source_scope") or ""}
+            if "source" in it:
+                row["provenance"] = json.loads(json.dumps(it["source"], ensure_ascii=False,
+                                                          allow_nan=False))
+            out.append(row)
         return out
 
     def edit_fact(self, fact_id: str, text: str) -> bool:
@@ -154,8 +192,17 @@ class Memory:
             self.save()
         return removed
 
-    def add_fact(self, text: str, source_scope: str = "") -> str:
-        """写一条长期事实（去重 ✓ 超上限淘汰最旧 ✓）。"""
+    def add_fact(self, text: str, source_scope: str = "", *, source=None) -> str:
+        """Store a fact and optional detached JSON provenance, never inferred trust.
+
+        Text deduplication preserves the first source, including legacy labels;
+        repeating private text in a public group must not publish its provenance.
+        Invalid source data fails before any in-memory or on-disk mutation.
+        """
+        if source is not None and not isinstance(source, dict):
+            raise TypeError("source must be a dictionary or None")
+        snapshot = (json.loads(json.dumps(source, ensure_ascii=False, allow_nan=False))
+                    if source is not None else None)
         clean = (text or "").strip()
         if not clean:
             return
@@ -166,19 +213,31 @@ class Memory:
             if clean == str(item.get("text") or ""):
                 return str(item.get("id") or "")
         fid = self._next_fact_id()
-        bucket.append({"id": fid, "text": clean, "source_scope": source_scope,
-                       "at": int(time.time())})
+        fact = {"id": fid, "text": clean, "source_scope": source_scope,
+                "at": int(time.time())}
+        if snapshot is not None:
+            fact["source"] = snapshot
+        bucket.append(fact)
         if len(bucket) > MAX_FACTS:
             del bucket[0:len(bucket) - MAX_FACTS]
         self.save()
         return fid
 
-    def search_facts(self, query: str, limit: int = 500) -> list[str]:
-        """极简关键词检索（够用且无依赖 ✓ 未来可换向量）。"""
+    def search_facts(self, query: str, limit: int = 500, *,
+                     allowed_scopes=None) -> list[str]:
+        """Keep historical OR scoring over all stored facts, optionally exact scopes.
+
+        allowed_scopes is a caller-supplied retrieval filter, not an authorization
+        derived from provenance. Main's AND search can instead filter list_facts(None).
+        """
         words = [w for w in str(query or "").replace("，", " ").split() if w]
         bucket = (self.data.get("global") or {}).get("facts") or []
+        allowed = None if allowed_scopes is None else {str(scope) for scope in allowed_scopes}
         scored = []
         for item in bucket:
+            scope = _fact_scope(item)
+            if allowed is not None and scope not in allowed:
+                continue
             text = str(item.get("text") or "")
             score = sum(1 for w in words if w and w in text)
             if score:
