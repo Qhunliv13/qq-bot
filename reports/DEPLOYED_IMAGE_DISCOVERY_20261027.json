@@ -1,0 +1,53 @@
+{
+  "date": "2026-10-27",
+  "timezone": "Asia/Shanghai",
+  "deployed_commit": "cacc781b35a5a0bb72e5671df5bc17e469f47209",
+  "status": "active",
+  "incident": {
+    "request_time_utc8": "2026-10-27T10:14:02+08:00",
+    "reply_time_utc8": "2026-10-27T10:14:40+08:00",
+    "actual_web_search_calls": 3,
+    "successful_text_results": 15,
+    "image_candidate_fields_in_incident_results": false,
+    "model_image_input_count": 0,
+    "image_search_was_not_a_native_tool": true,
+    "no_online_images_exist_was_not_proven": true
+  },
+  "repair": {
+    "native_tools_after": 95,
+    "new_tools": ["image_search", "page_images"],
+    "legacy_and_native_image_search_share_one_implementation": true,
+    "source_provenance_and_unverified_candidates_explicit": true,
+    "transport_failure_zero_candidates_and_candidates_distinct": true,
+    "topic_specific_queries_or_forced_response": false,
+    "automatic_first_candidate_publication": false
+  },
+  "verification": {
+    "pytest_passed": 1401,
+    "platform_skips": 24,
+    "subtests_passed": 25,
+    "parser_guard_cases": 28,
+    "pyflakes_compile_release_scan_clean": true,
+    "deployed_hashes_verified": 26,
+    "actual_bing_metadata_candidates_parsed": 35,
+    "actual_native_candidate_results_returned": 4,
+    "actual_source_page_images_returned": 4,
+    "candidate_image_bytes_fetched": false,
+    "semantic_or_visual_match_asserted": false,
+    "qq_messages_sent_by_probe": 0,
+    "group_policy_unchanged": true,
+    "astrbot_pid_before_after": 714988,
+    "astrbot_restart_count": 0,
+    "napcat_started_before_after": "2026-10-25T02:31:45.216352424Z",
+    "postrelease_tracebacks": 0,
+    "postrelease_batch_failures": 0,
+    "postrelease_reload_errors": 0,
+    "temporary_access_revoked": true
+  },
+  "limits": [
+    "Metadata candidates are not visually verified images, and image meaning is not guaranteed.",
+    "The bot retains choice of search, selection and publication; this release does not replay the original user request.",
+    "Weak text search relevance was observed; no proof of globally ignored queries, network interception or shared-cache poisoning.",
+    "No public test image was sent, and no character-specific rules were introduced."
+  ]
+}
