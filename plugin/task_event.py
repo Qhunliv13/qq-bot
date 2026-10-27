@@ -94,6 +94,16 @@ class _TaskAPI:
         self.plugin = plugin
 
     async def call_action(self, action, **parameters):
-        """Reuse the existing OneBot request implementation without blocking the event loop."""
+        """Match CQHttp's unwrapped data contract after confirming the native envelope."""
         import asyncio
-        return await asyncio.to_thread(self.plugin._onebot_http, action, parameters)
+
+        from .qq_native_actions import _status
+
+        response = await asyncio.to_thread(self.plugin._onebot_http, action, parameters)
+        # Existing tools consume CQHttp action data (files/url/messages), not the
+        # HTTP envelope. Unknown acknowledgements must not become empty success.
+        if _status(response) != "confirmed":
+            raise RuntimeError("task_action_unconfirmed")
+        # A confirmed null result is legitimate for actions without return data;
+        # preserve it rather than inventing a dict or a delivery receipt.
+        return response["data"]

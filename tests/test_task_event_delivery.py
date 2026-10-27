@@ -145,6 +145,55 @@ def test_task_second_failure_cannot_reuse_previous_receipt(native_delivery):
     assert event.last_delivery_receipt is None and len(calls["native"]) == 2
 
 
+@pytest.mark.parametrize("action,data", [
+    ("get_group_root_files", {"files": [{"file_id": "offline", "file_name": "report.txt"}], "folders": []}),
+    ("get_group_file_url", {"url": "https://offline.invalid/report.txt"}),
+    ("get_forward_msg", {"messages": [{"message_id": 123, "content": []}]}),
+    ("get_group_list", [{"group_id": 42}]),
+    ("delete_msg", None),
+    ("get_group_root_files", {}),
+])
+def test_task_action_unwraps_confirmed_data_like_native_cqhttp(native_delivery, action, data):
+    """Background tools receive native data directly without losing files or URL fields."""
+    plugin, state, calls = native_delivery
+    state["response"] = {"status": "ok", "retcode": 0, "data": data}
+    event = TaskEvent(plugin, {"scope": "42", "origin": "napcat:GroupMessage:42"})
+    result = asyncio.run(event.bot.api.call_action(action, group_id=42))
+    assert result is data
+    assert calls["native"] == [(action, {"group_id": 42})]
+    assert calls["context"] == calls["serialized"] == []
+
+
+@pytest.mark.parametrize("response", [
+    None, False, {}, {"ok": True, "data": None},
+    {"status": "ok", "retcode": 0},
+    {"status": "ok", "retcode": False, "data": {}},
+    {"status": "ok", "retcode": "0", "data": {}},
+    {"status": "failed", "retcode": 100, "data": {"files": []}},
+    {"status": "async", "retcode": 1, "data": {}},
+    {"status": "ok", "retcode": 0, "data": {}, "message": "NapCat is running"},
+])
+def test_task_action_rejects_unconfirmed_envelope_without_empty_success(native_delivery, response):
+    """Failed reads and root health greetings cannot masquerade as successful empty data."""
+    plugin, state, calls = native_delivery
+    state["response"] = response
+    event = TaskEvent(plugin, {"scope": "42", "origin": "napcat:GroupMessage:42"})
+    with pytest.raises(RuntimeError, match="^task_action_unconfirmed$"):
+        asyncio.run(event.bot.api.call_action("get_group_root_files", group_id=42))
+    assert calls["native"] == [("get_group_root_files", {"group_id": 42})]
+    assert calls["context"] == []
+
+
+def test_task_action_transport_exception_propagates_without_retry(native_delivery):
+    """Read transport failures remain failures and never trigger a second action."""
+    plugin, state, calls = native_delivery
+    state["response"] = TimeoutError("offline read timeout")
+    event = TaskEvent(plugin, {"scope": "42", "origin": "napcat:GroupMessage:42"})
+    with pytest.raises(TimeoutError):
+        asyncio.run(event.bot.api.call_action("get_group_file_url", group_id=42, file_id="offline"))
+    assert len(calls["native"]) == 1 and calls["context"] == []
+
+
 def test_task_unknown_transport_outcome_is_not_retried(native_delivery):
     """Timeouts propagate once rather than risking duplicate sends through a fallback."""
     plugin, state, calls = native_delivery

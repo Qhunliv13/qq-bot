@@ -52,7 +52,7 @@ def test_task_event_is_data_and_sending_adapter_only(scope, group, native_task_s
         actions.append((action, parameters))
         if action in {"send_group_msg", "send_private_msg"}:
             return {"status": "ok", "retcode": 0, "data": {"message_id": 72001}}
-        return {"ok": True, "nonce": "local-action-result"}
+        return {"status": "ok", "retcode": 0, "data": {"message_id": 1234, "message": "known"}}
 
     plugin = SimpleNamespace(context=SimpleNamespace(send_message=send_message), _onebot_http=onebot)
     destination = scope.removeprefix("private:")
@@ -74,7 +74,7 @@ def test_task_event_is_data_and_sending_adapter_only(scope, group, native_task_s
     assert actions == [(action, {"user_id" if scope.startswith("private:") else "group_id": int(destination),
                                 "message": [{"type": "text", "data": {"text": "offline serialized message"}}]})]
     assert asyncio.run(event.bot.api.call_action("get_msg", message_id=1234)) == {
-        "ok": True, "nonce": "local-action-result"}
+        "message_id": 1234, "message": "known"}
     assert actions[-1] == ("get_msg", {"message_id": 1234})
 
 

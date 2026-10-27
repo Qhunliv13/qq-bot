@@ -2881,6 +2881,10 @@ class HiganPlugin(Star):
                 return {"ok": False, "delivered": False, "error": "file_too_large"}
             send_as = media_kind(str(local))
             if send_as != "file":
+                # The framework event sends to its authenticated current origin;
+                # do not silently route a different requested scope back here.
+                if destination != str(scope):
+                    return {"ok": False, "delivered": False, "error": "media_destination_requires_origin"}
                 return {"ok": True, "deliver": "plugin", "path": str(local),
                         "send_as": send_as, "name": str(delivery.get("name") or local.name)}
             async def native_upload(action, parameters):
