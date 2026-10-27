@@ -354,8 +354,11 @@ def test_context_keeps_untrusted_source_content_as_data_not_system_instructions(
     context = envelope["conversation"]["history_context"]
     assert context["mode"] == "one_shared_timeline"
     assert context["source"] == {"name": "unified_group_memory", "trust": "untrusted_data"}
-    assert context["coverage"] == {"returned": 1, "limit": 240,
-                                    "more_available": False, "scope_count": 1}
+    assert {key: context["coverage"][key] for key in (
+        "returned", "limit", "more_available", "scope_count")} == {
+            "returned": 1, "limit": 240, "more_available": False, "scope_count": 1}
+    assert context["coverage"]["cache_alignment_available"] is True
+    assert context["coverage"]["cache_padding"] == 0
     assert envelope["timing"] == {"sample": "frozen-time"}
     assert envelope["other_scopes"] == []
     assert "private-secret-must-not-leak" not in prompt
@@ -601,16 +604,16 @@ def test_pending_chat_does_not_cancel_foreground_tools_media_or_final_send(produ
     ])
 
     async def scenario():
-        """Finish native work and the normal final send while the later chat stays queued."""
+        """Finish accepted tool media while later chat queues; an unmarked final stays draft."""
         answer = await plugin._decide_tools_first(event, "42", event.text, False)
-        assert answer == "Both actions completed."
-        assert await plugin._send(event, "42", answer) == answer
+        assert answer == ""
+        assert await plugin._send(event, "42", answer) is None
 
     asyncio.run(scenario())
     assert executed == ["accepted_effect", "accepted_media"]
     assert plugin._pending["42"] is pending
-    assert len(event.sent) == 2
-    assert len(plugin._hist().load("42")) == 2
+    assert len(event.sent) == 1
+    assert len(plugin._hist().load("42")) == 1
     records = plugin._tool_evidence().recent("42")
     assert [record["tool_name"] for record in records] == executed
     assert all(record["status"] == "success" for record in records)

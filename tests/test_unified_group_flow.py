@@ -12,7 +12,7 @@ import pytest
 
 import test_production_integration as integration
 from test_production_integration import Event, _provider
-from plugin.cross_scope_memory import CrossScopeMemory, UNIFIED_SOURCE
+from plugin.cross_scope_memory import CrossScopeMemory, DEFAULT_SHARED_CACHE_BLOCK, UNIFIED_SOURCE
 from plugin.message_batch import message_record
 
 # Alias the existing fixture instead of duplicating the AST production harness.
@@ -83,7 +83,7 @@ def test_native_group_request_unifies_public_sources_and_excludes_current(produc
     before = {group: plugin._hist().load_records(group, limit=None)
               for group in ("42", "77", "88", "private:1012")}
     expected = CrossScopeMemory(plugin._hist()).unified_snapshot(
-        exclude_messages=[(scope, "current-native")])
+        cache_block_size=DEFAULT_SHARED_CACHE_BLOCK, exclude_messages=[(scope, "current-native")])
     envelope = _request(plugin, event, monkeypatch)
     conversation = _assert_context(envelope, expected)
     history = conversation["history"]
@@ -110,7 +110,8 @@ def test_same_query_from_two_groups_has_identical_persisted_history_without_ids(
         # No native ID means no guessed exclusion by identical display text.
         event = _event(scope, message_id=None)
         _seed(plugin, scope, event.text, None)
-    expected = CrossScopeMemory(plugin._hist()).unified_snapshot()
+    expected = CrossScopeMemory(plugin._hist()).unified_snapshot(
+        cache_block_size=DEFAULT_SHARED_CACHE_BLOCK)
     for scope in ("42", "77"):
         event = _event(scope, message_id=None)
         envelope = _request(plugin, event, monkeypatch)
@@ -130,7 +131,7 @@ def test_native_batch_is_separate_and_excludes_every_scoped_current_id(productio
         plugin._hist().append("42", event.text, record=record)
     plugin._turn_context["42"] = {"messages": copy.deepcopy(records), "history": ["stale batch"]}
     expected = CrossScopeMemory(plugin._hist()).unified_snapshot(
-        exclude_messages=[("42", record["id"]) for record in records])
+        cache_block_size=DEFAULT_SHARED_CACHE_BLOCK, exclude_messages=[("42", record["id"]) for record in records])
     envelope = _request(plugin, events[-1], monkeypatch)
     conversation = _assert_context(envelope, expected)
     assert [record["id"] for record in conversation["messages"]] == ["batch-1", "batch-2"]
@@ -139,18 +140,22 @@ def test_native_batch_is_separate_and_excludes_every_scoped_current_id(productio
                    for row in conversation["history"])
 
 
-def test_native_shared_history_uses_240_total_budget_not_twenty_per_group(production, monkeypatch):
-    """A large single group retains over twenty rows under the global 240 budget."""
+def test_native_shared_history_uses_aligned_240_minimum_not_twenty_per_group(production, monkeypatch):
+    """The native path retains the latest 240 rows plus bounded cache-alignment padding."""
     plugin = production()
     for number in range(245):
         _seed(plugin, "77", f"public history number {number:03d}", f"stored-{number}")
-    expected = CrossScopeMemory(plugin._hist()).unified_snapshot()
+    expected = CrossScopeMemory(plugin._hist()).unified_snapshot(
+        cache_block_size=DEFAULT_SHARED_CACHE_BLOCK)
     conversation = _assert_context(_request(plugin, _event(), monkeypatch), expected)
-    assert len(conversation["history"]) == 240
-    assert conversation["history"][0]["line"] == "public history number 005"
+    assert len(conversation["history"]) == 245
+    assert conversation["history"][0]["line"] == "public history number 000"
+    assert conversation["history"][-240]["line"] == "public history number 005"
     assert conversation["history"][-1]["line"] == "public history number 244"
-    assert conversation["history_context"]["coverage"]["more_available"] is True
+    assert conversation["history_context"]["coverage"]["more_available"] is False
     assert conversation["history_context"]["coverage"]["limit"] == 240
+    assert conversation["history_context"]["coverage"]["cache_padding"] == 5
+    assert conversation["history_context"]["coverage"]["cache_block_size"] == DEFAULT_SHARED_CACHE_BLOCK
 
 
 def test_native_timeline_reads_durable_sources_not_group_live_cache(production, monkeypatch):
@@ -159,7 +164,8 @@ def test_native_timeline_reads_durable_sources_not_group_live_cache(production, 
     _populate(plugin)
     plugin._recent = {"42": ["live current group phantom"], "77": ["live other group phantom"]}
     plugin._turn_context["42"] = {"history": ["frozen phantom"]}
-    expected = CrossScopeMemory(plugin._hist()).unified_snapshot()
+    expected = CrossScopeMemory(plugin._hist()).unified_snapshot(
+        cache_block_size=DEFAULT_SHARED_CACHE_BLOCK)
     envelope = _request(plugin, _event(), monkeypatch)
     _assert_context(envelope, expected)
     assert "phantom" not in json.dumps(envelope)

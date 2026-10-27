@@ -142,7 +142,7 @@ def test_task_native_path_reuses_tools_transcript_media_and_saved_goal(productio
     plugin._dispatch_tool = dispatch
     saved_context = copy.deepcopy(task)
     requests = _provider(monkeypatch, [("draft", [_call("task_media")]), ("Saved work completed.", [])])
-    assert asyncio.run(plugin._run_task_once(task)) == "Saved work completed."
+    assert asyncio.run(plugin._run_task_once(task)) == ""
     assert executed == [("task_media", "42")]
     assert task["last_tools"] == ["task_media"]
     assert sent[0][0] == "send_group_msg" and sent[0][1]["group_id"] == 42

@@ -3268,12 +3268,13 @@ class HiganPlugin(Star):
         self._turn_context[group] = turn
         turn["other_scopes"] = []
         if str(group).isascii() and str(group).isdigit() and int(group) > 0:
-            from .cross_scope_memory import CrossScopeMemory
+            from .cross_scope_memory import CrossScopeMemory, DEFAULT_SHARED_CACHE_BLOCK
             current_records = turn.get("messages") or []
             excluded = [(str(group), str(record["id"])) for record in current_records
                         if isinstance(record, dict) and record.get("id") is not None]
             try:
-                shared = CrossScopeMemory(self._hist()).unified_snapshot(exclude_messages=excluded)
+                shared = CrossScopeMemory(self._hist()).unified_snapshot(
+                    exclude_messages=excluded, cache_block_size=DEFAULT_SHARED_CACHE_BLOCK)
                 turn["history"] = shared["records"]
                 turn["history_context"] = {key: shared[key] for key in ("mode", "source", "coverage")}
             except Exception as exc:
@@ -3499,7 +3500,13 @@ class HiganPlugin(Star):
             logger.info("[higan] 本轮截图 %d 张，她选择不发（内部保留 ✓）" % len(shots))
         if not _out:
             return ""
-        if turn.get("_interim_replies"):
+        # An actual same-scope public send requires an explicit new final publication,
+        # regardless of whether text or media tools produced it; repeated tools stay independent.
+        if turn.get("_interim_replies") or any(
+                isinstance(item, dict) and isinstance(item.get("delivery"), dict)
+                and item["delivery"].get("status") in ("native_confirmed", "observed_send_return")
+                and item["delivery"].get("destination_scope") == str(group)
+                for item in turn.get("_deliveries", [])):
             from .final_publication import select as select_publication
             records = turn.get("messages") or []
             publication = select_publication(_out, records, explicit=True,

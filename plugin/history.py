@@ -90,11 +90,26 @@ class Recorder:
 
     def load_records(self, scope: str, limit: int | None = 20) -> list[dict]:
         """Read exact stored text/metadata; legacy lines have no invented sender or message ID."""
+        return self.load_record_snapshot(scope, limit=limit)["records"]
+
+    def load_record_snapshot(self, scope: str, limit: int | None = 20, *,
+                             exclude_message_ids=()) -> dict:
+        """Read one scope's eligible tail and full eligible count from the same JSONL scan.
+
+        Exclusions compare only native record IDs, never displayed text or inferred
+        identities. Nonpositive limits preserve load_records' no-I/O behavior:
+        records/count are empty/zero, available is true, and no count is requested.
+        """
         if limit is not None and limit <= 0:
-            return []
+            # Preserve the legacy immediate return, including for an unavailable file.
+            return {"records": [], "count": 0, "available": True}
+        excluded = tuple(exclude_message_ids)
         records = deque(maxlen=limit)
+        count = 0
         try:
             with open(self._path(scope), encoding="utf-8") as handle:
+                # Read the entire file: a bounded tail alone cannot provide the
+                # stable eligible count used to align globally cached prefixes.
                 for raw in handle:
                     try:
                         item = json.loads(raw)
@@ -102,17 +117,27 @@ class Recorder:
                         # A partial or corrupt JSONL entry does not erase neighboring evidence.
                         continue
                     if not isinstance(item, dict) or not isinstance(item.get("line"), str):
+                        # Keep precisely the legacy valid-record acceptance contract.
                         continue
                     if not item["line"]:
                         continue
+                    metadata = item.get("record")
+                    if (isinstance(metadata, dict) and "id" in metadata
+                            and any(metadata["id"] == message_id for message_id in excluded)):
+                        # Scope is already bound by the file; retain native ID equality
+                        # (not string normalization) and never inspect legacy text.
+                        continue
+                    count += 1
                     row = {"scope": str(scope), "ts": item.get("ts"), "line": item["line"]}
                     if "record" in item:
-                        # Keep optional metadata exactly as stored, including nested quote provenance.
-                        row["record"] = deepcopy(item["record"])
+                        # json.loads owns this fresh tree; retain it directly so evicted
+                        # rows need no deepcopy, while each returned scan stays detached.
+                        row["record"] = metadata
                     records.append(row)
         except (OSError, UnicodeError):
-            return []
-        return list(records)
+            # Partial reads are not coherent snapshots; never publish their tail/count.
+            return {"records": [], "count": 0, "available": False}
+        return {"records": list(records), "count": count, "available": True}
 
     def search(self, keyword: str, scope: str = "", limit: int = 10) -> list:
         """按关键词找记录（跨 scope 返回 [{scope, line}]）。"""

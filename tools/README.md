@@ -41,7 +41,7 @@ python tools/validate_release.py
 | 指令来源与条件 | [instruction_provenance_probe.py](instruction_provenance_probe.py)：真实模型、小型合成上下文验证历史条件与当前触发分离；工具副作用禁用，不代替真实大上下文行为验证 |
 | 上下文与附件 | [attachment_read_probe.py](attachment_read_probe.py)、[forward_read_probe.py](forward_read_probe.py)、[nontext_read_probe.py](nontext_read_probe.py)、[file_source_probe.py](file_source_probe.py) |
 | 能力与主动观察 | [capability_probe.py](capability_probe.py)、[dsh_capability_probe.py](dsh_capability_probe.py)、[autonomy_read_probe.py](autonomy_read_probe.py) |
-| 缓存与历史 | [prompt_structure_cache_probe.py](prompt_structure_cache_probe.py) 默认离线比较同内容布局，显式 `--live` 才发四次隔离模型请求，输出真实缓存 token；合成场景不代表生产整体收益。[cache_layout_probe.py](cache_layout_probe.py)、[cache_prefix_probe.py](cache_prefix_probe.py)、[history_cache_probe.py](history_cache_probe.py) |
+| 缓存与历史 | [shared_history_cache_probe.py](shared_history_cache_probe.py) 默认离线对照精确滚窗和 30 条块对齐：保留最新 240 条及完整来源，比较实际序列化前缀；显式 `--live` 才发四次隔离模型请求，不执行工具或发送 QQ。[prompt_structure_cache_probe.py](prompt_structure_cache_probe.py) 默认离线比较同内容布局，显式 `--live` 才发四次隔离模型请求。真实命中须读提供方 token，合成场景不代表生产整体收益。[cache_layout_probe.py](cache_layout_probe.py)、[cache_prefix_probe.py](cache_prefix_probe.py)、[history_cache_probe.py](history_cache_probe.py) |
 | 图片发现 | [image_search_probe.py](image_search_probe.py) |
 
 密钥和运行数据库不随源码分发。输出记录应保存在受保护的独立目录，不提交聊天内容、原生请求 flag、二维码或令牌。

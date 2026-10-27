@@ -17,6 +17,9 @@ DEFAULT_LIMIT_PER_SCOPE = 20
 SOURCE = {"name": "cross_scope_history", "trust": "untrusted_data"}
 # One shared presentation budget, independent of the legacy per-group overview.
 DEFAULT_SHARED_LIMIT = 240
+# Cache alignment adds at most one eighth of the existing presentation minimum;
+# it never changes archived evidence, visibility, or native message identity.
+DEFAULT_SHARED_CACHE_BLOCK = max(1, DEFAULT_SHARED_LIMIT // 8)
 UNIFIED_SOURCE = {"name": "unified_group_memory", "trust": "untrusted_data"}
 
 
@@ -118,15 +121,22 @@ class CrossScopeMemory:
         return result
 
     def unified_snapshot(self, *, exclude_messages=(), exclude_message_ids=(),
-                         limit: int = DEFAULT_SHARED_LIMIT) -> dict:
+                         limit: int = DEFAULT_SHARED_LIMIT,
+                         cache_block_size: int = 0) -> dict:
         """Merge persisted public groups; unknown dates stay unknown, never inferred.
 
         Exclusions are native (scope, record.id) pairs or context dictionaries
         carrying scope and id/message_id. Bare IDs cannot establish provenance.
         This disk-only view deliberately ignores live caches and mute policy.
+        Optional alignment retains at least the latest ``limit`` eligible rows
+        while adding fewer than ``cache_block_size`` older rows. Exact archive
+        counts, not a mutable cache or invented timestamps, anchor each block.
         """
         if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
             raise ValueError("limit must be a positive integer")
+        if (isinstance(cache_block_size, bool) or not isinstance(cache_block_size, int)
+                or cache_block_size < 0):
+            raise ValueError("cache_block_size must be a nonnegative integer")
         excluded = []
         for values in (exclude_messages, exclude_message_ids):
             for value in values:
@@ -143,12 +153,33 @@ class CrossScopeMemory:
         rows = []
         scope_count = 0
         more_available = False
+        total_count = 0
+        snapshot_loader = getattr(self.recorder, "load_record_snapshot", None)
+        alignment_available = bool(cache_block_size and callable(snapshot_loader))
         scopes = {str(scope) for scope in self.recorder.group_scopes()
                   if _group(str(scope))}
         for scope in sorted(scopes, key=lambda value: (int(value), value)):
-            # An extra persisted row proves a source exceeds the shared budget;
-            # never load unbounded histories or reuse the legacy 20-row quota.
-            stored = self.recorder.load_records(scope, limit=limit + 1)
+            if alignment_available:
+                # Filtering before bounded retention keeps the newest minimum
+                # even when many current-batch IDs occur in the archived tail.
+                snapshot = snapshot_loader(
+                    scope, limit=limit + cache_block_size,
+                    exclude_message_ids=tuple(message_id for pair_scope, message_id in excluded
+                                              if pair_scope == scope))
+                if not snapshot.get("available", False):
+                    # A partial count cannot anchor a global block. Re-read via
+                    # the existing exact-budget API instead of fabricating one.
+                    result = self.unified_snapshot(exclude_messages=excluded, limit=limit)
+                    result["coverage"].update(cache_block_size=cache_block_size,
+                                              cache_padding=0,
+                                              cache_alignment_available=False)
+                    return result
+                stored = snapshot["records"]
+                total_count += snapshot["count"]
+            else:
+                # Preserve the legacy exact-budget contract for existing callers
+                # and recorder adapters that cannot supply trustworthy counts.
+                stored = self.recorder.load_records(scope, limit=limit + 1)
             if not stored:
                 continue
             scope_count += 1
@@ -175,13 +206,26 @@ class CrossScopeMemory:
             return (1, timestamp) if valid else (0, 0)
 
         rows.sort(key=chronological_key)
-        more_available = more_available or len(rows) > limit
-        selected = rows[-limit:]
+        width = limit
+        if alignment_available and total_count >= limit:
+            # Absolute eligible row count fixes the head until the next block;
+            # every append still includes every row the exact last-limit view had.
+            width += (total_count - limit) % cache_block_size
+        selected = rows[-width:]
+        if alignment_available:
+            more_available = total_count > len(selected)
+        else:
+            more_available = more_available or len(rows) > limit
+        coverage = {"returned": len(selected), "limit": limit,
+                    "more_available": more_available, "scope_count": scope_count}
+        if cache_block_size:
+            # Coverage follows the record body; changing diagnostics therefore
+            # cannot invalidate the immutable history prefix preceding them.
+            coverage.update(cache_block_size=cache_block_size,
+                            cache_padding=max(0, len(selected) - limit),
+                            cache_alignment_available=alignment_available)
         return {"source": deepcopy(UNIFIED_SOURCE), "mode": "one_shared_timeline",
-                "records": selected,
-                "coverage": {"returned": len(selected), "limit": limit,
-                             "more_available": more_available,
-                             "scope_count": scope_count}}
+                "records": selected, "coverage": coverage}
 
     def search(self, keyword: str, current_scope: str, scope: str = "", limit: int = 10,
                muted=()) -> list[dict]:

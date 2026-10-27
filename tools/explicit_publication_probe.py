@@ -116,17 +116,33 @@ def instance(module, root, replies):
     return bot, requests
 
 
-async def foreground_case(module, root, explicit):
-    """Exercise native reply_now, transcript pairing, final selection, and sender."""
+async def foreground_case(module, root, explicit, *, tool_media=False):
+    """Exercise native public sends, paired receipts and explicit final publication."""
     selection_mod = importlib.import_module(module.__package__ + ".reply_selection")
     batch_mod = importlib.import_module(module.__package__ + ".message_batch")
     event = RecordingEvent()
     records = [batch_mod.message_record(event, event.text)]
-    body = "A separate final result."
+    image_path = root / "fixture-image.png"
+    body = "[发图:%s]" % image_path if tool_media else "A separate final result."
     final = json.dumps({"reply_to": ["1234"], "text": body, "delivery": "new"}) if explicit else body
     call = {"id": "fixture-call", "type": "function", "function": {
-        "name": "reply_now", "arguments": json.dumps({"text": "First public result."})}}
+        "name": "send_shot" if tool_media else "reply_now",
+        "arguments": json.dumps({"path": str(image_path)} if tool_media else
+                                {"text": "First public result."})}}
     bot, requests = instance(module, root, [("", [call]), (final, [])])
+    if tool_media:
+        # A valid local image feeds the real framework component constructor;
+        # only its VM response and outgoing transport are simulated.
+        import base64
+        image_path.write_bytes(base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII="))
+
+        async def simulated_vm(name, arguments):
+            """Return a plugin-delivery request without any VM or platform IO."""
+            assert name == "vm_send_shot" and arguments == {"path": str(image_path)}
+            return {"ok": True, "deliver": "plugin", "path": str(image_path), "send_as": "image"}
+
+        bot._vm_tool = simulated_vm
     bot._turn_context["42"]["messages"] = records
     raw = await bot._decide_tools_first(event, "42", event.text, False)
     assert len(requests) == 2
@@ -137,8 +153,15 @@ async def foreground_case(module, root, explicit):
     assert assistants[0]["tool_calls"][0]["id"] == results[0]["tool_call_id"] == "fixture-call"
     result = json.loads(results[0]["content"])["result"]
     assert result["ok"] is True and result["delivered"] is True
-    assert result["delivery"]["message_ids"] == ["900101"]
-    assert result["delivery"]["input_message_ids"] == ["1234"]
+    first_delivery = bot._turn_context["42"]["_deliveries"][0]["delivery"]
+    assert first_delivery["status"] == "native_confirmed"
+    assert first_delivery["message_ids"] == ["900101"]
+    assert first_delivery["input_message_ids"] == ["1234"]
+    if tool_media:
+        assert result["path"] == str(image_path)
+        assert not bot._turn_context["42"]["_interim_replies"]
+    else:
+        assert result["delivery"] == first_delivery
     assert len(event.sent) == 1
     if explicit:
         # Decode once, just as the real caller does; never send a JSON envelope as text.
@@ -146,15 +169,22 @@ async def foreground_case(module, root, explicit):
         selected = selection_mod.decode_reply(raw, records)
         assert not selected["error"] and selected["text"] == body
         delivered = await bot._send(event, "42", selected["text"], selected["quote_id"], decoded=True)
-        assert delivered == body and len(event.sent) == 2
+        assert delivered == ("[图片]" if tool_media else body) and len(event.sent) == 2
     else:
         assert raw == "" and len(event.sent) == 1
     deliveries = bot._turn_context["42"]["_deliveries"]
     assert len(deliveries) == (2 if explicit else 1)
-    return {"name": "foreground_explicit_new" if explicit else "foreground_raw_paraphrase",
+    if tool_media:
+        # Inspect native image components, not the sender's lossy [图片] history label.
+        image_type = module.Image
+        assert all(sum(isinstance(part, image_type) for part in chain.chain) == 1
+                   for chain in event.sent)
+    name = ("tool_media_explicit_new" if explicit else "tool_media_raw_marker") if tool_media else (
+        "foreground_explicit_new" if explicit else "foreground_raw_paraphrase")
+    return {"name": name,
             "provider_callback_count": len(requests), "paired_tool_result_count": len(results),
             "simulated_send_count": len(event.sent), "delivery_record_count": len(deliveries),
-            "receipt_message_ids": result["delivery"]["message_ids"],
+            "receipt_message_ids": first_delivery["message_ids"],
             "final_returned": bool(raw)}
 
 
@@ -206,10 +236,12 @@ async def probe(directory):
                     cases.append(await foreground_case(module, root / str(index), explicit))
                 for index, explicit in enumerate((False, True), 2):
                     cases.append(await autonomy_case(module, root / str(index), explicit))
+                for index, explicit in enumerate((False, True), 4):
+                    cases.append(await foreground_case(module, root / str(index), explicit, tool_media=True))
                 catalog_bot = module.HiganPlugin.__new__(module.HiganPlugin)
                 count = len(catalog_bot._tool_schemas())
-                assert [case["provider_callback_count"] for case in cases] == [2, 2, 1, 1]
-                assert [case["simulated_send_count"] for case in cases] == [1, 2, 0, 1]
+                assert [case["provider_callback_count"] for case in cases] == [2, 2, 1, 1, 2, 2]
+                assert [case["simulated_send_count"] for case in cases] == [1, 2, 0, 1, 1, 2]
                 return {"ok": True, "offline_only": True, "test_count": len(cases),
                         "tool_count": count, "tool_count_is_106": count == 106,
                         "cases": cases, "source_platform_sends": 0, "model_calls": 0,
