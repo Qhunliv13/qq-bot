@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "sample_date": "2026-10-27",
+  "software": {
+    "package": "linuxqq",
+    "version": "3.2.34-53644",
+    "package_sha256": "436c65e1dd28422e128a21cbddb5fe4e2e6c079d7f27fec2541e014d38cc336e",
+    "extraction": "fresh local WSL lab via dpkg-deb --extract; no maintainer scripts",
+    "original_main": "./application.asar/app_launcher/index.js"
+  },
+  "static_preflight": {
+    "metadata_errors": [],
+    "wrapper_bytes": 152017008,
+    "major_bytes": 111428640,
+    "native_architecture": "ELF64 x86_64",
+    "archive_entry_present": true,
+    "native_binding_verified": false
+  },
+  "runtime_experiment": {
+    "intent": "process.versions only using ELECTRON_RUN_AS_NODE and a saved script; no QQ application or native imports in the script",
+    "executions": 2,
+    "second_execution_reason": "add bounded redacted exit diagnostics; unchanged isolation boundary",
+    "status": "failed",
+    "runtime_launch_attempted": true,
+    "runtime_executed": true,
+    "runtime_exit_code": -5,
+    "signal_name_on_linux": "SIGTRAP",
+    "runtime_failure_category": "unclassified_nonzero_exit",
+    "runtime_versions_verified": false,
+    "versions": {},
+    "isolation": {
+      "network": true,
+      "mount": true,
+      "pid": true,
+      "chroot": true,
+      "unprivileged": true,
+      "no_new_privileges": true,
+      "effective_capabilities_zero": true
+    },
+    "limits": [
+      "Exit -5 identifies the terminating signal, not the cause of the trap.",
+      "The empty versions object is a missing observation, not a version or ABI guess.",
+      "ELECTRON_RUN_AS_NODE acceptance was not established by this failed process.",
+      "No sandbox disabling, production loader fallback, account login or native API call was attempted."
+    ]
+  },
+  "safety": {
+    "account_data_copied": false,
+    "credentials_copied": false,
+    "login_attempted": false,
+    "production_files_modified": false,
+    "production_transport_switched": false,
+    "package_maintainer_scripts_executed": false
+  },
+  "native_binding_verified": false,
+  "login_verified": false,
+  "all_feature_parity_verified": false,
+  "production_cutover_authorized": false
+}

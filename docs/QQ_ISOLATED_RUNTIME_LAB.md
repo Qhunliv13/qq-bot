@@ -1,0 +1,69 @@
+# Local isolated QQ runtime experiment
+
+This is not a working QQ transport or proof of personal-account feature parity.
+Production NapCat, its persistent volumes, QQ login state and AstrBot remain unchanged.
+
+## Software-only preparation
+
+A pristine Tencent-hosted `linuxqq 3.2.34-53644` DEB was downloaded outside the repository.
+Before local WSL extraction its entire SHA-256 was checked against the previously
+recorded `436c65e1dd28422e128a21cbddb5fe4e2e6c079d7f27fec2541e014d38cc336e`.
+`dpkg-deb --extract` unpacked software into a fresh lab directory. It did **not** install
+the package, run postinst/postrm scripts, replace system QQ or copy any account data.
+The original main remains `./application.asar/app_launcher/index.js`.
+
+Static preflight of this complete extracted software confirms the archived entry,
+wrapper.node and major.node ELF64 x86-64 headers with no metadata errors. Static
+success still exits non-ready and does not establish a usable native binding.
+
+## Opt-in version-only probe
+
+`tools/qq_isolated_runtime_probe.py` defaults to validation without executing anything.
+Actual execution is Linux-only and needs explicit `--execute`. It attempts a saved
+script which reads a strict allowlist of `process.versions` under `ELECTRON_RUN_AS_NODE`.
+It does not load QQ's application main, import a native module, call a QQ service,
+perform login, or send a message. The runtime can reject that mode; do not assume the
+fuse or host supports it in advance.
+
+The execution boundary requires:
+
+- Separate network, mount and PID namespaces, verified against parent namespace IDs.
+- A fresh chroot with no host account home, production mounts or runtime sockets.
+- Read-only software/system-library bind mounts, private temporary directories and proc.
+- A newly constructed environment with no inherited tokens, proxy, Node or loader options.
+- Dropped supplementary groups, UID/GID 65534, no retained effective capabilities and
+  `NO_NEW_PRIVS` before the executable is invoked. No sandbox-disabling QQ flag.
+- Bounded duration and output, disabled core dumps, and termination of namespace children.
+  The trusted namespace PID1 supervisor retains its credentials and parent-death
+  signal; only the QQ subprocess drops UID/GID in its pre-exec hook. This avoids
+  credential changes clearing the supervisor's parent-death signal and weakening
+  the outer watchdog. The actual version script still runs unprivileged.
+
+Do not weaken any boundary to make a failed test pass. The probe is an experiment
+harness, not a security certification for arbitrary hostile software or a production
+hosting mechanism. Software origin is a caller responsibility: a path or ELF magic
+cannot prove that a directory is pristine or contains no account state.
+
+## Interpretation
+
+Only a successful nonce-marked, allowlisted runtime record establishes the observed
+runtime versions. An executable exit, absent output or mocked test result does not.
+Even observed Node/Electron versions cannot prove that the QQ application bootstrap,
+`qq_magic_napi_register`, JS exports, session lifecycle or any of the 180 action handlers
+work independently. Every native-binding, login and production-cutover readiness flag
+must remain false. No real account test can be inferred from this version-only probe.
+
+## Actual observed result (2026-10-27)
+
+Two attempts used the same isolation boundary; the second added bounded redacted
+stderr classification. Namespace, chroot and privilege checks succeeded. The runtime
+exited with **-5 (SIGTRAP on Linux)** and no verified nonce-marked version record.
+The failure classification is `unclassified_nonzero_exit`, not a missing-library,
+fuse, sandbox or ABI diagnosis. Those causes are not established by a signal number.
+No isolation check was bypassed and no account/login test was performed. See
+`qq-isolated-runtime-evidence.json`. This experiment has **not** passed its runtime gate.
+
+If this step succeeds, the next separate gate is an independently authored, narrowly
+scoped native-binding experiment in the same account-free and network-isolated lab.
+If it fails, record the exact redacted failure and investigate prerequisites without
+using production credentials, NapCat runtime APIs or a renamed loader as a fallback.

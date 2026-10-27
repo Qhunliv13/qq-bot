@@ -19,6 +19,8 @@ python tools/validate_release.py
 
 - [qq_asar_inventory.py](qq_asar_inventory.py)：对显式 `--archive` 路径仅读取有界 ASAR header，校验条目元数据与偏移；不读取条目负载、不解包、不执行代码，不能据此恢复 QQ 原始入口或证明接口可用。
 
+- [qq_isolated_runtime_probe.py](qq_isolated_runtime_probe.py)：默认只校验路径；仅显式 `--execute` 在 Linux 私有网络／挂载／PID 命名空间与空 chroot 内，以降权子进程读取运行时版本。无账号、无应用入口或 native 导入；隔离不成立则拒绝执行，不授权登录或生产切换。使用前阅读 [隔离实验边界](../docs/QQ_ISOLATED_RUNTIME_LAB.md)。
+
 ## 发布与配置
 
 | 工具 | 用途与边界 |

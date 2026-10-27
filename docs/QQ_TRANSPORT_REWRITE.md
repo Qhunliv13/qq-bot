@@ -237,6 +237,28 @@ An actual local run against the pristine manifest and 30,361,684-byte archive fo
 two software files were staged: native libraries and executable were not copied into
 this static lab. The intentional non-ready exit code remained 1.
 
+## Account-free runtime experiment
+
+The matching DEB was SHA-256 verified and unpacked with `dpkg-deb --extract` into a
+fresh local WSL lab, without installing package hooks. Complete static preflight found
+both native ELF libraries and the original archived main, with no metadata errors.
+
+`tools/qq_isolated_runtime_probe.py` adds opt-in runtime-version inspection. It defaults
+to no execution. Its explicit experiment uses separate network/mount/PID namespaces,
+a fresh chroot, read-only software/system directories, private proc/temp data, an empty
+constructed environment, and an unprivileged QQ child with no effective capabilities
+or privilege acquisition. The trusted PID1 supervisor retains the outer termination
+chain; credential changes occur only in the child before execution. See
+`QQ_ISOLATED_RUNTIME_LAB.md` for limitations and safety checks.
+
+The first real attempt passed these namespace and privilege checks but returned a
+nonzero exit, with no verified runtime version record. A second attempt added bounded
+redacted diagnostics without changing isolation and observed exit **-5 (SIGTRAP)**,
+classified `unclassified_nonzero_exit`; the cause is not established. See
+`qq-isolated-runtime-evidence.json`. Neither attempt established usable
+native bindings, login or a working transport. A failed run must not lead to disabling
+isolation or falling back to a production account or NapCat loader.
+
 ## Next validation gates
 
 1. Complete the installed backend API/event inventory and preserve configuration mappings.

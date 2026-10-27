@@ -108,3 +108,22 @@ def test_pristine_package_confirms_original_main_without_runtime_claims():
     for flag in ('native_backend_implemented', 'login_verified', 'full_feature_parity_verified',
                  'production_cutover_authorized'):
         assert pristine[flag] is False
+
+
+def test_actual_isolated_runtime_failure_is_not_promoted_to_success():
+    """Record an actual trap without inventing a cause, version or working native API."""
+    evidence = read_document('qq-isolated-runtime-evidence.json')
+    pristine = read_document('qq-pristine-package-evidence.json')
+    assert evidence['software']['package_sha256'] == pristine['artifact']['sha256']
+    observed = evidence['runtime_experiment']
+    assert observed['runtime_executed'] is True
+    assert observed['status'] == 'failed'
+    assert observed['runtime_exit_code'] == -5
+    assert observed['runtime_versions_verified'] is False
+    assert observed['versions'] == {}
+    assert observed['runtime_failure_category'] == 'unclassified_nonzero_exit'
+    assert all(value is True for value in observed['isolation'].values())
+    assert all(value is False for value in evidence['safety'].values())
+    for field in ('native_binding_verified', 'login_verified', 'all_feature_parity_verified',
+                  'production_cutover_authorized'):
+        assert evidence[field] is False
