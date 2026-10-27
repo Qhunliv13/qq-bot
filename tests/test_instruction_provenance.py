@@ -145,6 +145,7 @@ def test_native_user_wire_preserves_full_shared_history_prefix(production, monke
     else:
         assert after["observations"] == before["observations"]
     stable = {"version": 1, "source": before["source"],
+              "observations": before["observations"],
               "conversation": {"history": expected_history}}
     # Slice known structural closing braces, never split on participant text.
     full_history_prefix = json.dumps(stable, ensure_ascii=False, separators=(",", ":"))[:-2].encode("utf-8")
@@ -154,9 +155,15 @@ def test_native_user_wire_preserves_full_shared_history_prefix(production, monke
         assert after["conversation"]["history"] == expected_after
         assert len(expected_after) == len(expected_history) + 1
         assert not common.startswith(full_history_prefix)
+    elif change == "observations":
+        # Observation-first intentionally sacrifices later history locality when
+        # observation data changes; all original provenance checks remain above.
+        assert after["conversation"]["history"] == expected_history
+        assert not common.startswith(full_history_prefix)
+        assert len(common) < len(full_history_prefix)
     else:
         assert after["conversation"]["history"] == expected_history
         assert common.startswith(full_history_prefix)
         assert len(common) >= len(full_history_prefix) > 5000
-    assert list(before)[:3] == ["version", "source", "conversation"]
+    assert list(before)[:4] == ["version", "source", "observations", "conversation"]
     assert list(before["conversation"]) == ["history", "scope", "messages", "history_context", "anchor"]

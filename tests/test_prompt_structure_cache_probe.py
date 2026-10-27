@@ -27,16 +27,23 @@ def test_lossless_layout_with_unknown_fields():
         data = json.loads(text)
         data['future_field'] = {'keep': ['all', 12]}
         data['conversation']['extra'] = {'keep': True}
-        result = probe.prior_layout(json.dumps(data))
-        assert json.loads(result) == data
-        assert len(json.loads(result)['conversation']['history']) == 40
+        for layout in (probe.prior_layout, probe.history_first_layout):
+            result = layout(json.dumps(data))
+            assert json.loads(result) == data
+            assert len(json.loads(result)['conversation']['history']) == 40
+            assert len(result.encode('utf-8')) == len(json.dumps(data, ensure_ascii=False, separators=(',', ':')).encode('utf-8'))
 
 
 def test_only_history_first_reuses_cross_scope_history_prefix():
     """The exact fixture varies early observations and scope but keeps all history."""
     report = probe.run_probe(ROOT / 'plugin')
     assert report['parsed_data_equal']
+    assert set(report['layouts']) == {'prior', 'history_first', 'observations_first'}
     assert report['layouts']['history_first']['common_user_prefix_bytes'] > report['layouts']['prior']['common_user_prefix_bytes'] + 10000
+    # This counterexample changes observations: the chosen production order is
+    # not universally better, and the old control must not be relabeled as new.
+    assert report['layouts']['history_first']['common_user_prefix_bytes'] > report['layouts']['observations_first']['common_user_prefix_bytes'] + 10000
+    assert report['layouts']['history_first']['user_bytes'] == report['layouts']['observations_first']['user_bytes']
     assert report['causal_improvement_asserted'] is False
 
 

@@ -89,9 +89,9 @@ def test_clock_changes_preserve_complete_context_prefix(clocks):
     stable = {
         "version": 1,
         "source": {"name": "conversation_context", "trust": "untrusted_data"},
+        "observations": inputs["observations"],
         "conversation": {"history": inputs["history"], "scope": inputs["scope"],
                          "messages": inputs["messages"], "anchor": {"message_id": "m1"}},
-        "observations": inputs["observations"],
         "other_scopes": inputs["other_scopes"],
         "task": inputs["task"],
         "attachments": {"image_refs": inputs["image_refs"]},
@@ -122,7 +122,8 @@ def test_history_rollover_preserves_chronology_and_values():
     after = build_context(**inputs, history=new_history)
     # A changed first record honestly ends the cache prefix at that record.
     stable = {"version": 1,
-              "source": {"name": "conversation_context", "trust": "untrusted_data"}}
+              "source": {"name": "conversation_context", "trust": "untrusted_data"},
+              "observations": observations}
     expected_prefix = json.dumps(stable, ensure_ascii=False, separators=(",", ":"))[:-1]
     expected_prefix += ',"conversation":{"history":[{"id":"h'
     assert os.path.commonprefix([before, after]) == expected_prefix
@@ -130,9 +131,9 @@ def test_history_rollover_preserves_chronology_and_values():
         expected = {
             "version": 1,
             "source": stable["source"],
+            "observations": observations,
             "conversation": {"history": history, "scope": inputs["scope"],
                              "messages": inputs["messages"]},
-            "observations": observations,
             "other_scopes": [],
             "task": None,
             "attachments": {"image_refs": []},
@@ -160,6 +161,7 @@ def test_new_message_preserves_complete_preceding_history_prefix():
     after = build_context(**inputs, messages=new_messages)
     stable = {"version": 1,
               "source": {"name": "conversation_context", "trust": "untrusted_data"},
+              "observations": observations,
               "conversation": {"history": history, "scope": inputs["scope"]}}
     # Remove only the two known closing object delimiters to reach messages;
     # never split on text markers that untrusted history may itself contain.
@@ -170,9 +172,9 @@ def test_new_message_preserves_complete_preceding_history_prefix():
         expected = {
             "version": 1,
             "source": stable["source"],
+            "observations": observations,
             "conversation": {"history": history, "scope": inputs["scope"],
                              "messages": messages},
-            "observations": observations,
             "other_scopes": [],
             "task": None,
             "attachments": {"image_refs": []},
@@ -187,11 +189,11 @@ def test_new_message_preserves_complete_preceding_history_prefix():
 # Explicit pre-change order reconstructs the old builder from new parsed values;
 # do not derive it by sorting, otherwise the comparison could hide a wire change.
 _OLD_ENVELOPE_ORDER = (
-    "version", "source", "observations", "conversation", "other_scopes", "task",
+    "version", "source", "conversation", "observations", "other_scopes", "task",
     "attachments", "timing", "trigger", "activity",
 )
 _NEW_ENVELOPE_ORDER = (
-    "version", "source", "conversation", "observations", "other_scopes", "task",
+    "version", "source", "observations", "conversation", "other_scopes", "task",
     "attachments", "timing", "trigger", "activity",
 )
 
@@ -201,7 +203,7 @@ def _old_wire(parsed):
     previous = {key: parsed[key] for key in _OLD_ENVELOPE_ORDER if key in parsed}
     conversation = parsed["conversation"]
     previous["conversation"] = {key: conversation[key] for key in
-                                ("scope", "history", "messages", "history_context", "anchor")
+                                ("history", "scope", "messages", "history_context", "anchor")
                                 if key in conversation}
     return json.dumps(previous, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
 
@@ -300,22 +302,19 @@ def test_exact_utf8_prefix_counterexamples_and_lossless_wire(scenario):
         assert build_context(**inputs) == wire
     new_prefix = _utf8_common_prefix(*wires)
     old_prefix = _utf8_common_prefix(*old_wires)
-    if scenario in ("history_append", "history_window_rollover"):
-        # A changed history ends reuse before later observations; never trim or
-        # reorder the timeline merely to make a cache measurement look better.
-        assert new_prefix < old_prefix
-        if scenario == "history_window_rollover":
-            assert new_prefix < 200
-    elif scenario == "empty_observations":
-        # Moving empty observations later only removes their small header prefix.
-        assert old_prefix - new_prefix == len(',"observations":[]'.encode("utf-8"))
-    elif scenario == "cap_100_eviction":
-        # Observation eviction no longer invalidates the complete shared history.
-        assert old_prefix < 200
+    if scenario in ("history_append", "history_window_rollover", "messages_clock"):
+        # Stable observations precede history, including history append/rollover.
+        assert new_prefix > old_prefix
         assert new_prefix > 30000
+    elif scenario == "empty_observations":
+        assert new_prefix - old_prefix == len(',"observations":[]'.encode("utf-8"))
+    elif scenario == "cap_100_eviction":
+        # Honest downside: a changing first observation loses history locality.
+        assert new_prefix < 200
+        assert old_prefix > 30000
     else:
-        # Large unchanged observations are deliberately not promised a front slot.
-        assert new_prefix < old_prefix
+        # Appending observations stops reuse there, before unchanged history.
+        assert new_prefix > old_prefix
         assert new_prefix > 30000
     assert (before_inputs, after_inputs) == original
 

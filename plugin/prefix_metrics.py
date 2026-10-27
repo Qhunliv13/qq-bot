@@ -52,6 +52,7 @@ class _Observation:
     user: _Prefix
     native_message: _Prefix
     messages: _Prefix
+    observations: bytes
 
 
 class PrefixTracker:
@@ -193,6 +194,11 @@ class PrefixTracker:
                       and part.get("type") in ("image_url", "input_image")]
             image_digest = self._digest(_json_bytes(images))
             history_bytes = _json_bytes(history)
+            # Measure the actual native field without logging its values or IDs.
+            envelope = json.loads(user)
+            observations = envelope.get("observations", [])
+            observation_bytes = _json_bytes(observations)
+            observation_digest = self._digest(observation_bytes)
             user_bytes = user.encode("utf-8")
             native_message_bytes = _json_bytes(native_content)
             messages_bytes = _json_bytes(messages)
@@ -215,6 +221,12 @@ class PrefixTracker:
             "input_history_entries": len(history),
             "current_batch_entries": len(current),
             "history_bytes": len(history_bytes),
+            "observation_bytes": len(observation_bytes),
+            "observation_count": len(observations) if isinstance(observations, list) else 0,
+            "observations_unchanged": previous is not None and previous.observations == observation_digest,
+            "observations_before_history": (
+                list(envelope).index("observations") < list(envelope).index("conversation")
+                if "observations" in envelope else False),
             "user_bytes": len(user_bytes),
             "history_prefix_reused_bytes": self._reused(previous.history, history_bytes)
                 if previous is not None else 0,
@@ -235,7 +247,7 @@ class PrefixTracker:
         self._scopes[scope_key] = _Observation(
             index, system, tools, image_digest,
             self._prefix(history_bytes), self._prefix(user_bytes),
-            self._prefix(native_message_bytes), messages_prefix)
+            self._prefix(native_message_bytes), messages_prefix, observation_digest)
         # Share the immutable digest object, not another copy or any request data.
         self._last_messages = messages_prefix
         return result

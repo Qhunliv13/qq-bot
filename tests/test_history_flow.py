@@ -55,7 +55,9 @@ def test_capped_incoming_and_confirmed_replies_keep_serialized_prefix(production
         assert prompts[index].count(f"current-{index}") == 1
     # Encode the known structure and remove only its closing delimiters: raw
     # history may itself contain JSON-looking text, and later lists append rows.
+    assert all(envelope["observations"] == envelopes[0]["observations"] for envelope in envelopes)
     stable = {"version": envelopes[0]["version"], "source": envelopes[0]["source"],
+              "observations": envelopes[0]["observations"],
               "conversation": {"history": histories[0]}}
     stable_prefix = json.dumps(stable, ensure_ascii=False, separators=(",", ":"))[:-3].encode("utf-8")
     assert all(prompt.encode("utf-8").startswith(stable_prefix) for prompt in prompts)

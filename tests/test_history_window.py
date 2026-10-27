@@ -128,7 +128,9 @@ def test_serialized_history_prefix_survives_fresh_clock_and_current_input():
     before, after = json.loads(first), json.loads(second)
     # Remove known structural list/object closings, not text markers that can
     # occur inside raw history. Appended chronological rows follow these bytes.
+    assert before["observations"] == after["observations"] == []
     stable = {"version": before["version"], "source": before["source"],
+              "observations": before["observations"],
               "conversation": {"history": before["conversation"]["history"]}}
     prefix = json.dumps(stable, ensure_ascii=False, separators=(",", ":"))[:-3].encode("utf-8")
     assert first.encode("utf-8").startswith(prefix)

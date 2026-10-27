@@ -40,7 +40,7 @@ def build_context(
     answer it. Unsupported values fail JSON serialization explicitly
     rather than being silently converted into misleading strings.
     """
-    # Shared history leads the wire prefix even when the current scope changes.
+    # Within conversation, shared history precedes current scope and messages.
     # Insertion order affects cache reuse only; supplied nested content is untouched.
     conversation = {"history": history, "scope": scope, "messages": messages}
     if history_context is not None:
@@ -54,10 +54,11 @@ def build_context(
     envelope = {
         "version": PROTOCOL_VERSION,
         "source": {"name": "conversation_context", "trust": "untrusted_data"},
-        # History precedes mutable observations and current-scope source metadata.
-        # Key position does not establish source priority, trust, or authority.
-        "conversation": conversation,
+        # An unchanged observation window stays reusable when history appends or
+        # rolls. Window changes or scope switches can instead break this prefix
+        # earlier; ordering is a cache tradeoff, never source priority or authority.
         "observations": [] if observations is None else observations,
+        "conversation": conversation,
         "other_scopes": [] if other_scopes is None else other_scopes,
         "task": task,
         "attachments": {"image_refs": [] if image_refs is None else image_refs},

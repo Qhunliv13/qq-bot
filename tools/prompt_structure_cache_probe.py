@@ -46,6 +46,20 @@ def prior_layout(text):
     return json.dumps(result, ensure_ascii=False, allow_nan=False, separators=(',', ':'))
 
 
+def history_first_layout(text):
+    """Reconstruct the preceding history-first control, retaining unknown fields.
+
+    The live builder can change order independently; this named control must not
+    silently become observation-first when the production default changes.
+    """
+    data = json.loads(text)
+    order = ('version', 'source', 'conversation', 'observations', 'other_scopes',
+             'task', 'attachments', 'timing', 'trigger', 'activity')
+    result = {key: data[key] for key in order if key in data}
+    result.update({key: value for key, value in data.items() if key not in result})
+    return json.dumps(result, ensure_ascii=False, allow_nan=False, separators=(',', ':'))
+
+
 def common(first, second):
     """Measure UTF-8 bytes, never label this a token count or provider hit."""
     left, right = first.encode('utf-8'), second.encode('utf-8')
@@ -77,14 +91,18 @@ def run_probe(directory, live=False):
     context = load_context(directory)
     candidate = fixture_pair(context.build_context)
     prior = [prior_layout(value) for value in candidate]
-    if any(json.loads(a) != json.loads(b) for a, b in zip(prior, candidate)):
+    history_first = [history_first_layout(value) for value in candidate]
+    layouts = (('prior', prior), ('history_first', history_first),
+               ('observations_first', candidate))
+    if any(json.loads(a) != json.loads(b) or len(a.encode('utf-8')) != len(b.encode('utf-8'))
+           for _, values in layouts for a, b in zip(values, candidate)):
         raise ValueError('layout_data_changed')
     report = {'synthetic_fixtures': True, 'parsed_data_equal': True, 'history_entries': 40,
               'observations_per_request': 8, 'provider_request_count': 0,
               'qq_messages_sent': 0, 'tool_actions_executed': 0,
               'production_parameters_modified': False, 'cache_warmth_uncontrolled': True,
               'causal_improvement_asserted': False, 'layouts': {}, 'requests': []}
-    for name, values in (('prior', prior), ('history_first', candidate)):
+    for name, values in layouts:
         report['layouts'][name] = {'user_bytes': [len(value.encode('utf-8')) for value in values],
                                    'common_user_prefix_bytes': common(*values)}
     if not live:
@@ -105,7 +123,9 @@ def run_probe(directory, live=False):
             persona = module.HiganPlugin._load_persona()
             tools = bot._tool_schemas()
             system = context.system_prompt(persona)
-            for name, values in (('prior', prior), ('history_first', candidate)):
+            # Keep the explicit opt-in budget at four requests: compare the
+            # immediately preceding control against the current production order.
+            for name, values in layouts[1:]:
                 for step, value in enumerate(values):
                     # Only this diagnostic response is bounded; production config untouched.
                     payload = {'model': model, 'messages': [{'role': 'system', 'content': system}, {'role': 'user', 'content': value}], 'tools': tools, 'tool_choice': 'auto', 'max_tokens': 8}
@@ -121,7 +141,7 @@ def run_probe(directory, live=False):
                 os.environ.pop('HIGAN_ROOT', None)
             else:
                 os.environ['HIGAN_ROOT'] = previous
-    report['weighted_usage_by_layout'] = {name: weighted([row for row in report['requests'] if row['layout'] == name]) for name in ('prior', 'history_first')}
+    report['weighted_usage_by_layout'] = {name: weighted([row for row in report['requests'] if row['layout'] == name]) for name in ('history_first', 'observations_first')}
     return report
 
 

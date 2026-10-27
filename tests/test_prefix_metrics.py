@@ -25,6 +25,32 @@ def request(history=None, scope="private-QQ-123456789", text="now", images=None)
             "name": "example", "parameters": {"type": "object"}}}]}
 
 
+def test_observation_component_metrics_are_private_and_order_aware():
+    """Distinguish archive churn from history churn without retaining archive text."""
+    tracker = PrefixTracker()
+    payload = request(["history" * 300])
+    envelope = json.loads(payload["messages"][1]["content"])
+    envelope["observations"] = [{"id": "never-log-this-id", "result": "private-observation" * 80}]
+    payload["messages"][1]["content"] = json.dumps(envelope, ensure_ascii=False)
+    first = tracker.observe(payload)
+    assert first["observation_count"] == 1
+    assert first["observation_bytes"] > 1000
+    assert first["observations_before_history"] is True
+    assert first["observations_unchanged"] is False
+    envelope["conversation"]["history"].append("new row")
+    payload["messages"][1]["content"] = json.dumps(envelope, ensure_ascii=False)
+    second = tracker.observe(payload)
+    assert second["observations_unchanged"] is True
+    assert second["user_prefix_reused_bytes"] > 1000
+    envelope["observations"][0]["result"] = "changed actual observation"
+    payload["messages"][1]["content"] = json.dumps(envelope, ensure_ascii=False)
+    third = tracker.observe(payload)
+    assert third["observations_unchanged"] is False
+    assert "private-observation" not in repr(vars(tracker))
+    assert "never-log-this-id" not in json.dumps(third)
+    assert all(type(value) in (int, bool) for value in third.values())
+
+
 def test_first_observation_and_unmodified_payload():
     """Only numeric/boolean fields leave the tracker and payloads remain exact."""
     tracker = PrefixTracker()
