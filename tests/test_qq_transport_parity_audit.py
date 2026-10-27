@@ -85,6 +85,82 @@ def test_malformed_cli_safe(tmp_path, capsys):
     assert json.loads(output)["production_cutover_authorized"] is False
 
 
+@pytest.fixture
+def installed():
+    """Read the sanitized installed static inventory, never software implementation."""
+    return json.loads((ROOT / "docs" / "qq-installed-action-inventory.json").read_text(encoding="utf-8"))
+
+
+def test_installed_inventory_counts_and_pending(required, installed):
+    """The explicit inventory expands declaration requirements, not runtime proof."""
+    result = AUDIT.evaluate(required, installed=installed)
+    assert result["installed_inventory_supplied"]
+    assert result["installed_required_counts"] == {"base": 180, "aliases": 360, "lookup": 540}
+    assert len(result["missing_installed_actions"]) == 540
+    assert not result["installed_declaration_coverage_ready"]
+
+
+def test_plugin_only_fails_installed_coverage(required, installed):
+    """The old 21-action candidate cannot masquerade as full installed coverage."""
+    result = AUDIT.evaluate(required, complete_candidate(required), installed=installed)
+    assert not any(result["missing"].values())
+    assert len(result["missing_installed_actions"]) == 519
+    assert not result["manifest_coverage_ready"]
+
+
+def test_all_installed_claims_still_never_authorize(required, installed):
+    """Even 540 declarations and fabricated proof claims cannot authorize cutover."""
+    candidate = complete_candidate(required)
+    candidate["actions"] = [r["name"] for r in installed["actions"]] + installed["generated_aliases"]["names"]
+    candidate.update(runtime_verified=True, cutover_ready=True, native_backend_implemented=True)
+    result = AUDIT.evaluate(required, candidate, installed=installed)
+    assert result["manifest_coverage_ready"] and result["installed_declaration_coverage_ready"]
+    assert result["missing_installed_actions"] == []
+    assert not result["runtime_verified"] and not result["native_backend_implemented"]
+    assert not result["cutover_ready"] and not result["production_cutover_authorized"]
+
+
+def test_installed_duplicate_base_rejected(required, installed):
+    """Duplicate inventory rows fail instead of silently shrinking the denominator."""
+    installed["actions"].append(installed["actions"][0])
+    with pytest.raises(ValueError):
+        AUDIT.evaluate(required, installed=installed)
+
+
+def test_installed_bad_alias_rejected(required, installed):
+    """A plausible but non-derived alias must not count as installed evidence."""
+    installed["generated_aliases"]["names"][0] += "_fake"
+    with pytest.raises(ValueError):
+        AUDIT.evaluate(required, installed=installed)
+
+
+def test_installed_count_boolean_rejected(required, installed):
+    """Python bool being an int subtype must not validate count metadata."""
+    installed["counts"]["unique_base_actions"] = True
+    with pytest.raises(ValueError):
+        AUDIT.evaluate(required, installed=installed)
+
+
+def test_installed_plugin_drift_rejected(required, installed):
+    """An inventory from a mismatched backend cannot satisfy the plugin baseline."""
+    required["actions"].append({"name": "not_installed_action"})
+    with pytest.raises(ValueError):
+        AUDIT.evaluate(required, installed=installed)
+
+
+def test_installed_cli_and_prefix_names(required, tmp_path, capsys):
+    """CLI accepts explicit installed input while real dotted/underscore names work."""
+    assert AUDIT._names([".ocr_image", "_mark_all_as_read"]) == {".ocr_image", "_mark_all_as_read"}
+    for name in [".", "..", "bad/action"]:
+        with pytest.raises(ValueError):
+            AUDIT._names([name])
+    candidate = tmp_path / "candidate.json"
+    candidate.write_text(json.dumps(complete_candidate(required)), encoding="utf-8")
+    inventory_path = ROOT / "docs" / "qq-installed-action-inventory.json"
+    assert AUDIT.main(["--candidate", str(candidate), "--installed-inventory", str(inventory_path)]) == 1
+    assert json.loads(capsys.readouterr().out)["installed_inventory_supplied"]
+
+
 def test_all_source_sites_exist(required):
     """Keep every reported source reference within an existing local source file."""
     for key in ("actions", "events", "transport_dependencies"):

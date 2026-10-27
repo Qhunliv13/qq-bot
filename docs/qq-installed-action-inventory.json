@@ -1,0 +1,2991 @@
+{
+  "schema_version": 1,
+  "coverage_scope": "installed_napcat_static_constructor_and_decorator_inventory",
+  "snapshot": {
+    "backend": "NapCat",
+    "backend_version": "4.18.37",
+    "backend_version_evidence": "installed_bundle_embedded_semver; prior runtime version confirmation supplied by parent",
+    "qq_version": "3.2.34-53644",
+    "qq_version_evidence": "parent supplied previously observed runtime metadata; not independently queried in this inventory",
+    "captured_at": "2026-10-27T14:20:25.872126+00:00"
+  },
+  "source": {
+    "bundle_basename": "napcat.mjs",
+    "software_directory": "/app/napcat",
+    "bytes": 3117637,
+    "sha256": "96934cbd3a4a7ad4d50bfeeaa10adb600fd142cbb4f1be00ce427287fd5926fb",
+    "mtime": "2026-10-19T19:39:40.847880668+08:00",
+    "package_version": "0.0.1",
+    "package_version_is_backend_release": false
+  },
+  "completeness": {
+    "static_constructor_and_decorator_inventory": true,
+    "all_constructor_names_resolved_to_enum_literals": true,
+    "full_runtime_registry_verified": false,
+    "full_event_inventory_complete": false,
+    "all_personal_qq_features_verified": false,
+    "independent_authentication_protocol_verified": false,
+    "candidate_required_coverage": "all base action names and generated aliases, not only current plugin dependency actions",
+    "candidate_coverage_verified": false,
+    "unknowns": [
+      "Does not execute constructors or prove runtime initialization succeeds.",
+      "Does not establish independent QQ authentication/protocol support or no-feature-loss replacement.",
+      "External plugins, injected code, runtime mutation and event/media behavior not validated.",
+      "All event types, schemas, ordering, media behavior, permissions, errors and reconnect semantics remain outside this static action-name inventory."
+    ]
+  },
+  "counts": {
+    "static_constructor_entries": 179,
+    "static_constructor_unique_classes": 178,
+    "decorator_classes": 2,
+    "registration_entries": 181,
+    "unique_base_actions": 180,
+    "unique_lookup_keys_with_aliases": 540,
+    "enum_entries": 182
+  },
+  "registration_provenance": {
+    "enum_start_line": 33050,
+    "constructor_list_lines": [
+      80836,
+      81020
+    ],
+    "decorator_registry_lines": [
+      33349,
+      33384
+    ],
+    "lookup_builder_lines": [
+      81022,
+      81042
+    ],
+    "duplicate_base_actions": {
+      "check_url_safely": 2
+    },
+    "enum_only_not_registered": [
+      ".get_word_slices",
+      "unknown"
+    ],
+    "unresolved": []
+  },
+  "generated_aliases": {
+    "suffixes": [
+      "_async",
+      "_rate_limited"
+    ],
+    "templates": [
+      "${s.actionName}_async",
+      "${s.actionName}_rate_limited",
+      "${c}_async",
+      "${c}_rate_limited"
+    ],
+    "same_handler_not_distinct_features": true,
+    "names": [
+      ".handle_quick_operation_async",
+      ".handle_quick_operation_rate_limited",
+      ".ocr_image_async",
+      ".ocr_image_rate_limited",
+      "ArkShareGroup_async",
+      "ArkShareGroup_rate_limited",
+      "ArkSharePeer_async",
+      "ArkSharePeer_rate_limited",
+      "_del_group_notice_async",
+      "_del_group_notice_rate_limited",
+      "_get_group_notice_async",
+      "_get_group_notice_rate_limited",
+      "_get_model_show_async",
+      "_get_model_show_rate_limited",
+      "_mark_all_as_read_async",
+      "_mark_all_as_read_rate_limited",
+      "_send_group_notice_async",
+      "_send_group_notice_rate_limited",
+      "_set_model_show_async",
+      "_set_model_show_rate_limited",
+      "add_custom_face_async",
+      "add_custom_face_rate_limited",
+      "bot_exit_async",
+      "bot_exit_rate_limited",
+      "can_send_image_async",
+      "can_send_image_rate_limited",
+      "can_send_record_async",
+      "can_send_record_rate_limited",
+      "cancel_group_album_media_like_async",
+      "cancel_group_album_media_like_rate_limited",
+      "cancel_group_todo_async",
+      "cancel_group_todo_rate_limited",
+      "cancel_online_file_async",
+      "cancel_online_file_rate_limited",
+      "check_url_safely_async",
+      "check_url_safely_rate_limited",
+      "clean_cache_async",
+      "clean_cache_rate_limited",
+      "clean_stream_temp_file_async",
+      "clean_stream_temp_file_rate_limited",
+      "click_inline_keyboard_button_async",
+      "click_inline_keyboard_button_rate_limited",
+      "complete_group_todo_async",
+      "complete_group_todo_rate_limited",
+      "create_collection_async",
+      "create_collection_rate_limited",
+      "create_flash_task_async",
+      "create_flash_task_rate_limited",
+      "create_group_file_folder_async",
+      "create_group_file_folder_rate_limited",
+      "del_group_album_media_async",
+      "del_group_album_media_rate_limited",
+      "delete_custom_face_async",
+      "delete_custom_face_rate_limited",
+      "delete_essence_msg_async",
+      "delete_essence_msg_rate_limited",
+      "delete_friend_async",
+      "delete_friend_rate_limited",
+      "delete_group_file_async",
+      "delete_group_file_rate_limited",
+      "delete_group_folder_async",
+      "delete_group_folder_rate_limited",
+      "delete_msg_async",
+      "delete_msg_rate_limited",
+      "delete_qzone_msg_async",
+      "delete_qzone_msg_rate_limited",
+      "do_group_album_comment_async",
+      "do_group_album_comment_rate_limited",
+      "download_file_async",
+      "download_file_image_stream_async",
+      "download_file_image_stream_rate_limited",
+      "download_file_rate_limited",
+      "download_file_record_stream_async",
+      "download_file_record_stream_rate_limited",
+      "download_file_stream_async",
+      "download_file_stream_rate_limited",
+      "download_fileset_async",
+      "download_fileset_rate_limited",
+      "fetch_custom_face_async",
+      "fetch_custom_face_detail_async",
+      "fetch_custom_face_detail_rate_limited",
+      "fetch_custom_face_rate_limited",
+      "fetch_emoji_like_async",
+      "fetch_emoji_like_rate_limited",
+      "fetch_ptt_text_async",
+      "fetch_ptt_text_rate_limited",
+      "forward_friend_single_msg_async",
+      "forward_friend_single_msg_rate_limited",
+      "forward_group_single_msg_async",
+      "forward_group_single_msg_rate_limited",
+      "friend_poke_async",
+      "friend_poke_rate_limited",
+      "get_ai_characters_async",
+      "get_ai_characters_rate_limited",
+      "get_ai_record_async",
+      "get_ai_record_rate_limited",
+      "get_clientkey_async",
+      "get_clientkey_rate_limited",
+      "get_collection_list_async",
+      "get_collection_list_rate_limited",
+      "get_cookies_async",
+      "get_cookies_rate_limited",
+      "get_credentials_async",
+      "get_credentials_rate_limited",
+      "get_csrf_token_async",
+      "get_csrf_token_rate_limited",
+      "get_doubt_friends_add_request_async",
+      "get_doubt_friends_add_request_rate_limited",
+      "get_emoji_likes_async",
+      "get_emoji_likes_rate_limited",
+      "get_essence_msg_list_async",
+      "get_essence_msg_list_rate_limited",
+      "get_file_async",
+      "get_file_rate_limited",
+      "get_fileset_id_async",
+      "get_fileset_id_rate_limited",
+      "get_fileset_info_async",
+      "get_fileset_info_rate_limited",
+      "get_flash_file_list_async",
+      "get_flash_file_list_rate_limited",
+      "get_flash_file_url_async",
+      "get_flash_file_url_rate_limited",
+      "get_forward_msg_async",
+      "get_forward_msg_rate_limited",
+      "get_friend_list_async",
+      "get_friend_list_rate_limited",
+      "get_friend_msg_history_async",
+      "get_friend_msg_history_rate_limited",
+      "get_friends_with_category_async",
+      "get_friends_with_category_rate_limited",
+      "get_group_album_media_list_async",
+      "get_group_album_media_list_rate_limited",
+      "get_group_at_all_remain_async",
+      "get_group_at_all_remain_rate_limited",
+      "get_group_detail_info_async",
+      "get_group_detail_info_rate_limited",
+      "get_group_file_system_info_async",
+      "get_group_file_system_info_rate_limited",
+      "get_group_file_url_async",
+      "get_group_file_url_rate_limited",
+      "get_group_files_by_folder_async",
+      "get_group_files_by_folder_rate_limited",
+      "get_group_honor_info_async",
+      "get_group_honor_info_rate_limited",
+      "get_group_ignore_add_request_async",
+      "get_group_ignore_add_request_rate_limited",
+      "get_group_ignored_notifies_async",
+      "get_group_ignored_notifies_rate_limited",
+      "get_group_info_async",
+      "get_group_info_ex_async",
+      "get_group_info_ex_rate_limited",
+      "get_group_info_rate_limited",
+      "get_group_list_async",
+      "get_group_list_rate_limited",
+      "get_group_member_info_async",
+      "get_group_member_info_rate_limited",
+      "get_group_member_list_async",
+      "get_group_member_list_rate_limited",
+      "get_group_msg_history_async",
+      "get_group_msg_history_rate_limited",
+      "get_group_root_files_async",
+      "get_group_root_files_rate_limited",
+      "get_group_share_link_async",
+      "get_group_share_link_rate_limited",
+      "get_group_shut_list_async",
+      "get_group_shut_list_rate_limited",
+      "get_group_signed_list_async",
+      "get_group_signed_list_rate_limited",
+      "get_group_system_msg_async",
+      "get_group_system_msg_rate_limited",
+      "get_guild_list_async",
+      "get_guild_list_rate_limited",
+      "get_guild_service_profile_async",
+      "get_guild_service_profile_rate_limited",
+      "get_image_async",
+      "get_image_rate_limited",
+      "get_login_info_async",
+      "get_login_info_rate_limited",
+      "get_mini_app_ark_async",
+      "get_mini_app_ark_rate_limited",
+      "get_msg_async",
+      "get_msg_rate_limited",
+      "get_online_clients_async",
+      "get_online_clients_rate_limited",
+      "get_online_file_msg_async",
+      "get_online_file_msg_rate_limited",
+      "get_private_file_url_async",
+      "get_private_file_url_rate_limited",
+      "get_profile_like_async",
+      "get_profile_like_rate_limited",
+      "get_qun_album_list_async",
+      "get_qun_album_list_rate_limited",
+      "get_recent_contact_async",
+      "get_recent_contact_rate_limited",
+      "get_record_async",
+      "get_record_rate_limited",
+      "get_rkey_async",
+      "get_rkey_rate_limited",
+      "get_rkey_server_async",
+      "get_rkey_server_rate_limited",
+      "get_robot_uin_range_async",
+      "get_robot_uin_range_rate_limited",
+      "get_share_link_async",
+      "get_share_link_rate_limited",
+      "get_status_async",
+      "get_status_rate_limited",
+      "get_stranger_info_async",
+      "get_stranger_info_rate_limited",
+      "get_unidirectional_friend_list_async",
+      "get_unidirectional_friend_list_rate_limited",
+      "get_version_info_async",
+      "get_version_info_rate_limited",
+      "group_poke_async",
+      "group_poke_rate_limited",
+      "mark_group_msg_as_read_async",
+      "mark_group_msg_as_read_rate_limited",
+      "mark_msg_as_read_async",
+      "mark_msg_as_read_rate_limited",
+      "mark_private_msg_as_read_async",
+      "mark_private_msg_as_read_rate_limited",
+      "move_group_file_async",
+      "move_group_file_rate_limited",
+      "nc_get_packet_status_async",
+      "nc_get_packet_status_rate_limited",
+      "nc_get_rkey_async",
+      "nc_get_rkey_rate_limited",
+      "nc_get_user_status_async",
+      "nc_get_user_status_rate_limited",
+      "ocr_image_async",
+      "ocr_image_rate_limited",
+      "receive_online_file_async",
+      "receive_online_file_rate_limited",
+      "refuse_online_file_async",
+      "refuse_online_file_rate_limited",
+      "rename_group_file_async",
+      "rename_group_file_rate_limited",
+      "send_ark_share_async",
+      "send_ark_share_rate_limited",
+      "send_flash_msg_async",
+      "send_flash_msg_rate_limited",
+      "send_forward_msg_async",
+      "send_forward_msg_rate_limited",
+      "send_group_ai_record_async",
+      "send_group_ai_record_rate_limited",
+      "send_group_ark_share_async",
+      "send_group_ark_share_rate_limited",
+      "send_group_forward_msg_async",
+      "send_group_forward_msg_rate_limited",
+      "send_group_msg_async",
+      "send_group_msg_rate_limited",
+      "send_group_sign_async",
+      "send_group_sign_rate_limited",
+      "send_like_async",
+      "send_like_rate_limited",
+      "send_msg_async",
+      "send_msg_rate_limited",
+      "send_online_file_async",
+      "send_online_file_rate_limited",
+      "send_online_folder_async",
+      "send_online_folder_rate_limited",
+      "send_packet_async",
+      "send_packet_rate_limited",
+      "send_poke_async",
+      "send_poke_rate_limited",
+      "send_private_forward_msg_async",
+      "send_private_forward_msg_rate_limited",
+      "send_private_msg_async",
+      "send_private_msg_rate_limited",
+      "send_qzone_msg_async",
+      "send_qzone_msg_rate_limited",
+      "set_custom_face_desc_async",
+      "set_custom_face_desc_rate_limited",
+      "set_diy_online_status_async",
+      "set_diy_online_status_rate_limited",
+      "set_doubt_friends_add_request_async",
+      "set_doubt_friends_add_request_rate_limited",
+      "set_essence_msg_async",
+      "set_essence_msg_rate_limited",
+      "set_friend_add_request_async",
+      "set_friend_add_request_rate_limited",
+      "set_friend_remark_async",
+      "set_friend_remark_rate_limited",
+      "set_group_add_option_async",
+      "set_group_add_option_rate_limited",
+      "set_group_add_request_async",
+      "set_group_add_request_rate_limited",
+      "set_group_admin_async",
+      "set_group_admin_rate_limited",
+      "set_group_album_media_like_async",
+      "set_group_album_media_like_rate_limited",
+      "set_group_ban_async",
+      "set_group_ban_rate_limited",
+      "set_group_card_async",
+      "set_group_card_rate_limited",
+      "set_group_kick_async",
+      "set_group_kick_members_async",
+      "set_group_kick_members_rate_limited",
+      "set_group_kick_rate_limited",
+      "set_group_leave_async",
+      "set_group_leave_rate_limited",
+      "set_group_member_invite_policy_async",
+      "set_group_member_invite_policy_rate_limited",
+      "set_group_member_permissions_async",
+      "set_group_member_permissions_rate_limited",
+      "set_group_name_async",
+      "set_group_name_rate_limited",
+      "set_group_new_member_history_visibility_async",
+      "set_group_new_member_history_visibility_rate_limited",
+      "set_group_portrait_async",
+      "set_group_portrait_rate_limited",
+      "set_group_remark_async",
+      "set_group_remark_rate_limited",
+      "set_group_robot_add_option_async",
+      "set_group_robot_add_option_rate_limited",
+      "set_group_search_async",
+      "set_group_search_rate_limited",
+      "set_group_sign_async",
+      "set_group_sign_rate_limited",
+      "set_group_special_title_async",
+      "set_group_special_title_rate_limited",
+      "set_group_todo_async",
+      "set_group_todo_rate_limited",
+      "set_group_whole_ban_async",
+      "set_group_whole_ban_rate_limited",
+      "set_input_status_async",
+      "set_input_status_rate_limited",
+      "set_msg_emoji_like_async",
+      "set_msg_emoji_like_rate_limited",
+      "set_online_status_async",
+      "set_online_status_rate_limited",
+      "set_qq_avatar_async",
+      "set_qq_avatar_rate_limited",
+      "set_qq_profile_async",
+      "set_qq_profile_rate_limited",
+      "set_restart_async",
+      "set_restart_rate_limited",
+      "set_self_longnick_async",
+      "set_self_longnick_rate_limited",
+      "test_auto_register_01_async",
+      "test_auto_register_01_rate_limited",
+      "test_auto_register_02_async",
+      "test_auto_register_02_rate_limited",
+      "test_download_stream_async",
+      "test_download_stream_rate_limited",
+      "trans_group_file_async",
+      "trans_group_file_rate_limited",
+      "translate_en2zh_async",
+      "translate_en2zh_rate_limited",
+      "upload_file_stream_async",
+      "upload_file_stream_rate_limited",
+      "upload_group_file_async",
+      "upload_group_file_rate_limited",
+      "upload_image_to_qun_album_async",
+      "upload_image_to_qun_album_rate_limited",
+      "upload_images_to_qun_album_async",
+      "upload_images_to_qun_album_rate_limited",
+      "upload_private_file_async",
+      "upload_private_file_rate_limited",
+      "upload_video_to_qun_album_async",
+      "upload_video_to_qun_album_rate_limited"
+    ]
+  },
+  "actions": [
+    {
+      "name": ".handle_quick_operation",
+      "registrations": [
+        {
+          "class": "Dve",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GoCQHTTP_HandleQuickAction",
+          "enum_line": 33167,
+          "class_line": 76739,
+          "action_line": 76740,
+          "registration_line": 80918
+        }
+      ]
+    },
+    {
+      "name": ".ocr_image",
+      "registrations": [
+        {
+          "class": "Gve",
+          "origin": "static_constructor_list",
+          "enum_symbol": "IOCRImage",
+          "enum_line": 33145,
+          "class_line": 76835,
+          "action_line": 76836,
+          "registration_line": 80901
+        }
+      ]
+    },
+    {
+      "name": "ArkShareGroup",
+      "registrations": [
+        {
+          "class": "Zve",
+          "origin": "static_constructor_list",
+          "enum_symbol": "ShareGroupEx",
+          "enum_line": 33173,
+          "class_line": 76939,
+          "action_line": 76940,
+          "registration_line": 80838
+        }
+      ]
+    },
+    {
+      "name": "ArkSharePeer",
+      "registrations": [
+        {
+          "class": "Xve",
+          "origin": "static_constructor_list",
+          "enum_symbol": "SharePeer",
+          "enum_line": 33171,
+          "class_line": 76921,
+          "action_line": 76922,
+          "registration_line": 80839
+        }
+      ]
+    },
+    {
+      "name": "_del_group_notice",
+      "registrations": [
+        {
+          "class": "exe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "DelGroupNotice",
+          "enum_line": 33211,
+          "class_line": 77560,
+          "action_line": 77561,
+          "registration_line": 80939
+        }
+      ]
+    },
+    {
+      "name": "_get_group_notice",
+      "registrations": [
+        {
+          "class": "mve",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GoCQHTTP_GetGroupNotice",
+          "enum_line": 33153,
+          "class_line": 76414,
+          "action_line": 76415,
+          "registration_line": 80904
+        }
+      ]
+    },
+    {
+      "name": "_get_model_show",
+      "registrations": [
+        {
+          "class": "cwe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GoCQHTTP_GetModelShow",
+          "enum_line": 33134,
+          "class_line": 78121,
+          "action_line": 78122,
+          "registration_line": 80933
+        }
+      ]
+    },
+    {
+      "name": "_mark_all_as_read",
+      "registrations": [
+        {
+          "class": "R1e",
+          "origin": "static_constructor_list",
+          "enum_symbol": "_MarkAllMsgAsRead",
+          "enum_line": 33197,
+          "class_line": 75930,
+          "action_line": 75931,
+          "registration_line": 80923
+        }
+      ]
+    },
+    {
+      "name": "_send_group_notice",
+      "registrations": [
+        {
+          "class": "Eve",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GoCQHTTP_SendGroupNotice",
+          "enum_line": 33152,
+          "class_line": 76629,
+          "action_line": 76630,
+          "registration_line": 80903
+        }
+      ]
+    },
+    {
+      "name": "_set_model_show",
+      "registrations": [
+        {
+          "class": "uwe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GoCQHTTP_SetModelShow",
+          "enum_line": 33135,
+          "class_line": 78139,
+          "action_line": 78140,
+          "registration_line": 80934
+        }
+      ]
+    },
+    {
+      "name": "add_custom_face",
+      "registrations": [
+        {
+          "class": "Pbe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "AddCustomFace",
+          "enum_line": 33201,
+          "class_line": 77255,
+          "action_line": 77256,
+          "registration_line": 80928
+        }
+      ]
+    },
+    {
+      "name": "bot_exit",
+      "registrations": [
+        {
+          "class": "Uwe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "Exit",
+          "enum_line": 33130,
+          "class_line": 78577,
+          "action_line": 78578,
+          "registration_line": 80963
+        }
+      ]
+    },
+    {
+      "name": "can_send_image",
+      "registrations": [
+        {
+          "class": "$ye",
+          "origin": "static_constructor_list",
+          "enum_symbol": "CanSendImage",
+          "enum_line": 33124,
+          "class_line": 75250,
+          "action_line": 75251,
+          "registration_line": 80881
+        }
+      ]
+    },
+    {
+      "name": "can_send_record",
+      "registrations": [
+        {
+          "class": "Gye",
+          "origin": "static_constructor_list",
+          "enum_symbol": "CanSendRecord",
+          "enum_line": 33125,
+          "class_line": 75242,
+          "action_line": 75243,
+          "registration_line": 80880
+        }
+      ]
+    },
+    {
+      "name": "cancel_group_album_media_like",
+      "registrations": [
+        {
+          "class": "dSe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "CancelGroupAlbumMediaLike",
+          "enum_line": 33063,
+          "class_line": 79724,
+          "action_line": 79725,
+          "registration_line": 80810
+        }
+      ]
+    },
+    {
+      "name": "cancel_group_todo",
+      "registrations": [
+        {
+          "class": "W_e",
+          "origin": "static_constructor_list",
+          "enum_symbol": "CancelGroupTodo",
+          "enum_line": 33072,
+          "class_line": 79467,
+          "action_line": 79468,
+          "registration_line": 80819
+        }
+      ]
+    },
+    {
+      "name": "cancel_online_file",
+      "registrations": [
+        {
+          "class": "VSe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "CancelOnlineFile",
+          "enum_line": 33250,
+          "class_line": 80494,
+          "action_line": 80495,
+          "registration_line": 80981
+        }
+      ]
+    },
+    {
+      "name": "check_url_safely",
+      "registrations": [
+        {
+          "class": "p8",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GoCQHTTP_CheckUrlSafely",
+          "enum_line": 33165,
+          "class_line": 78100,
+          "action_line": 78101,
+          "registration_line": 80898
+        },
+        {
+          "class": "p8",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GoCQHTTP_CheckUrlSafely",
+          "enum_line": 33165,
+          "class_line": 78100,
+          "action_line": 78101,
+          "registration_line": 80935
+        }
+      ]
+    },
+    {
+      "name": "clean_cache",
+      "registrations": [
+        {
+          "class": "y_e",
+          "origin": "static_constructor_list",
+          "enum_symbol": "CleanCache",
+          "enum_line": 33129,
+          "class_line": 79067,
+          "action_line": 79068,
+          "registration_line": 80967
+        }
+      ]
+    },
+    {
+      "name": "clean_stream_temp_file",
+      "registrations": [
+        {
+          "class": "gSe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "CleanStreamTempFile",
+          "enum_line": 33054,
+          "class_line": 79777,
+          "action_line": 79778,
+          "registration_line": 80801
+        }
+      ]
+    },
+    {
+      "name": "click_inline_keyboard_button",
+      "registrations": [
+        {
+          "class": "Qwe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "ClickInlineKeyboardButton",
+          "enum_line": 33088,
+          "class_line": 78596,
+          "action_line": 78597,
+          "registration_line": 80964
+        }
+      ]
+    },
+    {
+      "name": "complete_group_todo",
+      "registrations": [
+        {
+          "class": "H_e",
+          "origin": "static_constructor_list",
+          "enum_symbol": "CompleteGroupTodo",
+          "enum_line": 33071,
+          "class_line": 79457,
+          "action_line": 79458,
+          "registration_line": 80818
+        }
+      ]
+    },
+    {
+      "name": "create_collection",
+      "registrations": [
+        {
+          "class": "ibe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "CreateCollection",
+          "enum_line": 33193,
+          "class_line": 76952,
+          "action_line": 76953,
+          "registration_line": 80842
+        }
+      ]
+    },
+    {
+      "name": "create_flash_task",
+      "registrations": [
+        {
+          "class": "kSe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "CreateFlashTask",
+          "enum_line": 33235,
+          "class_line": 80250,
+          "action_line": 80251,
+          "registration_line": 80970
+        }
+      ]
+    },
+    {
+      "name": "create_group_file_folder",
+      "registrations": [
+        {
+          "class": "dxe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GoCQHTTP_CreateGroupFileFolder",
+          "enum_line": 33156,
+          "class_line": 77654,
+          "action_line": 77655,
+          "registration_line": 80941
+        }
+      ]
+    },
+    {
+      "name": "del_group_album_media",
+      "registrations": [
+        {
+          "class": "mSe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "DelGroupAlbumMedia",
+          "enum_line": 33061,
+          "class_line": 79755,
+          "action_line": 79756,
+          "registration_line": 80808
+        }
+      ]
+    },
+    {
+      "name": "delete_custom_face",
+      "registrations": [
+        {
+          "class": "Fbe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "DeleteCustomFace",
+          "enum_line": 33202,
+          "class_line": 77295,
+          "action_line": 77296,
+          "registration_line": 80929
+        }
+      ]
+    },
+    {
+      "name": "delete_essence_msg",
+      "registrations": [
+        {
+          "class": "lbe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "DelEssenceMsg",
+          "enum_line": 33151,
+          "class_line": 76998,
+          "action_line": 76999,
+          "registration_line": 80920
+        }
+      ]
+    },
+    {
+      "name": "delete_friend",
+      "registrations": [
+        {
+          "class": "pwe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GoCQHTTP_DeleteFriend",
+          "enum_line": 33138,
+          "class_line": 78157,
+          "action_line": 78158,
+          "registration_line": 80897
+        }
+      ]
+    },
+    {
+      "name": "delete_group_file",
+      "registrations": [
+        {
+          "class": "uxe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GOCQHTTP_DeleteGroupFile",
+          "enum_line": 33155,
+          "class_line": 77629,
+          "action_line": 77630,
+          "registration_line": 80940
+        }
+      ]
+    },
+    {
+      "name": "delete_group_folder",
+      "registrations": [
+        {
+          "class": "mxe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GoCQHTTP_DeleteGroupFileFolder",
+          "enum_line": 33157,
+          "class_line": 77679,
+          "action_line": 77680,
+          "registration_line": 80942
+        }
+      ]
+    },
+    {
+      "name": "delete_msg",
+      "registrations": [
+        {
+          "class": "Uye",
+          "origin": "static_constructor_list",
+          "enum_symbol": "DeleteMsg",
+          "enum_line": 33094,
+          "class_line": 75184,
+          "action_line": 75185,
+          "registration_line": 80875
+        }
+      ]
+    },
+    {
+      "name": "delete_qzone_msg",
+      "registrations": [
+        {
+          "class": "dEe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "DeleteQzoneMsg",
+          "enum_line": 33254,
+          "class_line": 80707,
+          "action_line": 80708,
+          "registration_line": 80859
+        }
+      ]
+    },
+    {
+      "name": "do_group_album_comment",
+      "registrations": [
+        {
+          "class": "aSe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "DoGroupAlbumComment",
+          "enum_line": 33064,
+          "class_line": 79640,
+          "action_line": 79641,
+          "registration_line": 80811
+        }
+      ]
+    },
+    {
+      "name": "download_file",
+      "registrations": [
+        {
+          "class": "H1e",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GoCQHTTP_DownloadFile",
+          "enum_line": 33164,
+          "class_line": 76065,
+          "action_line": 76066,
+          "registration_line": 80911
+        }
+      ]
+    },
+    {
+      "name": "download_file_image_stream",
+      "registrations": [
+        {
+          "class": "SSe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "DownloadFileImageStream",
+          "enum_line": 33060,
+          "class_line": 79955,
+          "action_line": 79956,
+          "registration_line": 80805
+        }
+      ]
+    },
+    {
+      "name": "download_file_record_stream",
+      "registrations": [
+        {
+          "class": "wSe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "DownloadFileRecordStream",
+          "enum_line": 33059,
+          "class_line": 79899,
+          "action_line": 79900,
+          "registration_line": 80804
+        }
+      ]
+    },
+    {
+      "name": "download_file_stream",
+      "registrations": [
+        {
+          "class": "vSe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "DownloadFileStream",
+          "enum_line": 33058,
+          "class_line": 79851,
+          "action_line": 79852,
+          "registration_line": 80803
+        }
+      ]
+    },
+    {
+      "name": "download_fileset",
+      "registrations": [
+        {
+          "class": "QSe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "DownloadFileset",
+          "enum_line": 33239,
+          "class_line": 80409,
+          "action_line": 80410,
+          "registration_line": 80982
+        }
+      ]
+    },
+    {
+      "name": "fetch_custom_face",
+      "registrations": [
+        {
+          "class": "Abe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "FetchCustomFace",
+          "enum_line": 33199,
+          "class_line": 77212,
+          "action_line": 77213,
+          "registration_line": 80926
+        }
+      ]
+    },
+    {
+      "name": "fetch_custom_face_detail",
+      "registrations": [
+        {
+          "class": "Tbe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "FetchCustomFaceDetail",
+          "enum_line": 33200,
+          "class_line": 77231,
+          "action_line": 77232,
+          "registration_line": 80927
+        }
+      ]
+    },
+    {
+      "name": "fetch_emoji_like",
+      "registrations": [
+        {
+          "class": "$be",
+          "origin": "static_constructor_list",
+          "enum_symbol": "FetchEmojiLike",
+          "enum_line": 33204,
+          "class_line": 77400,
+          "action_line": 77401,
+          "registration_line": 80833
+        }
+      ]
+    },
+    {
+      "name": "fetch_ptt_text",
+      "registrations": [
+        {
+          "class": "iEe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "FetchPttText",
+          "enum_line": 33187,
+          "class_line": 80584,
+          "action_line": 80585,
+          "registration_line": 80835
+        }
+      ]
+    },
+    {
+      "name": "forward_friend_single_msg",
+      "registrations": [
+        {
+          "class": "bve",
+          "origin": "static_constructor_list",
+          "enum_symbol": "ForwardFriendSingleMsg",
+          "enum_line": 33184,
+          "class_line": 76578,
+          "action_line": 76581,
+          "registration_line": 80844
+        }
+      ]
+    },
+    {
+      "name": "forward_group_single_msg",
+      "registrations": [
+        {
+          "class": "xve",
+          "origin": "static_constructor_list",
+          "enum_symbol": "ForwardGroupSingleMsg",
+          "enum_line": 33185,
+          "class_line": 76583,
+          "action_line": 76586,
+          "registration_line": 80845
+        }
+      ]
+    },
+    {
+      "name": "friend_poke",
+      "registrations": [
+        {
+          "class": "Fwe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "FriendPoke",
+          "enum_line": 33212,
+          "class_line": 78544,
+          "action_line": 78545,
+          "registration_line": 80948
+        }
+      ]
+    },
+    {
+      "name": "get_ai_characters",
+      "registrations": [
+        {
+          "class": "Swe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GetAiCharacters",
+          "enum_line": 33230,
+          "class_line": 78408,
+          "action_line": 78409,
+          "registration_line": 80959
+        }
+      ]
+    },
+    {
+      "name": "get_ai_record",
+      "registrations": [
+        {
+          "class": "ywe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GetAiRecord",
+          "enum_line": 33229,
+          "class_line": 78344,
+          "action_line": 78345,
+          "registration_line": 80957
+        }
+      ]
+    },
+    {
+      "name": "get_clientkey",
+      "registrations": [
+        {
+          "class": "Cwe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GetClientkey",
+          "enum_line": 33232,
+          "class_line": 78466,
+          "action_line": 78467,
+          "registration_line": 80853
+        }
+      ]
+    },
+    {
+      "name": "get_collection_list",
+      "registrations": [
+        {
+          "class": "$_e",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GetCollectionList",
+          "enum_line": 33194,
+          "class_line": 79368,
+          "action_line": 79369,
+          "registration_line": 80969
+        }
+      ]
+    },
+    {
+      "name": "get_cookies",
+      "registrations": [
+        {
+          "class": "rve",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GetCookies",
+          "enum_line": 33119,
+          "class_line": 76298,
+          "action_line": 76299,
+          "registration_line": 80892
+        }
+      ]
+    },
+    {
+      "name": "get_credentials",
+      "registrations": [
+        {
+          "class": "Vxe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GetCredentials",
+          "enum_line": 33121,
+          "class_line": 78014,
+          "action_line": 78015,
+          "registration_line": 80938
+        }
+      ]
+    },
+    {
+      "name": "get_csrf_token",
+      "registrations": [
+        {
+          "class": "Xbe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GetCSRF",
+          "enum_line": 33120,
+          "class_line": 77536,
+          "action_line": 77537,
+          "registration_line": 80937
+        }
+      ]
+    },
+    {
+      "name": "get_doubt_friends_add_request",
+      "registrations": [
+        {
+          "class": "S_e",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GetDoubtFriendsAddRequest",
+          "enum_line": 33078,
+          "class_line": 79169,
+          "action_line": 79170,
+          "registration_line": 80826
+        }
+      ]
+    },
+    {
+      "name": "get_emoji_likes",
+      "registrations": [
+        {
+          "class": "Wbe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GetEmojiLikes",
+          "enum_line": 33205,
+          "class_line": 77457,
+          "action_line": 77458,
+          "registration_line": 80834
+        }
+      ]
+    },
+    {
+      "name": "get_essence_msg_list",
+      "registrations": [
+        {
+          "class": "vve",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GoCQHTTP_GetEssenceMsg",
+          "enum_line": 33147,
+          "class_line": 76463,
+          "action_line": 76464,
+          "registration_line": 80905
+        }
+      ]
+    },
+    {
+      "name": "get_file",
+      "registrations": [
+        {
+          "class": "T1e",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GetFile",
+          "enum_line": 33183,
+          "class_line": 75820,
+          "action_line": 75821,
+          "registration_line": 80836
+        }
+      ]
+    },
+    {
+      "name": "get_fileset_id",
+      "registrations": [
+        {
+          "class": "tEe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GetFilesetId",
+          "enum_line": 33243,
+          "class_line": 80562,
+          "action_line": 80563,
+          "registration_line": 80983
+        }
+      ]
+    },
+    {
+      "name": "get_fileset_info",
+      "registrations": [
+        {
+          "class": "LSe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GetFilesetInfo",
+          "enum_line": 33240,
+          "class_line": 80389,
+          "action_line": 80390,
+          "registration_line": 80975
+        }
+      ]
+    },
+    {
+      "name": "get_flash_file_list",
+      "registrations": [
+        {
+          "class": "OSe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GetFlashFileList",
+          "enum_line": 33241,
+          "class_line": 80326,
+          "action_line": 80327,
+          "registration_line": 80971
+        }
+      ]
+    },
+    {
+      "name": "get_flash_file_url",
+      "registrations": [
+        {
+          "class": "MSe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GetFlashFileUrl",
+          "enum_line": 33242,
+          "class_line": 80350,
+          "action_line": 80351,
+          "registration_line": 80972
+        }
+      ]
+    },
+    {
+      "name": "get_forward_msg",
+      "registrations": [
+        {
+          "class": "X1e",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GoCQHTTP_GetForwardMsg",
+          "enum_line": 33096,
+          "class_line": 76151,
+          "action_line": 76152,
+          "registration_line": 80916
+        }
+      ]
+    },
+    {
+      "name": "get_friend_list",
+      "registrations": [
+        {
+          "class": "Eye",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GetFriendList",
+          "enum_line": 33113,
+          "class_line": 74947,
+          "action_line": 74948,
+          "registration_line": 80867
+        }
+      ]
+    },
+    {
+      "name": "get_friend_msg_history",
+      "registrations": [
+        {
+          "class": "eve",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GetFriendMsgHistory",
+          "enum_line": 33192,
+          "class_line": 76271,
+          "action_line": 76272,
+          "registration_line": 80917
+        }
+      ]
+    },
+    {
+      "name": "get_friends_with_category",
+      "registrations": [
+        {
+          "class": "_ve",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GetFriendsWithCategory",
+          "enum_line": 33181,
+          "class_line": 76597,
+          "action_line": 76598,
+          "registration_line": 80895
+        }
+      ]
+    },
+    {
+      "name": "get_group_album_media_list",
+      "registrations": [
+        {
+          "class": "lSe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GetGroupAlbumMediaList",
+          "enum_line": 33065,
+          "class_line": 79669,
+          "action_line": 79670,
+          "registration_line": 80812
+        }
+      ]
+    },
+    {
+      "name": "get_group_at_all_remain",
+      "registrations": [
+        {
+          "class": "rwe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GoCQHTTP_GetGroupAtAllRemain",
+          "enum_line": 33148,
+          "class_line": 78077,
+          "action_line": 78078,
+          "registration_line": 80906
+        }
+      ]
+    },
+    {
+      "name": "get_group_detail_info",
+      "registrations": [
+        {
+          "class": "U_e",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GetGroupDetailInfo",
+          "enum_line": 33209,
+          "class_line": 79290,
+          "action_line": 79291,
+          "registration_line": 80820
+        }
+      ]
+    },
+    {
+      "name": "get_group_file_system_info",
+      "registrations": [
+        {
+          "class": "vxe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GoCQHTTP_GetGroupFileSystemInfo",
+          "enum_line": 33158,
+          "class_line": 77703,
+          "action_line": 77704,
+          "registration_line": 80943
+        }
+      ]
+    },
+    {
+      "name": "get_group_file_url",
+      "registrations": [
+        {
+          "class": "Wxe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GOCQHTTP_GetGroupFileUrl",
+          "enum_line": 33161,
+          "class_line": 77990,
+          "action_line": 77991,
+          "registration_line": 80955
+        }
+      ]
+    },
+    {
+      "name": "get_group_files_by_folder",
+      "registrations": [
+        {
+          "class": "Exe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GoCQHTTP_GetGroupFilesByFolder",
+          "enum_line": 33160,
+          "class_line": 77768,
+          "action_line": 77769,
+          "registration_line": 80944
+        }
+      ]
+    },
+    {
+      "name": "get_group_honor_info",
+      "registrations": [
+        {
+          "class": "Cve",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GetGroupHonorInfo",
+          "enum_line": 33118,
+          "class_line": 76685,
+          "action_line": 76686,
+          "registration_line": 80902
+        }
+      ]
+    },
+    {
+      "name": "get_group_ignore_add_request",
+      "registrations": [
+        {
+          "class": "j_e",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GetGroupIgnoreAddRequest",
+          "enum_line": 33210,
+          "class_line": 79326,
+          "action_line": 79327,
+          "registration_line": 80968
+        }
+      ]
+    },
+    {
+      "name": "get_group_ignored_notifies",
+      "registrations": [
+        {
+          "class": "Mve",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GetGroupIgnoredNotifies",
+          "enum_line": 33223,
+          "class_line": 76757,
+          "action_line": 76758,
+          "registration_line": 80919
+        }
+      ]
+    },
+    {
+      "name": "get_group_info",
+      "registrations": [
+        {
+          "class": "Nye",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GetGroupInfo",
+          "enum_line": 33114,
+          "class_line": 75087,
+          "action_line": 75088,
+          "registration_line": 80869
+        }
+      ]
+    },
+    {
+      "name": "get_group_info_ex",
+      "registrations": [
+        {
+          "class": "rxe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GetGroupInfoEx",
+          "enum_line": 33207,
+          "class_line": 77577,
+          "action_line": 77578,
+          "registration_line": 80831
+        }
+      ]
+    },
+    {
+      "name": "get_group_list",
+      "registrations": [
+        {
+          "class": "Cye",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GetGroupList",
+          "enum_line": 33115,
+          "class_line": 75067,
+          "action_line": 75068,
+          "registration_line": 80868
+        }
+      ]
+    },
+    {
+      "name": "get_group_member_info",
+      "registrations": [
+        {
+          "class": "Oye",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GetGroupMemberInfo",
+          "enum_line": 33116,
+          "class_line": 75118,
+          "action_line": 75119,
+          "registration_line": 80871
+        }
+      ]
+    },
+    {
+      "name": "get_group_member_list",
+      "registrations": [
+        {
+          "class": "$xe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GetGroupMemberList",
+          "enum_line": 33117,
+          "class_line": 77953,
+          "action_line": 77954,
+          "registration_line": 80870
+        }
+      ]
+    },
+    {
+      "name": "get_group_msg_history",
+      "registrations": [
+        {
+          "class": "K1e",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GoCQHTTP_GetGroupMsgHistory",
+          "enum_line": 33143,
+          "class_line": 76123,
+          "action_line": 76124,
+          "registration_line": 80915
+        }
+      ]
+    },
+    {
+      "name": "get_group_root_files",
+      "registrations": [
+        {
+          "class": "wxe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GoCQHTTP_GetGroupRootFiles",
+          "enum_line": 33159,
+          "class_line": 77736,
+          "action_line": 77737,
+          "registration_line": 80850
+        }
+      ]
+    },
+    {
+      "name": "get_group_share_link",
+      "registrations": [
+        {
+          "class": "sxe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GetGroupShareLink",
+          "enum_line": 33208,
+          "class_line": 77599,
+          "action_line": 77600,
+          "registration_line": 80832
+        }
+      ]
+    },
+    {
+      "name": "get_group_shut_list",
+      "registrations": [
+        {
+          "class": "jxe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GetGroupShutList",
+          "enum_line": 33217,
+          "class_line": 77929,
+          "action_line": 77930,
+          "registration_line": 80954
+        }
+      ]
+    },
+    {
+      "name": "get_group_signed_list",
+      "registrations": [
+        {
+          "class": "aEe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GetGroupSignedList",
+          "enum_line": 33251,
+          "class_line": 80641,
+          "action_line": 80642,
+          "registration_line": 80857
+        }
+      ]
+    },
+    {
+      "name": "get_group_system_msg",
+      "registrations": [
+        {
+          "class": "Cxe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GetGroupSystemMsg",
+          "enum_line": 33146,
+          "class_line": 77799,
+          "action_line": 77800,
+          "registration_line": 80962
+        }
+      ]
+    },
+    {
+      "name": "get_guild_list",
+      "registrations": [
+        {
+          "class": "Ewe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GetGuildList",
+          "enum_line": 33221,
+          "class_line": 78439,
+          "action_line": 78440,
+          "registration_line": 80912
+        }
+      ]
+    },
+    {
+      "name": "get_guild_service_profile",
+      "registrations": [
+        {
+          "class": "Awe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GetGuildProfile",
+          "enum_line": 33222,
+          "class_line": 78451,
+          "action_line": 78452,
+          "registration_line": 80932
+        }
+      ]
+    },
+    {
+      "name": "get_image",
+      "registrations": [
+        {
+          "class": "k1e",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GetImage",
+          "enum_line": 33123,
+          "class_line": 75828,
+          "action_line": 75829,
+          "registration_line": 80889
+        }
+      ]
+    },
+    {
+      "name": "get_login_info",
+      "registrations": [
+        {
+          "class": "wye",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GetLoginInfo",
+          "enum_line": 33111,
+          "class_line": 74926,
+          "action_line": 74927,
+          "registration_line": 80866
+        }
+      ]
+    },
+    {
+      "name": "get_mini_app_ark",
+      "registrations": [
+        {
+          "class": "hwe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GetMiniAppArk",
+          "enum_line": 33227,
+          "class_line": 78282,
+          "action_line": 78283,
+          "registration_line": 80956
+        }
+      ]
+    },
+    {
+      "name": "get_msg",
+      "registrations": [
+        {
+          "class": "vye",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GetMsg",
+          "enum_line": 33095,
+          "class_line": 74795,
+          "action_line": 74796,
+          "registration_line": 80865
+        }
+      ]
+    },
+    {
+      "name": "get_online_clients",
+      "registrations": [
+        {
+          "class": "Uve",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GetOnlineClient",
+          "enum_line": 33136,
+          "class_line": 76789,
+          "action_line": 76790,
+          "registration_line": 80899
+        }
+      ]
+    },
+    {
+      "name": "get_online_file_msg",
+      "registrations": [
+        {
+          "class": "$Se",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GetOnlineFileMessages",
+          "enum_line": 33247,
+          "class_line": 80426,
+          "action_line": 80427,
+          "registration_line": 80976
+        }
+      ]
+    },
+    {
+      "name": "get_private_file_url",
+      "registrations": [
+        {
+          "class": "qwe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "NapCat_GetPrivateFileUrl",
+          "enum_line": 33087,
+          "class_line": 78627,
+          "action_line": 78628,
+          "registration_line": 80965
+        }
+      ]
+    },
+    {
+      "name": "get_profile_like",
+      "registrations": [
+        {
+          "class": "bbe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GetProfileLike",
+          "enum_line": 33198,
+          "class_line": 77132,
+          "action_line": 77133,
+          "registration_line": 80924
+        }
+      ]
+    },
+    {
+      "name": "get_qun_album_list",
+      "registrations": [
+        {
+          "class": "Y_e",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GetQunAlbumList",
+          "enum_line": 33069,
+          "class_line": 79495,
+          "action_line": 79496,
+          "registration_line": 80813
+        }
+      ]
+    },
+    {
+      "name": "get_recent_contact",
+      "registrations": [
+        {
+          "class": "gbe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GetRecentContact",
+          "enum_line": 33196,
+          "class_line": 77064,
+          "action_line": 77065,
+          "registration_line": 80922
+        }
+      ]
+    },
+    {
+      "name": "get_record",
+      "registrations": [
+        {
+          "class": "D1e",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GetRecord",
+          "enum_line": 33122,
+          "class_line": 75841,
+          "action_line": 75842,
+          "registration_line": 80890
+        }
+      ]
+    },
+    {
+      "name": "get_rkey",
+      "registrations": [
+        {
+          "class": "g_e",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GetRkeyEx",
+          "enum_line": 33081,
+          "class_line": 79043,
+          "action_line": 79044,
+          "registration_line": 80828
+        }
+      ]
+    },
+    {
+      "name": "get_rkey_server",
+      "registrations": [
+        {
+          "class": "h_e",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GetRkeyServer",
+          "enum_line": 33082,
+          "class_line": 79010,
+          "action_line": 79011,
+          "registration_line": 80829
+        }
+      ]
+    },
+    {
+      "name": "get_robot_uin_range",
+      "registrations": [
+        {
+          "class": "cve",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GetRobotUinRange",
+          "enum_line": 33179,
+          "class_line": 76356,
+          "action_line": 76357,
+          "registration_line": 80894
+        }
+      ]
+    },
+    {
+      "name": "get_share_link",
+      "registrations": [
+        {
+          "class": "BSe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GetShareLink",
+          "enum_line": 33238,
+          "class_line": 80372,
+          "action_line": 80373,
+          "registration_line": 80974
+        }
+      ]
+    },
+    {
+      "name": "get_status",
+      "registrations": [
+        {
+          "class": "Hye",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GetStatus",
+          "enum_line": 33126,
+          "class_line": 75263,
+          "action_line": 75264,
+          "registration_line": 80882
+        }
+      ]
+    },
+    {
+      "name": "get_stranger_info",
+      "registrations": [
+        {
+          "class": "Xye",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GoCQHTTP_GetStrangerInfo",
+          "enum_line": 33112,
+          "class_line": 75448,
+          "action_line": 75449,
+          "registration_line": 80910
+        }
+      ]
+    },
+    {
+      "name": "get_unidirectional_friend_list",
+      "registrations": [
+        {
+          "class": "e_e",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GetUnidirectionalFriendList",
+          "enum_line": 33089,
+          "class_line": 78845,
+          "action_line": 78846,
+          "registration_line": 80966
+        }
+      ]
+    },
+    {
+      "name": "get_version_info",
+      "registrations": [
+        {
+          "class": "jye",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GetVersionInfo",
+          "enum_line": 33127,
+          "class_line": 75209,
+          "action_line": 75210,
+          "registration_line": 80879
+        }
+      ]
+    },
+    {
+      "name": "group_poke",
+      "registrations": [
+        {
+          "class": "Owe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GroupPoke",
+          "enum_line": 33213,
+          "class_line": 78541,
+          "action_line": 78542,
+          "registration_line": 80947
+        }
+      ]
+    },
+    {
+      "name": "mark_group_msg_as_read",
+      "registrations": [
+        {
+          "class": "F1e",
+          "origin": "static_constructor_list",
+          "enum_symbol": "MarkGroupMsgAsRead",
+          "enum_line": 33191,
+          "class_line": 75918,
+          "action_line": 75921,
+          "registration_line": 80846
+        }
+      ]
+    },
+    {
+      "name": "mark_msg_as_read",
+      "registrations": [
+        {
+          "class": "M1e",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GoCQHTTP_MarkMsgAsRead",
+          "enum_line": 33140,
+          "class_line": 75924,
+          "action_line": 75927,
+          "registration_line": 80913
+        }
+      ]
+    },
+    {
+      "name": "mark_private_msg_as_read",
+      "registrations": [
+        {
+          "class": "O1e",
+          "origin": "static_constructor_list",
+          "enum_symbol": "MarkPrivateMsgAsRead",
+          "enum_line": 33190,
+          "class_line": 75912,
+          "action_line": 75915,
+          "registration_line": 80847
+        }
+      ]
+    },
+    {
+      "name": "move_group_file",
+      "registrations": [
+        {
+          "class": "s_e",
+          "origin": "static_constructor_list",
+          "enum_symbol": "MoveGroupFile",
+          "enum_line": 33218,
+          "class_line": 78916,
+          "action_line": 78917,
+          "registration_line": 80854
+        }
+      ]
+    },
+    {
+      "name": "nc_get_packet_status",
+      "registrations": [
+        {
+          "class": "kxe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GetPacketStatus",
+          "enum_line": 33214,
+          "class_line": 77850,
+          "action_line": 77851,
+          "registration_line": 80945
+        }
+      ]
+    },
+    {
+      "name": "nc_get_rkey",
+      "registrations": [
+        {
+          "class": "Fxe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GetRkey",
+          "enum_line": 33216,
+          "class_line": 77889,
+          "action_line": 77890,
+          "registration_line": 80950
+        }
+      ]
+    },
+    {
+      "name": "nc_get_user_status",
+      "registrations": [
+        {
+          "class": "Dxe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GetUserStatus",
+          "enum_line": 33215,
+          "class_line": 77868,
+          "action_line": 77869,
+          "registration_line": 80949
+        }
+      ]
+    },
+    {
+      "name": "ocr_image",
+      "registrations": [
+        {
+          "class": "Qve",
+          "origin": "static_constructor_list",
+          "enum_symbol": "OCRImage",
+          "enum_line": 33144,
+          "class_line": 76831,
+          "action_line": 76832,
+          "registration_line": 80900
+        }
+      ]
+    },
+    {
+      "name": "receive_online_file",
+      "registrations": [
+        {
+          "class": "XSe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "ReceiveOnlineFile",
+          "enum_line": 33248,
+          "class_line": 80517,
+          "action_line": 80518,
+          "registration_line": 80979
+        }
+      ]
+    },
+    {
+      "name": "refuse_online_file",
+      "registrations": [
+        {
+          "class": "ZSe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "RefuseOnlineFile",
+          "enum_line": 33249,
+          "class_line": 80541,
+          "action_line": 80542,
+          "registration_line": 80980
+        }
+      ]
+    },
+    {
+      "name": "rename_group_file",
+      "registrations": [
+        {
+          "class": "d_e",
+          "origin": "static_constructor_list",
+          "enum_symbol": "RenameGroupFile",
+          "enum_line": 33220,
+          "class_line": 78980,
+          "action_line": 78981,
+          "registration_line": 80855
+        }
+      ]
+    },
+    {
+      "name": "send_ark_share",
+      "registrations": [
+        {
+          "class": "tbe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "SendArkShare",
+          "enum_line": 33177,
+          "class_line": 76945,
+          "action_line": 76946,
+          "registration_line": 80841
+        }
+      ]
+    },
+    {
+      "name": "send_flash_msg",
+      "registrations": [
+        {
+          "class": "PSe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "SendFlashMsg",
+          "enum_line": 33236,
+          "class_line": 80294,
+          "action_line": 80295,
+          "registration_line": 80973
+        }
+      ]
+    },
+    {
+      "name": "send_forward_msg",
+      "registrations": [
+        {
+          "class": "Wye",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GoCQHTTP_SendForwardMsg",
+          "enum_line": 33189,
+          "class_line": 75289,
+          "action_line": 75290,
+          "registration_line": 80907
+        }
+      ]
+    },
+    {
+      "name": "send_group_ai_record",
+      "registrations": [
+        {
+          "class": "xwe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "SendGroupAiRecord",
+          "enum_line": 33231,
+          "class_line": 78371,
+          "action_line": 78372,
+          "registration_line": 80958
+        }
+      ]
+    },
+    {
+      "name": "send_group_ark_share",
+      "registrations": [
+        {
+          "class": "ebe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "SendGroupArkShare",
+          "enum_line": 33176,
+          "class_line": 76942,
+          "action_line": 76943,
+          "registration_line": 80840
+        }
+      ]
+    },
+    {
+      "name": "send_group_forward_msg",
+      "registrations": [
+        {
+          "class": "Kye",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GoCQHTTP_SendGroupForwardMsg",
+          "enum_line": 33141,
+          "class_line": 75320,
+          "action_line": 75321,
+          "registration_line": 80908
+        }
+      ]
+    },
+    {
+      "name": "send_group_msg",
+      "registrations": [
+        {
+          "class": "Fye",
+          "origin": "static_constructor_list",
+          "enum_symbol": "SendGroupMsg",
+          "enum_line": 33092,
+          "class_line": 75148,
+          "action_line": 75149,
+          "registration_line": 80872
+        }
+      ]
+    },
+    {
+      "name": "send_group_sign",
+      "registrations": [
+        {
+          "class": "ewe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "SendGroupSign",
+          "enum_line": 33225,
+          "class_line": 78067,
+          "action_line": 78068,
+          "registration_line": 80852
+        }
+      ]
+    },
+    {
+      "name": "send_like",
+      "registrations": [
+        {
+          "class": "Zye",
+          "origin": "static_constructor_list",
+          "enum_symbol": "SendLike",
+          "enum_line": 33097,
+          "class_line": 75491,
+          "action_line": 75492,
+          "registration_line": 80864
+        }
+      ]
+    },
+    {
+      "name": "send_msg",
+      "registrations": [
+        {
+          "class": "lye",
+          "origin": "static_constructor_list",
+          "enum_symbol": "SendMsg",
+          "enum_line": 33093,
+          "class_line": 74521,
+          "action_line": 74522,
+          "registration_line": 80874
+        }
+      ]
+    },
+    {
+      "name": "send_online_file",
+      "registrations": [
+        {
+          "class": "HSe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "SendOnlineFile",
+          "enum_line": 33245,
+          "class_line": 80448,
+          "action_line": 80449,
+          "registration_line": 80977
+        }
+      ]
+    },
+    {
+      "name": "send_online_folder",
+      "registrations": [
+        {
+          "class": "zSe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "SendOnlineFolder",
+          "enum_line": 33246,
+          "class_line": 80472,
+          "action_line": 80473,
+          "registration_line": 80978
+        }
+      ]
+    },
+    {
+      "name": "send_packet",
+      "registrations": [
+        {
+          "class": "Nwe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "SendPacket",
+          "enum_line": 33226,
+          "class_line": 78484,
+          "action_line": 78487,
+          "registration_line": 80960
+        }
+      ]
+    },
+    {
+      "name": "send_poke",
+      "registrations": [
+        {
+          "class": "Dwe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "SendPoke",
+          "enum_line": 33233,
+          "class_line": 78538,
+          "action_line": 78539,
+          "registration_line": 80961
+        }
+      ]
+    },
+    {
+      "name": "send_private_forward_msg",
+      "registrations": [
+        {
+          "class": "zye",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GoCQHTTP_SendPrivateForwardMsg",
+          "enum_line": 33142,
+          "class_line": 75305,
+          "action_line": 75306,
+          "registration_line": 80909
+        }
+      ]
+    },
+    {
+      "name": "send_private_msg",
+      "registrations": [
+        {
+          "class": "Mye",
+          "origin": "static_constructor_list",
+          "enum_symbol": "SendPrivateMsg",
+          "enum_line": 33091,
+          "class_line": 75162,
+          "action_line": 75163,
+          "registration_line": 80873
+        }
+      ]
+    },
+    {
+      "name": "send_qzone_msg",
+      "registrations": [
+        {
+          "class": "lEe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "SendQzoneMsg",
+          "enum_line": 33253,
+          "class_line": 80670,
+          "action_line": 80671,
+          "registration_line": 80858
+        }
+      ]
+    },
+    {
+      "name": "set_custom_face_desc",
+      "registrations": [
+        {
+          "class": "Bbe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "SetCustomFaceDesc",
+          "enum_line": 33203,
+          "class_line": 77317,
+          "action_line": 77318,
+          "registration_line": 80930
+        }
+      ]
+    },
+    {
+      "name": "set_diy_online_status",
+      "registrations": [
+        {
+          "class": "Bwe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "SetDiyOnlineStatus",
+          "enum_line": 33170,
+          "class_line": 78553,
+          "action_line": 78554,
+          "registration_line": 80952
+        }
+      ]
+    },
+    {
+      "name": "set_doubt_friends_add_request",
+      "registrations": [
+        {
+          "class": "w_e",
+          "origin": "static_constructor_list",
+          "enum_symbol": "SetDoubtFriendsAddRequest",
+          "enum_line": 33079,
+          "class_line": 79145,
+          "action_line": 79146,
+          "registration_line": 80825
+        }
+      ]
+    },
+    {
+      "name": "set_essence_msg",
+      "registrations": [
+        {
+          "class": "fbe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "SetEssenceMsg",
+          "enum_line": 33150,
+          "class_line": 77032,
+          "action_line": 77033,
+          "registration_line": 80921
+        }
+      ]
+    },
+    {
+      "name": "set_friend_add_request",
+      "registrations": [
+        {
+          "class": "a1e",
+          "origin": "static_constructor_list",
+          "enum_symbol": "SetFriendAddRequest",
+          "enum_line": 33108,
+          "class_line": 75569,
+          "action_line": 75570,
+          "registration_line": 80877
+        }
+      ]
+    },
+    {
+      "name": "set_friend_remark",
+      "registrations": [
+        {
+          "class": "b_e",
+          "origin": "static_constructor_list",
+          "enum_symbol": "SetFriendRemark",
+          "enum_line": 33109,
+          "class_line": 79117,
+          "action_line": 79118,
+          "registration_line": 80827
+        }
+      ]
+    },
+    {
+      "name": "set_group_add_option",
+      "registrations": [
+        {
+          "class": "I_e",
+          "origin": "static_constructor_list",
+          "enum_symbol": "SetGroupAddOption",
+          "enum_line": 33075,
+          "class_line": 79188,
+          "action_line": 79189,
+          "registration_line": 80822
+        }
+      ]
+    },
+    {
+      "name": "set_group_add_request",
+      "registrations": [
+        {
+          "class": "n1e",
+          "origin": "static_constructor_list",
+          "enum_symbol": "SetGroupAddRequest",
+          "enum_line": 33110,
+          "class_line": 75518,
+          "action_line": 75519,
+          "registration_line": 80876
+        }
+      ]
+    },
+    {
+      "name": "set_group_admin",
+      "registrations": [
+        {
+          "class": "_1e",
+          "origin": "static_constructor_list",
+          "enum_symbol": "SetGroupAdmin",
+          "enum_line": 33102,
+          "class_line": 75687,
+          "action_line": 75688,
+          "registration_line": 80886
+        }
+      ]
+    },
+    {
+      "name": "set_group_album_media_like",
+      "registrations": [
+        {
+          "class": "pSe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "SetGroupAlbumMediaLike",
+          "enum_line": 33062,
+          "class_line": 79698,
+          "action_line": 79699,
+          "registration_line": 80809
+        }
+      ]
+    },
+    {
+      "name": "set_group_ban",
+      "registrations": [
+        {
+          "class": "g1e",
+          "origin": "static_constructor_list",
+          "enum_symbol": "SetGroupBan",
+          "enum_line": 33099,
+          "class_line": 75634,
+          "action_line": 75635,
+          "registration_line": 80884
+        }
+      ]
+    },
+    {
+      "name": "set_group_card",
+      "registrations": [
+        {
+          "class": "A1e",
+          "origin": "static_constructor_list",
+          "enum_symbol": "SetGroupCard",
+          "enum_line": 33104,
+          "class_line": 75707,
+          "action_line": 75708,
+          "registration_line": 80888
+        }
+      ]
+    },
+    {
+      "name": "set_group_kick",
+      "registrations": [
+        {
+          "class": "b1e",
+          "origin": "static_constructor_list",
+          "enum_symbol": "SetGroupKick",
+          "enum_line": 33098,
+          "class_line": 75667,
+          "action_line": 75668,
+          "registration_line": 80885
+        }
+      ]
+    },
+    {
+      "name": "set_group_kick_members",
+      "registrations": [
+        {
+          "class": "M_e",
+          "origin": "static_constructor_list",
+          "enum_symbol": "SetGroupKickMembers",
+          "enum_line": 33073,
+          "class_line": 79266,
+          "action_line": 79267,
+          "registration_line": 80821
+        }
+      ]
+    },
+    {
+      "name": "set_group_leave",
+      "registrations": [
+        {
+          "class": "o1e",
+          "origin": "static_constructor_list",
+          "enum_symbol": "SetGroupLeave",
+          "enum_line": 33106,
+          "class_line": 75550,
+          "action_line": 75551,
+          "registration_line": 80878
+        }
+      ]
+    },
+    {
+      "name": "set_group_member_invite_policy",
+      "registrations": [
+        {
+          "class": "gEe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "SetGroupMemberInvitePolicy",
+          "enum_line": 33084,
+          "class_line": 80738,
+          "action_line": 80739,
+          "registration_line": 80860
+        }
+      ]
+    },
+    {
+      "name": "set_group_member_permissions",
+      "registrations": [
+        {
+          "class": "bEe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "SetGroupMemberPermissions",
+          "enum_line": 33085,
+          "class_line": 80758,
+          "action_line": 80759,
+          "registration_line": 80861
+        }
+      ]
+    },
+    {
+      "name": "set_group_name",
+      "registrations": [
+        {
+          "class": "f1e",
+          "origin": "static_constructor_list",
+          "enum_symbol": "SetGroupName",
+          "enum_line": 33105,
+          "class_line": 75613,
+          "action_line": 75614,
+          "registration_line": 80887
+        }
+      ]
+    },
+    {
+      "name": "set_group_new_member_history_visibility",
+      "registrations": [
+        {
+          "class": "_Ee",
+          "origin": "static_constructor_list",
+          "enum_symbol": "SetGroupNewMemberHistoryVisibility",
+          "enum_line": 33086,
+          "class_line": 80783,
+          "action_line": 80784,
+          "registration_line": 80862
+        }
+      ]
+    },
+    {
+      "name": "set_group_portrait",
+      "registrations": [
+        {
+          "class": "_be",
+          "origin": "static_constructor_list",
+          "enum_symbol": "SetGroupPortrait",
+          "enum_line": 33149,
+          "class_line": 77178,
+          "action_line": 77179,
+          "registration_line": 80925
+        }
+      ]
+    },
+    {
+      "name": "set_group_remark",
+      "registrations": [
+        {
+          "class": "r_e",
+          "origin": "static_constructor_list",
+          "enum_symbol": "SetGroupRemark",
+          "enum_line": 33083,
+          "class_line": 78889,
+          "action_line": 78890,
+          "registration_line": 80830
+        }
+      ]
+    },
+    {
+      "name": "set_group_robot_add_option",
+      "registrations": [
+        {
+          "class": "D_e",
+          "origin": "static_constructor_list",
+          "enum_symbol": "SetGroupRobotAddOption",
+          "enum_line": 33074,
+          "class_line": 79240,
+          "action_line": 79241,
+          "registration_line": 80823
+        }
+      ]
+    },
+    {
+      "name": "set_group_search",
+      "registrations": [
+        {
+          "class": "k_e",
+          "origin": "static_constructor_list",
+          "enum_symbol": "SetGroupSearch",
+          "enum_line": 33076,
+          "class_line": 79215,
+          "action_line": 79216,
+          "registration_line": 80824
+        }
+      ]
+    },
+    {
+      "name": "set_group_sign",
+      "registrations": [
+        {
+          "class": "Zxe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "SetGroupSign",
+          "enum_line": 33224,
+          "class_line": 78064,
+          "action_line": 78065,
+          "registration_line": 80851
+        }
+      ]
+    },
+    {
+      "name": "set_group_special_title",
+      "registrations": [
+        {
+          "class": "Bxe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "SetSpecialTitle",
+          "enum_line": 33107,
+          "class_line": 77911,
+          "action_line": 77912,
+          "registration_line": 80951
+        }
+      ]
+    },
+    {
+      "name": "set_group_todo",
+      "registrations": [
+        {
+          "class": "z_e",
+          "origin": "static_constructor_list",
+          "enum_symbol": "SetGroupTodo",
+          "enum_line": 33070,
+          "class_line": 79477,
+          "action_line": 79478,
+          "registration_line": 80817
+        }
+      ]
+    },
+    {
+      "name": "set_group_whole_ban",
+      "registrations": [
+        {
+          "class": "l1e",
+          "origin": "static_constructor_list",
+          "enum_symbol": "SetGroupWholeBan",
+          "enum_line": 33101,
+          "class_line": 75593,
+          "action_line": 75594,
+          "registration_line": 80883
+        }
+      ]
+    },
+    {
+      "name": "set_input_status",
+      "registrations": [
+        {
+          "class": "Vbe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "SetInputStatus",
+          "enum_line": 33206,
+          "class_line": 77512,
+          "action_line": 77513,
+          "registration_line": 80936
+        }
+      ]
+    },
+    {
+      "name": "set_msg_emoji_like",
+      "registrations": [
+        {
+          "class": "sve",
+          "origin": "static_constructor_list",
+          "enum_symbol": "SetMsgEmojiLike",
+          "enum_line": 33188,
+          "class_line": 76323,
+          "action_line": 76324,
+          "registration_line": 80891
+        }
+      ]
+    },
+    {
+      "name": "set_online_status",
+      "registrations": [
+        {
+          "class": "pve",
+          "origin": "static_constructor_list",
+          "enum_symbol": "SetOnlineStatus",
+          "enum_line": 33180,
+          "class_line": 76375,
+          "action_line": 76376,
+          "registration_line": 80893
+        }
+      ]
+    },
+    {
+      "name": "set_qq_avatar",
+      "registrations": [
+        {
+          "class": "G1e",
+          "origin": "static_constructor_list",
+          "enum_symbol": "SetQQAvatar",
+          "enum_line": 33182,
+          "class_line": 76029,
+          "action_line": 76030,
+          "registration_line": 80848
+        }
+      ]
+    },
+    {
+      "name": "set_qq_profile",
+      "registrations": [
+        {
+          "class": "zve",
+          "origin": "static_constructor_list",
+          "enum_symbol": "SetQQProfile",
+          "enum_line": 33132,
+          "class_line": 76868,
+          "action_line": 76869,
+          "registration_line": 80837
+        }
+      ]
+    },
+    {
+      "name": "set_restart",
+      "registrations": [
+        {
+          "class": "Yxe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "Reboot",
+          "enum_line": 33128,
+          "class_line": 78033,
+          "action_line": 78034,
+          "registration_line": 80946
+        }
+      ]
+    },
+    {
+      "name": "set_self_longnick",
+      "registrations": [
+        {
+          "class": "abe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "SetLongNick",
+          "enum_line": 33195,
+          "class_line": 76979,
+          "action_line": 76980,
+          "registration_line": 80843
+        }
+      ]
+    },
+    {
+      "name": "test_auto_register_01",
+      "registrations": [
+        {
+          "class": "k4",
+          "origin": "auto_register_decorator",
+          "enum_symbol": "TestAutoRegister01",
+          "enum_line": 33050,
+          "class_line": 33358,
+          "action_line": 33359,
+          "registration_line": 33366
+        }
+      ]
+    },
+    {
+      "name": "test_auto_register_02",
+      "registrations": [
+        {
+          "class": "N4",
+          "origin": "auto_register_decorator",
+          "enum_symbol": "TestAutoRegister02",
+          "enum_line": 33052,
+          "class_line": 33374,
+          "action_line": 33375,
+          "registration_line": 33382
+        }
+      ]
+    },
+    {
+      "name": "test_download_stream",
+      "registrations": [
+        {
+          "class": "ASe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "TestDownloadStream",
+          "enum_line": 33056,
+          "class_line": 79997,
+          "action_line": 79998,
+          "registration_line": 80806
+        }
+      ]
+    },
+    {
+      "name": "trans_group_file",
+      "registrations": [
+        {
+          "class": "u_e",
+          "origin": "static_constructor_list",
+          "enum_symbol": "TransGroupFile",
+          "enum_line": 33219,
+          "class_line": 78946,
+          "action_line": 78947,
+          "registration_line": 80856
+        }
+      ]
+    },
+    {
+      "name": "translate_en2zh",
+      "registrations": [
+        {
+          "class": "Hve",
+          "origin": "static_constructor_list",
+          "enum_symbol": "TranslateEnWordToZn",
+          "enum_line": 33186,
+          "class_line": 76844,
+          "action_line": 76845,
+          "registration_line": 80849
+        }
+      ]
+    },
+    {
+      "name": "upload_file_stream",
+      "registrations": [
+        {
+          "class": "qi",
+          "origin": "static_constructor_list",
+          "enum_symbol": "UploadFileStream",
+          "enum_line": 33057,
+          "class_line": 80043,
+          "action_line": 80044,
+          "registration_line": 80807
+        }
+      ]
+    },
+    {
+      "name": "upload_group_file",
+      "registrations": [
+        {
+          "class": "L1e",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GoCQHTTP_UploadGroupFile",
+          "enum_line": 33154,
+          "class_line": 75951,
+          "action_line": 75952,
+          "registration_line": 80914
+        }
+      ]
+    },
+    {
+      "name": "upload_image_to_qun_album",
+      "registrations": [
+        {
+          "class": "Z_e",
+          "origin": "static_constructor_list",
+          "enum_symbol": "UploadImageToQunAlbum",
+          "enum_line": 33066,
+          "class_line": 79532,
+          "action_line": 79533,
+          "registration_line": 80814
+        }
+      ]
+    },
+    {
+      "name": "upload_images_to_qun_album",
+      "registrations": [
+        {
+          "class": "nSe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "UploadImagesToQunAlbum",
+          "enum_line": 33067,
+          "class_line": 79562,
+          "action_line": 79563,
+          "registration_line": 80815
+        }
+      ]
+    },
+    {
+      "name": "upload_private_file",
+      "registrations": [
+        {
+          "class": "jbe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "GOCQHTTP_UploadPrivateFile",
+          "enum_line": 33162,
+          "class_line": 77347,
+          "action_line": 77348,
+          "registration_line": 80931
+        }
+      ]
+    },
+    {
+      "name": "upload_video_to_qun_album",
+      "registrations": [
+        {
+          "class": "oSe",
+          "origin": "static_constructor_list",
+          "enum_symbol": "UploadVideoToQunAlbum",
+          "enum_line": 33068,
+          "class_line": 79604,
+          "action_line": 79605,
+          "registration_line": 80816
+        }
+      ]
+    }
+  ],
+  "current_plugin_manifest_comparison": {
+    "declared_action_count": 21,
+    "exact_names_found": 21,
+    "missing_names": [],
+    "no_alias_mapping_needed": true
+  },
+  "safety": {
+    "software_read_only": true,
+    "bundle_executed": false,
+    "kernel_instantiated": false,
+    "live_qq_actions_called": false,
+    "authentication_data_read": false,
+    "credentials_copied": false,
+    "implementation_copied": false,
+    "production_writes": false
+  }
+}

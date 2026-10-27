@@ -33,8 +33,16 @@ The metadata-only runtime inspection found:
 
 Local source inspection identifies **21 distinct currently called action names** and
 seven event/data-flow categories. This is a **minimum observed bot contract**, not a
-complete installed NapCat API inventory or a claim of all QQ features. The offline
-manifest and audit tool use this distinction explicitly.
+complete installed NapCat API inventory or a claim of all QQ features.
+
+A subsequent read-only inspection of the installed 4.18.37 software bundle resolved
+**180 unique base actions**, plus **360 generated `_async` / `_rate_limited` aliases**,
+for **540 lookup keys**. Aliases use the same handlers; they are not 360 additional
+features. The 181 registration entries include one repeated `check_url_safely` entry.
+All 21 plugin action names are an exact subset of the 180 base names. The snapshot,
+bundle digest and registration provenance are in `qq-installed-action-inventory.json`.
+This is constructor/decorator **static** coverage, not verified runtime registration,
+complete event coverage or successful QQ functionality.
 
 ## Dependency map
 
@@ -102,6 +110,34 @@ It can detect missing declared actions and event categories in a proposed candid
 A candidate declaration is not trusted end-to-end evidence. Passing declaration coverage
 **never authorizes production cutover** and never claims that QQ login, native bindings,
 network traffic or lossless migration has been implemented.
+
+For the broader installed action baseline, run:
+
+```bash
+python tools/qq_transport_parity_audit.py --installed-inventory docs/qq-installed-action-inventory.json
+```
+
+Add `--candidate /path/to/candidate.json` to check a candidate declaration. Merely covering
+the 21 bot actions does not pass the 540-key installed-action check. Even a complete
+self-declaration leaves native implementation, runtime verification and cutover false.
+
+The independent offline preflight is:
+
+```bash
+python tools/qq_native_preflight.py --qq-root /path/to/isolated/QQ
+```
+
+It reads only bounded software metadata, the bootstrap entry literal and 64-byte native
+library headers. It does not import libraries, start QQ/Electron, read account-state
+folders or access the network. ELF architecture is not ABI compatibility. Exit **1**
+is intentional for every static preflight result: login and cutover are never authorized.
+
+A local WSL x86_64 environment with `readelf` and `dpkg-deb` was verified as available;
+this alone is not a QQ runtime lab. Official Tencent distribution metadata advertises
+base version 3.2.34 but does not establish build 53644 equivalence. Package download
+metadata was refused with HTTP 403 in the initial check; no installation was performed.
+Official software binaries, if staged for static analysis, stay outside the repository
+and contain no copied account data.
 
 ## Next validation gates
 
