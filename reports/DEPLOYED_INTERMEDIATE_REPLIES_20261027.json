@@ -1,0 +1,52 @@
+{
+  "date": "2026-10-27",
+  "timezone": "Asia/Shanghai",
+  "deployed_commit": "e63fc733e9dbc00784f620dbafe317e398d8139a",
+  "probe_fixture_commit": "1a8bf395a75a2a9cb45ec4564c04261a290d5b2c",
+  "status": "active",
+  "tools": 93,
+  "capability": {
+    "model_chosen_public_reply_during_same_native_loop": true,
+    "tool_loop_continues_after_reply": true,
+    "final_reply_can_follow_with_distinct_content": true,
+    "fixed_templates_or_forced_cadence": false,
+    "tool_bearing_model_commentary_automatically_published": false,
+    "shared_silence_policy_quote_history_sender": true,
+    "exact_same_turn_confirmed_duplicate_final_suppressed": true,
+    "unknown_delivery_not_automatically_retried": true
+  },
+  "verification": {
+    "pytest_passed": 1372,
+    "platform_skips": 24,
+    "subtests_passed": 25,
+    "new_real_entry_integration_cases": 24,
+    "four_request_native_transcript_produces_three_recorded_messages": true,
+    "actual_sender_tested_with_simulated_event_transport": true,
+    "deployed_hashes_verified": 25,
+    "astrbot_pid_before_after": 714988,
+    "astrbot_restart_count": 0,
+    "napcat_started_before_after": "2026-10-25T02:31:45.216352424Z",
+    "group_policies_unchanged": true,
+    "postrelease_tracebacks": 0,
+    "postrelease_batch_failures": 0,
+    "postrelease_reload_errors": 0,
+    "temporary_plugin_access_revoked": true,
+    "qq_test_messages_sent": 0
+  },
+  "real_provider_probe": {
+    "first_attempt": "did_not_exercise_feature_model_chose_silence",
+    "fixture_issue": "current_request_not_in_messages_batch",
+    "fixture_repaired": true,
+    "corrected_probe_status": "passed",
+    "actual_model_tool_sequence": ["reply_now", "tool_describe", "reply_now"],
+    "distinct_intermediate_messages_recorded": 2,
+    "final_reply_chars": 19,
+    "platform_delivery_isolated": true
+  },
+  "limits": [
+    "No guarantee of an acknowledgment or progress message every request; timing/count/wording remain model-chosen.",
+    "The drawing task had send_shot delivered=true at10:12:16UTC+8; visual art correctness and an HTML file were not verified.",
+    "Historical provider transport failure is not claimed repaired by this capability.",
+    "Real-provider probe replaces platform delivery with a local recorder; it does not post to QQ."
+  ]
+}
