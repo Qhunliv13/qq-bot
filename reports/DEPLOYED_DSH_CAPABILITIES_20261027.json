@@ -1,0 +1,58 @@
+{
+  "date": "2026-10-27",
+  "timezone": "Asia/Shanghai",
+  "deployed_commit": "9c44dcbb56a569d0f6b850a66d4e6bbbb84d6156",
+  "terminal_silence_hotfix_commit": "151913749b2dd8df6cae93edef96e6658c0e8f2c",
+  "baseline_commit": "151913749b2dd8df6cae93edef96e6658c0e8f2c",
+  "status": "active",
+  "tool_catalog": {
+    "before": 71,
+    "after": 92,
+    "workspace_added": 8,
+    "discovery_skills_added": 5,
+    "real_native_delegation_added": 5,
+    "background_job_list_added": 1,
+    "persistent_task_plan_added": 2,
+    "all_declared_tools_have_audited_routes": true,
+    "parent_native_catalog_stable_per_request": true,
+    "worker_catalog_readonly_and_independent": true,
+    "borrows_current_dsh_session_or_host_credentials": false
+  },
+  "opportunities": {
+    "actual_scoped_activity_snapshot": true,
+    "worker_completion_durable_deduplicated_opportunity": true,
+    "no_forced_tool_use_or_public_speech": true,
+    "shared_stable_history_window": true,
+    "policies_and_authentic_destinations_preserved": true
+  },
+  "verification": {
+    "pytest_passed": 1288,
+    "skipped": 24,
+    "subtests_passed": 25,
+    "pyflakes_compile_release_scan_clean": true,
+    "deployed_file_hashes_verified": 24,
+    "deployed_terminal_silence_suppressed": true,
+    "deployed_real_workspace_write_read_hash_edit": true,
+    "deployed_real_glob_grep": true,
+    "deployed_native_job_list": true,
+    "isolated_task_plan_revision": 1,
+    "real_provider_native_worker_status": "completed",
+    "qq_messages_sent_by_probe": 0,
+    "actual_signature_qzone_policy_modified": false,
+    "probe_state_isolated": true,
+    "astrbot_pid_before_after": 714988,
+    "astrbot_restart_count": 0,
+    "napcat_started_before_after": "2026-10-25T02:31:45.216352424Z",
+    "postrelease_tracebacks": 0,
+    "postrelease_batch_failures": 0,
+    "postrelease_reload_errors": 0,
+    "temporary_plugin_access_revoked": true
+  },
+  "limits": [
+    "Tool-use propensity after release is not yet measured; natural autonomy is not guaranteed by tool count.",
+    "Existing VM disconnects were observed, not proven repaired by this release.",
+    "Not all DSH-only GUI/approval/connector/fork/workflow/cron facilities are implemented.",
+    "Delegated model workers are intentionally read-only; existing VM execution is not a security sandbox.",
+    "Public social mutations and historical message recall were not performed."
+  ]
+}
