@@ -15,6 +15,7 @@ from .interim_reply import schema as interim_schema
 from .image_search import schema as image_schema
 from .qq_requests import schema as request_schema
 from .message_transfer import schema as transfer_schema
+from .fact_tools import schemas as fact_schema
 
 
 # Keys follow the distinct names declared by the native schema builders. Values
@@ -92,7 +93,7 @@ TOOL_DESCRIPTIONS = {
 
 # Import-owned schemas own their descriptions as well as their argument contracts.
 # This snapshot shares metadata without duplicating tool implementations or prose.
-for schema_builder in (social_schema, workspace_schema, discovery_schema, delegation_schema, planning_schema, interim_schema, image_schema, request_schema, transfer_schema):
+for schema_builder in (social_schema, workspace_schema, discovery_schema, delegation_schema, planning_schema, interim_schema, image_schema, request_schema, transfer_schema, fact_schema):
     TOOL_DESCRIPTIONS.update({item["function"]["name"]: item["function"]["description"]
                               for item in schema_builder()})
 NATIVE_TOOL_COUNT = len(TOOL_DESCRIPTIONS)

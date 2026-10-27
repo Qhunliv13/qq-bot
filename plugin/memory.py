@@ -12,6 +12,7 @@ Memory.save() 使用临时文件替换写盘，WakePersonFacts.save() 直接写 
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import tempfile
@@ -29,6 +30,22 @@ def _fact_scope(item: dict) -> str:
     provenance = item.get("source")
     scope = provenance.get("scope") if isinstance(provenance, dict) else None
     return str(scope if scope is not None else item.get("source_scope") or "")
+
+
+def _categories(value) -> list[str]:
+    """Validate detached ordinary labels without coercion or authority semantics."""
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise TypeError("categories must be an array of strings")
+    result = []
+    for label in value:
+        if not isinstance(label, str) or not label.strip():
+            raise ValueError("categories must contain nonempty strings")
+        clean = label.strip()
+        if clean not in result:
+            result.append(clean)
+    return result
 
 
 class Memory:
@@ -52,14 +69,26 @@ class Memory:
             pass
         return self
 
-    def save(self) -> None:
-        """原子写盘（tmp + replace），失败不抛。"""
+    def save_checked(self) -> None:
+        """Persist atomically or raise; callers must not report failed writes as success."""
+        directory = os.path.dirname(self.path) or "."
+        os.makedirs(directory, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=directory)
         try:
-            os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
-            fd, tmp = tempfile.mkstemp(dir=os.path.dirname(self.path) or ".")
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                json.dump(self.data, handle, ensure_ascii=False)
+                json.dump(self.data, handle, ensure_ascii=False, allow_nan=False)
+                handle.flush()
+                os.fsync(handle.fileno())
             os.replace(tmp, self.path)
+        finally:
+            # A failed replacement must not accumulate abandoned memory snapshots.
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+
+    def save(self) -> None:
+        """Keep the legacy best-effort interface; checked mutations use save_checked."""
+        try:
+            self.save_checked()
         except Exception:                                # noqa: BLE001
             pass
 
@@ -109,14 +138,20 @@ class Memory:
         return item["turns"]
 
     # ---------- L3 长期事实 ----------
-    def _next_fact_id(self) -> str:
-        """生成简短事实 id（f001 起递增，便于她口述删除某条）。"""
-        bucket = self.data.setdefault("global", {}).setdefault("facts", [])
-        used = {str(it.get("id") or "") for it in bucket}
-        i = 1
-        while "f%03d" % i in used:
-            i += 1
-        return "f%03d" % i
+    def _next_fact_id(self, *, allocate: bool = True) -> str:
+        """Reserve monotonic IDs, or preserve the legacy high-water mark before deletion."""
+        global_data = self.data.setdefault("global", {})
+        bucket = global_data.setdefault("facts", [])
+        used = [int(str(it.get("id"))[1:]) for it in bucket
+                if str(it.get("id") or "").startswith("f")
+                and str(it.get("id"))[1:].isascii()
+                and str(it.get("id"))[1:].isdigit()]
+        # Persist a high-water mark so replaying a deletion cannot hit a new fact.
+        previous = global_data.get("next_fact_id", 1)
+        previous = previous if isinstance(previous, int) and not isinstance(previous, bool) else 1
+        number = max(previous, max(used, default=0) + 1)
+        global_data["next_fact_id"] = number + int(allocate)
+        return "f%03d" % number
 
     def facts_for_scope(self, current_scope: str, *, muted=()) -> list[dict]:
         """Return detached visible facts; unknown legacy labels remain grandfathered.
@@ -151,12 +186,57 @@ class Memory:
         for it in bucket[:limit]:
             row = {"id": it.get("id") or "", "text": it.get("text") or "",
                    "at": it.get("at") or 0, "source": it.get("source_scope") or "",
-                   "source_scope": it.get("source_scope") or ""}
+                   "source_scope": it.get("source_scope") or "",
+                   "categories": _categories(it.get("categories"))}
             if "source" in it:
                 row["provenance"] = json.loads(json.dumps(it["source"], ensure_ascii=False,
                                                           allow_nan=False))
             out.append(row)
         return out
+
+    def category_counts(self, *, current_scope=None, muted=()) -> dict:
+        """Count labels only in the caller's visible view, including uncategorized facts."""
+        rows = self.list_facts(None, current_scope=current_scope, muted=muted)
+        counts = {}
+        for row in rows:
+            for label in row["categories"]:
+                counts[label] = counts.get(label, 0) + 1
+        return {"categories": [{"category": label, "count": counts[label]}
+                               for label in sorted(counts)],
+                "total": len(rows),
+                "uncategorized": sum(not row["categories"] for row in rows)}
+
+    def classify_facts(self, fact_ids, categories, *, current_scope=None, muted=()) -> dict:
+        """Replace labels atomically after validating every ID against the visible view."""
+        if not isinstance(fact_ids, list) or not fact_ids:
+            raise ValueError("ids must be a nonempty array of strings")
+        if any(not isinstance(fid, str) or not fid.strip() for fid in fact_ids):
+            raise ValueError("ids must contain nonempty strings")
+        if categories is None:
+            raise TypeError("categories must be an array of strings")
+        ids = list(dict.fromkeys(fid.strip() for fid in fact_ids))
+        labels = _categories(categories)
+        visible = {row["id"] for row in self.list_facts(
+            None, current_scope=current_scope, muted=muted)}
+        missing = [fid for fid in ids if fid not in visible]
+        if missing:
+            # Hidden and nonexistent IDs are deliberately indistinguishable.
+            return {"ok": False, "updated": 0, "missing": missing}
+        previous = copy.deepcopy(self.data)
+        updated = 0
+        for item in (self.data.get("global") or {}).get("facts") or []:
+            if item.get("id") in ids and _categories(item.get("categories")) != labels:
+                item["categories"] = list(labels)
+                updated += 1
+        try:
+            if updated:
+                self.save_checked()
+        except Exception:
+            # Preserve in-memory and durable agreement if the atomic write fails.
+            self.data = previous
+            raise
+        return {"ok": True, "updated": updated, "ids": ids,
+                "categories": list(labels), "missing": []}
 
     def edit_fact(self, fact_id: str, text: str) -> bool:
         """按 id 改一条事实（返回是否找到）。"""
@@ -169,29 +249,44 @@ class Memory:
                 return True
         return False
 
-    def delete_fact(self, fact_id: str = "", keyword: str = "") -> int:
-        """按 id 或关键词删事实，返回删除条数。"""
+    def delete_fact(self, fact_id: str = "", keyword: str = "", *,
+                    current_scope=None, muted=(), checked: bool = False) -> int:
+        """Delete visible facts; an explicit ID always wins over legacy keyword matching."""
         bucket = (self.data.get("global") or {}).get("facts") or []
+        visible = {row["id"] for row in self.list_facts(
+            None, current_scope=current_scope, muted=muted)}
         keep, removed = [], 0
         for it in bucket:
-            hit_id = fact_id and str(it.get("id") or "") == str(fact_id)
-            hit_kw = keyword and keyword in str(it.get("text") or "")
-            if hit_id or hit_kw:
+            hit = (str(it.get("id") or "") == fact_id if fact_id
+                   else bool(keyword and keyword in str(it.get("text") or "")))
+            if hit and it.get("id") in visible:
                 removed += 1
                 continue
             keep.append(it)
         if removed:
+            previous = copy.deepcopy(self.data)
+            # Capture the maximum before removing legacy rows lacking a persisted counter.
+            self._next_fact_id(allocate=False)
             self.data.setdefault("global", {})["facts"] = keep
-            self.save()
+            try:
+                if checked:
+                    self.save_checked()
+                else:
+                    self.save()
+            except Exception:
+                self.data = previous
+                raise
         return removed
 
-    def add_fact(self, text: str, source_scope: str = "", *, source=None) -> str:
+    def add_fact(self, text: str, source_scope: str = "", *, source=None,
+                 categories=None) -> str:
         """Store a fact and optional detached JSON provenance, never inferred trust.
 
         Text deduplication preserves the first source, including legacy labels;
         repeating private text in a public group must not publish its provenance.
         Invalid source data fails before any in-memory or on-disk mutation.
         """
+        labels = _categories(categories)
         if source is not None and not isinstance(source, dict):
             raise TypeError("source must be a dictionary or None")
         snapshot = (json.loads(json.dumps(source, ensure_ascii=False, allow_nan=False))
@@ -207,7 +302,7 @@ class Memory:
                 return str(item.get("id") or "")
         fid = self._next_fact_id()
         fact = {"id": fid, "text": clean, "source_scope": source_scope,
-                "at": int(time.time())}
+                "at": int(time.time()), "categories": labels}
         if snapshot is not None:
             fact["source"] = snapshot
         bucket.append(fact)

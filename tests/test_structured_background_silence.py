@@ -215,7 +215,11 @@ def test_real_autonomous_turn_preserves_nested_json_literal(background):
 def test_real_task_continuation_decodes_silence_before_delivery(background, text):
     """Actual durable continuation returns empty text, so its loop cannot send JSON."""
     native = background
-    task = {"scope": "42", "origin": native.origin, "resume_prompt": "continue locally"}
+    task = {"id": "silent-task", "scope": "42", "origin": native.origin,
+            "resume_prompt": "continue locally"}
+    # The durable continuation must still exist in the fresh active snapshot.
+    native.plugin._tasks_mod = lambda: SimpleNamespace(
+        listing=lambda **kwargs: [dict(task, status="active")])
     native.plugin._decide_tools_first = AsyncMock(
         return_value=json.dumps({"reply_to": [], "text": text}))
     assert asyncio.run(native.plugin._run_task_once(task)) == ""

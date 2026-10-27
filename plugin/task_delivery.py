@@ -11,6 +11,31 @@ _OUTBOUND_TOOLS = frozenset({"qq_send", "reply_now", "send_file", "send_shot", "
 _UNKNOWN_ERRORS = frozenset({"transport_exception", "send_exception", "delivery_not_confirmed"})
 
 
+def current_task(task: dict, rows) -> dict | None:
+    """Resolve one live exact-ID row, rejecting missing or superseded claims.
+
+    Legacy callers without claim IDs remain compatible; an explicitly claimed
+    attempt must retain its exact stored claim, never another worker's result.
+    """
+    task_id = task.get("id")
+    if not task_id or not isinstance(rows, (list, tuple)):
+        return None
+    matches = [row for row in rows if isinstance(row, dict) and row.get("id") == task_id]
+    if len(matches) != 1:
+        return None
+    row = matches[0]
+    claim_id = task.get("claim_id")
+    if claim_id and row.get("claim_id") != claim_id:
+        return None
+    return row
+
+
+def task_active(task: dict, rows) -> bool:
+    """Permit continuation only for the current claim's fresh active storage row."""
+    row = current_task(task, rows)
+    return row is not None and row.get("status") == "active"
+
+
 def fresh() -> dict:
     """Return independent JSON-safe evidence, never implying that quiet work sent."""
     return {

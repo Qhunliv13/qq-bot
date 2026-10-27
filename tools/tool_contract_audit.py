@@ -43,6 +43,7 @@ import hashlib
 from plugin.autonomy import AutonomousController  # noqa: E402
 from plugin.tool_catalog import NATIVE_TOOL_COUNT  # noqa: E402
 from plugin.qq_social import schema as social_schema  # noqa: E402
+from plugin import fact_tools  # noqa: E402
 from plugin.tool_context import redact  # noqa: E402
 from plugin.message_batch import message_record  # noqa: E402
 
@@ -124,6 +125,8 @@ CASES = {
     "wp_fact_list": {"qq": "10001"}, "wp_fact_search": {"qq": "10001", "query": "contract"},
     "wp_fact_delete": {"qq": "10001", "keyword": "contract"},
     "facts_list": {}, "facts_search": {"query": "contract"},
+    "facts_classify": {"ids": ["SEEDED"], "categories": ["contract arbitrary label"]},
+    "facts_categories": {},
     "facts_edit": {"id": "SEEDED", "text": "contract edited fact"},
     "facts_delete": {"keyword": "contract"}, "remember": {"text": "contract remembered fact"},
     "vm_fetch": {"url": "https://audit.invalid/file", "name": "contract.txt"},
@@ -279,7 +282,8 @@ def _handler_inventory():
                             (delegation.schema, "delegation_schema"),
                             (task_planning.schema, "planning_schema"),
                             (qq_requests.schema, "request_schema"),
-                            (message_transfer.schema, "transfer_schema")):
+                            (message_transfer.schema, "transfer_schema"),
+                            (fact_tools.schemas, "fact_schema")):
         branch = next(node for node in ast.walk(klass)
                       if isinstance(node, ast.If) and marker in ast.dump(node.test))
         for item in builder():
@@ -608,6 +612,11 @@ class AuditHarness:
         memory.WakePersonFacts(str(self.person_path)).load().add("10001", "contract seeded person")
         if name in {"facts_edit", "wp_fact_move"}:
             args["id"] = str(fact_id)
+        if name == "facts_classify":
+            args["ids"] = [str(fact_id)]
+        if name == "facts_categories":
+            # Read contracts need an actual persisted label, not an invented receipt.
+            store.classify_facts([str(fact_id)], ["contract arbitrary label"], current_scope="42")
         if name in {"task_done", "task_cancel", "task_pause", "task_resume", "task_update"}:
             task = tasks.add("seed " + name, "inert", "42")
             if name == "task_resume":
@@ -907,6 +916,21 @@ async def _audit(root, monkeypatch, batch_size):
             entry["boundary_contract_matches"] = (result.get("task_id") == args["task_id"]
                 and result.get("revision") == expected_revision and result.get("steps") == expected_steps
                 and current == {"task_id": args["task_id"], "revision": expected_revision, "steps": expected_steps})
+        elif name == "facts_classify":
+            stored = memory.Memory(str(harness.memory_path)).load().list_facts(None, current_scope="42")
+            targeted = [row for row in stored if row["id"] in args["ids"]]
+            entry["boundary_contract_matches"] = (
+                result.get("ok") is True and result.get("ids") == args["ids"]
+                and result.get("categories") == args["categories"]
+                and len(targeted) == len(args["ids"])
+                and all(row["categories"] == args["categories"] for row in targeted))
+        elif name == "facts_categories":
+            actual = memory.Memory(str(harness.memory_path)).load().category_counts(current_scope="42")
+            entry["boundary_contract_matches"] = (
+                result.get("ok") is True and result.get("categories") == actual["categories"]
+                and result.get("total") == actual["total"]
+                and result.get("uncategorized") == actual["uncategorized"]
+                and {"category": "contract arbitrary label", "count": 1} in actual["categories"])
         elif name in EXPECTED_VM_PATHS:
             actual_paths = [edge["url"].removeprefix("http://127.0.0.1:18003")
                             for edge in entry["stubbed_edges"] if edge["edge"] == "vm_http_stub"]

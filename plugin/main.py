@@ -270,7 +270,8 @@ class HiganPlugin(Star):
                         waiting = True
                     for task, nodes in current.get(owner, {}).items():
                         # Handler precedence protects nested sleeps during model/send work.
-                        if any(code is not None and code.co_name == "on_message" for _, code in nodes):
+                        if any(code is not None and code.co_name in {"on_message", "_drain_pending"}
+                               for _, code in nodes):
                             waiting = True
                             continue
                         background = [(coroutine, code) for coroutine, code in nodes
@@ -1254,43 +1255,64 @@ class HiganPlugin(Star):
                 (event, text, bool(images or self._image_refs(event)), bool(_woken_e or _at_me_now), history_snapshot))
             if self._busy.get(group):
                 return
+            # Mark ownership before scheduling: consecutive platform deliveries must
+            # enqueue immediately without creating another worker for this scope.
             self._busy[group] = True
             try:
-                while self._pending.get(group):
-                    if not hasattr(self, "_execution_lock"):
-                        self._execution_lock = asyncio.Lock()
-                    async with self._execution_lock:
-                        # Drain only after the previous model/tool/send turn is complete.
-                        # Messages arriving while that turn runs remain the next batch; no timer
-                        # decides whether they belong to the current decision.
-                        entries = list(self._pending.get(group, []))
-                        self._pending[group] = []
-                        entries = [entry for entry in entries if self._policy_allows(entry[0], group)]
-                        if not entries:
-                            continue
-                        from .message_batch import collect_batch
-                        batch = collect_batch(entries)
-                        ev, txt = batch["event"], batch["text"]
-                        from .attachment_sources import collect_sources
-                        sources = [source for item in entries for source in collect_sources(item[0])]
-                        refs = list(dict.fromkeys(source["ref"] for source in sources))
-                        selected_refs = refs[-MAX_IMAGES_PER_CALL:]
-                        sources = [source for source in sources if source["ref"] in selected_refs]
-                        self._turn_context = getattr(self, "_turn_context", {})
-                        self._turn_context[group] = {"history": batch["history"],
-                            "clock": self._clock_context(), "messages": batch["records"],
-                            "image_refs": selected_refs, "image_sources": sources}
-                        logger.info("[higan] 群 %s 合批裁决：%d 条消息，一次模型机会", group, len(entries))
-                        try:
-                            await self._handle_one(ev, group, txt, batch["has_image"], batch["woken"])
-                        except Exception as exc:
-                            logger.error("[higan] 群 %s 合批处理失败：%s", group, type(exc).__name__)
-                        finally:
-                            self._turn_context.pop(group, None)
-            finally:
+                if not hasattr(self, "_background_tasks"):
+                    self._background_tasks = set()
+                self._start_background(self._drain_pending(group))
+            except Exception:
+                # A scheduling failure must not strand the scope behind a busy flag.
                 self._busy[group] = False
+                raise
         except Exception as exc:
             logger.error("[higan] 处理消息出错：%r", exc)
+
+    async def _drain_pending(self, group: str) -> None:
+        """Run one owned scope worker without blocking sequential framework ingress.
+
+        Snapshot only after obtaining the shared FIFO execution lock. Incoming
+        messages can join while waiting, but never mutate an already active turn.
+        The busy flag also keeps reload drain aware of model/tool/send ownership.
+        """
+        try:
+            while self._pending.get(group):
+                if not hasattr(self, "_execution_lock"):
+                    self._execution_lock = asyncio.Lock()
+                async with self._execution_lock:
+                    # No await separates the snapshot from detaching its source list:
+                    # arrivals during execution therefore belong to the next turn.
+                    entries = list(self._pending.get(group, []))
+                    self._pending[group] = []
+                    entries = [entry for entry in entries if self._policy_allows(entry[0], group)]
+                    if not entries:
+                        continue
+                    from .message_batch import collect_batch
+                    batch = collect_batch(entries)
+                    ev, txt = batch["event"], batch["text"]
+                    from .attachment_sources import collect_sources
+                    sources = [source for item in entries for source in collect_sources(item[0])]
+                    refs = list(dict.fromkeys(source["ref"] for source in sources))
+                    selected_refs = refs[-MAX_IMAGES_PER_CALL:]
+                    sources = [source for source in sources if source["ref"] in selected_refs]
+                    self._turn_context = getattr(self, "_turn_context", {})
+                    self._turn_context[group] = {"history": batch["history"],
+                        "clock": self._clock_context(), "messages": batch["records"],
+                        "image_refs": selected_refs, "image_sources": sources}
+                    logger.info("[higan] 群 %s 合批裁决：%d 条消息，一次模型机会", group, len(entries))
+                    try:
+                        await self._handle_one(ev, group, txt, batch["has_image"], batch["woken"])
+                    except Exception as exc:
+                        logger.error("[higan] 群 %s 合批处理失败：%s", group, type(exc).__name__)
+                    finally:
+                        self._turn_context.pop(group, None)
+        except Exception as exc:
+            logger.error("[higan] 群 %s 待处理消息出错：%s", group, type(exc).__name__)
+        finally:
+            # There is no await between observing an empty queue and releasing busy,
+            # so the next admission either joins this worker or starts its successor.
+            self._busy[group] = False
 
     @staticmethod
     def _is_woken(event: AstrMessageEvent) -> bool:
@@ -1660,6 +1682,7 @@ class HiganPlugin(Star):
         from .image_search import schema as image_schema
         from .qq_requests import schema as requests_schema
         from .message_transfer import schema as transfer_schema
+        from .fact_tools import schemas as fact_schema
         return neutralize_schemas([
             _f("web_search", "搜索公开网页，返回来源标题、URL和摘要；按需要调用而非固定触发。",
                {"query": {"type": "string"}}, ["query"]),
@@ -1756,8 +1779,8 @@ class HiganPlugin(Star):
                {"id": {"type": "string"}, "text": {"type": "string"}}, ["id", "text"]),
             _f("facts_delete", "删一条事实（给编号；或给关键词批量删）",
                {"id": {"type": "string"}, "keyword": {"type": "string"}}, []),
-            _f("remember", "把一件你觉得重要的事记进长期记忆（以后都记得）",
-               {"text": {"type": "string"}}, ["text"]),
+            _f("remember", "保存长期事实和可选的自由分类标签，返回事实编号与来源。",
+               {"text": {"type": "string"}, "categories": {"type": "array", "items": {"type": "string"}}}, ["text"]),
             _f("vm_fetch", "把群里的文件/图片/语音下载到我自己的虚拟机里（给我 url 或消息号都行）",
                {"url": {"type": "string"}, "name": {"type": "string"},
                 "msg_id": {"type": "string"}}, []),
@@ -1784,7 +1807,7 @@ class HiganPlugin(Star):
                 "reason": {"type": "string"}, "scopes": {"type": "array", "items": {"type": "string"}}}),
             _f("vm_job_list", "列出机器人虚拟机内受管后台脚本的状态摘要，不读取输出日志。",
                {"offset": {"type": "integer"}, "limit": {"type": "integer"}}),
-        ] + list(self._task_tool_schemas()) + social_schema() + workspace_schema() + discovery_schema() + delegation_schema() + planning_schema() + interim_schema() + image_schema() + requests_schema() + transfer_schema())
+        ] + list(self._task_tool_schemas()) + social_schema() + workspace_schema() + discovery_schema() + delegation_schema() + planning_schema() + interim_schema() + image_schema() + requests_schema() + transfer_schema() + fact_schema())
 
     def _as_llm_url(self, ref) -> str:
         """把图片引用转成 LLM 能接受的 URL（data: / http(s)）。
@@ -2717,7 +2740,14 @@ class HiganPlugin(Star):
                 logger.warning("[higan] 唤醒人记录失败：%r", str(_exc)[:120])
                 return {"ok": False, "error": str(_exc)[:120]}
 
-        if name in ("facts_list", "facts_search", "facts_edit", "facts_delete"):
+        from .fact_tools import dispatch as fact_dispatch, schemas as fact_schema
+        if name == "facts_delete" or name in {item["function"]["name"] for item in fact_schema()}:
+            from .memory import Memory
+            return fact_dispatch(name, args,
+                memory=Memory(str(Path(HIGAN_ROOT) / "memory" / "memory.json")).load(),
+                current_scope=str(scope),
+                can_write=event is not None and self._policy_allows(event, str(scope)), muted=())
+        if name in ("facts_list", "facts_search", "facts_edit"):
             try:
                 from .memory import Memory
                 _mm = Memory(str(Path(HIGAN_ROOT) / "memory" / "memory.json")).load()
@@ -2734,8 +2764,6 @@ class HiganPlugin(Star):
                 if name == "facts_edit":
                     _ok = _mm.edit_fact(str(args.get("id") or ""), str(args.get("text") or ""))
                     return {"ok": bool(_ok), "id": args.get("id")}
-                _n = _mm.delete_fact(str(args.get("id") or ""), str(args.get("keyword") or ""))
-                return {"ok": True, "deleted": _n}
             except Exception as _exc:  # noqa: BLE001
                 logger.warning("[higan] 事实管理失败：%r", str(_exc)[:120])
                 return {"ok": False, "error": str(_exc)[:120]}
@@ -2753,10 +2781,10 @@ class HiganPlugin(Star):
                 # saved statement is true or an authorization grant.
                 _source = {"name": "model_saved_memory", "trust": "untrusted_data",
                            "scope": str(scope), "messages": turn.get("messages") or []}
-                _m.add_fact(_txt, str(scope), source=_source)
+                _fact_id = _m.add_fact(_txt, str(scope), source=_source, categories=args.get("categories"))
                 _n = len((_m.data.get("global") or {}).get("facts") or [])
                 logger.info("[higan] remember 写入：%s（累计 %d 条）" % (_txt[:60], _n))
-                return {"ok": True, "saved": _txt, "facts_total": _n, "source_scope": str(scope)}
+                return {"ok": True, "id": _fact_id, "saved": _txt, "facts_total": _n, "source_scope": str(scope)}
             except Exception as _exc:  # noqa: BLE001
                 logger.warning("[higan] remember 失败：%r", str(_exc)[:120])
                 return {"ok": False, "error": str(_exc)[:120]}
@@ -2943,15 +2971,35 @@ class HiganPlugin(Star):
     async def _run_task_once(self, task: dict) -> str:
         """Reuse the foreground native transcript/media path for every durable continuation."""
         from .task_event import TaskEvent
+        from .task_delivery import task_active
+        from .reply_selection import decode_reply
+        if not task_active(task, self._tasks_mod().listing(only_active=False)):
+            return ""
         scope = str(task.get("scope") or "")
         event = TaskEvent(self, task)
         text = str(task.get("resume_prompt") or task.get("goal") or task.get("title") or "")
-        from .reply_selection import decode_reply
-        raw = await self._decide_tools_first(event, scope, text, False, task_context=task)
-        selection = decode_reply(raw, [], allow_unattributed=True)
-        if selection["error"]:
-            raise RuntimeError("task_reply_protocol_invalid")
-        return selection["text"]
+        turns = getattr(self, "_turn_context", None)
+        if turns is None:
+            turns = self._turn_context = {}
+        previous = turns.get(scope)
+        had_previous = scope in turns
+        # A scheduled continuation has no current human messages or attachments.
+        # Keep shared historical memory, but never inherit a pending human turn.
+        turns[scope] = {"messages": [], "history": [], "image_refs": [],
+                        "image_sources": [], "clock": self._clock_context()}
+        try:
+            raw = await self._decide_tools_first(event, scope, text, False, task_context=task)
+            if not task_active(task, self._tasks_mod().listing(only_active=False)):
+                return ""
+            selection = decode_reply(raw, [], allow_unattributed=True)
+            if selection["error"]:
+                raise RuntimeError("task_reply_protocol_invalid")
+            return selection["text"]
+        finally:
+            if had_previous:
+                turns[scope] = previous
+            else:
+                turns.pop(scope, None)
 
     async def _task_loop(self) -> None:
         """Claim one durable task, serialize desktop access, and acknowledge only its own outcome."""
@@ -2977,6 +3025,11 @@ class HiganPlugin(Star):
                         self._task_executing = True
                         try:
                             text = await self._run_task_once(task)
+                            from .task_delivery import task_active
+                            # Completion/revocation is authoritative even when a
+                            # tool-free model response arrived after that change.
+                            if not task_active(task, tasks.listing(only_active=False)):
+                                continue
                             scope = str(task.get("scope") or "")
                             if text and scope:
                                 from .task_event import TaskEvent
@@ -2995,13 +3048,21 @@ class HiganPlugin(Star):
                             evidence = {"outcome": task["_delivery_outcome"]} if "_delivery_outcome" in task else {}
                             tasks.mark(task["id"], text[:200], success=True, claim_id=task["claim_id"], **evidence)
                         except asyncio.CancelledError:
-                            tasks.mark(task["id"], "interrupted_outcome_requires_review", success=False,
-                                       claim_id=task["claim_id"])
+                            from .task_delivery import task_active
+                            # Revocation also owns failure metadata; an old runner
+                            # must not rewrite completion or another claim's state.
+                            if task_active(task, tasks.listing(only_active=False)):
+                                tasks.mark(task["id"], "interrupted_outcome_requires_review", success=False,
+                                           claim_id=task["claim_id"])
                             raise
                         except Exception as exc:
-                            evidence = {"outcome": task["_delivery_outcome"]} if "_delivery_outcome" in task else {}
-                            tasks.mark(task["id"], type(exc).__name__, success=False, claim_id=task["claim_id"], **evidence)
-                            logger.warning("[higan] 后台任务暂停待检查：%s", task["id"])
+                            from .task_delivery import task_active
+                            if task_active(task, tasks.listing(only_active=False)):
+                                evidence = {"outcome": task["_delivery_outcome"]} if "_delivery_outcome" in task else {}
+                                tasks.mark(task["id"], type(exc).__name__, success=False, claim_id=task["claim_id"], **evidence)
+                                logger.warning("[higan] 后台任务暂停待检查：%s", task["id"])
+                            else:
+                                logger.info("[higan] 任务已失效，跳过旧执行结果：%s", task["id"])
                         finally:
                             self._task_executing = False
             except asyncio.CancelledError:
@@ -3226,6 +3287,12 @@ class HiganPlugin(Star):
         async def _llm_messages(messages, allow_tools):
             """Persist frozen initial images and append tool image data after tool replies."""
             nonlocal images_initialized, submitted_ref_count
+            from .task_delivery import task_active
+            # Do not interrupt native tools already running; only suppress the
+            # next model request after completion, pause, deletion or reclaim.
+            if task_context is not None and not task_active(
+                    task_context, self._tasks_mod().listing(only_active=False)):
+                return "", []
             from .image_transcript import with_images
             if not images_initialized:
                 # Enrich the loop's original user exactly once, before its first request.
@@ -3337,15 +3404,22 @@ class HiganPlugin(Star):
                     return {"ok": False, "error": failure,
                             "reason": "An attempted delivery has not been confirmed."}
             if task_context is not None:
+                from .task_delivery import current_task, task_active
                 current = self._tasks_mod().listing(only_active=False)
-                state = next((row.get("status") for row in current
-                              if row.get("id") == task_context.get("id")), "active")
-                if state != "active":
-                    return {"ok": False, "error": "task_not_active", "status": state}
+                if not task_active(task_context, current):
+                    row = current_task(task_context, current)
+                    return {"ok": False, "error": "task_not_active",
+                            "status": row.get("status") if row else "unavailable"}
             return await _execute_tool(name, args)
 
         def completion_check(name, arguments, result):
-            """Honor explicit confirmed terminal replies, never arbitrary tool-result text."""
+            """Honor confirmed replies or this exact claim's persisted task completion."""
+            if (name == "task_done" and task_context is not None
+                    and isinstance(result, dict) and result.get("ok") is True):
+                from .task_delivery import current_task
+                row = current_task(task_context, self._tasks_mod().listing(only_active=False))
+                if row is not None and row.get("status") == "done":
+                    return True
             return (name == "reply_now" and isinstance(arguments, dict)
                     and arguments.get("finish") is True and isinstance(result, dict)
                     and result.get("ok") is True and result.get("delivered") is True

@@ -17,6 +17,7 @@ from .reply_selection import decode_reply
 # Explicit capabilities, not name-prefix heuristics: new parent tools fail closed.
 READ_ONLY_TOOLS = frozenset({
     "web_search", "web_fetch", "history_search", "tool_observations",
+    "facts_list", "facts_search", "facts_categories",
     "qq_account_info", "qq_social_status", "workspace_read", "workspace_glob",
     "workspace_grep", "skill_list", "skill_read", "tool_search", "tool_describe",
 })

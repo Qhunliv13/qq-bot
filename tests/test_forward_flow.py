@@ -342,6 +342,9 @@ def test_task_provider_timeouts_raise_instead_of_claiming_success(production, mo
     _admit_entry(plugin)
     requests = _provider_outages(monkeypatch)
     task = {"id": "offline-task", "scope": "42", "origin": "offline:42", "goal": "offline task"}
+    # The real entry requires a fresh active record matching the supplied task.
+    plugin._tasks_mod = lambda: SimpleNamespace(
+        listing=lambda **kwargs: [dict(task, status="active")])
 
     with pytest.raises(RuntimeError, match="^task_finalization_failed$"):
         asyncio.run(plugin._run_task_once(task))

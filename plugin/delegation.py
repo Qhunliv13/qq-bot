@@ -32,7 +32,7 @@ _BOOT_ID: str = globals().get("_BOOT_ID", uuid.uuid4().hex)
 def schema() -> list[dict]:
     """Expose only native delegation contracts; the parent enforces tool safety."""
     definitions = (
-        ("agent_start", "Start a real read-only native worker.", {"task": {"type": "string"}, "label": {"type": "string"}}, ["task"]),
+        ("agent_start", "Start a real read-only native worker for research or fact organization. It may read visible facts and categories and return classification/deletion proposals by fact ID; the parent applies authorized changes.", {"task": {"type": "string"}, "label": {"type": "string"}}, ["task"]),
         ("agent_status", "Read a scoped worker receipt.", {"id": {"type": "string"}}, ["id"]),
         ("agent_list", "List workers in the current scope.", {}, []),
         ("agent_message", "Queue input for a running worker, without interrupting a model call.", {"id": {"type": "string"}, "message": {"type": "string"}}, ["id", "message"]),

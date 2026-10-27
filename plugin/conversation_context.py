@@ -105,7 +105,10 @@ def system_prompt(persona: str) -> str:
                     "working or send further substantive updates. Its receipt is an observation, not a "
                     "new human message to acknowledge. Neither timing nor number of updates is prescribed. "
                     "A later final reply is optional and may supply new information or choose silence; "
-                    "delivery acknowledgements alone need not be published as another user-facing reply."
+                    "delivery acknowledgements alone need not be published as another user-facing reply. "
+                    "When an observed public receipt already completes the answer, choose SILENT or "
+                    "delivery=already_delivered rather than restating it with different wording or a new quote. "
+                    "Further substantive public messages remain available with delivery=new."
                 ),
                 "silence": (
                     "An unquoted, unfenced standalone final line SILENT makes the entire completion silent; "
@@ -118,7 +121,12 @@ def system_prompt(persona: str) -> str:
                     "The model may address multiple messages in one reply. Select from the supplied message IDs; "
                     "a response aimed at an earlier message is transported with that message quoted. "
                     "If several selected messages include earlier ones, one earlier selected ID is quoted "
-                    "and the text can distinguish the remaining targets. SILENT denotes no user-facing reply."
+                    "and the text can distinguish the remaining targets. SILENT denotes no user-facing reply. "
+                    "The object optionally accepts delivery, exactly new or already_delivered. "
+                    "Omitting it preserves ordinary reply behavior. new selects a public reply; "
+                    "already_delivered keeps text as an internal draft with no public body or quote and "
+                    "may use an empty reply_to. It is a disposition, not evidence that delivery succeeded; "
+                    "only a matching observed public receipt supports that claim."
                 ),
             },
             "transport": {

@@ -109,6 +109,7 @@ def test_run_task_once_passes_same_saved_context_to_foreground_path(production):
         return "continued once"
 
     plugin._decide_tools_first = decide
+    plugin._tasks_mod = lambda: SimpleNamespace(listing=lambda **kwargs: [dict(task, status="active")])
     assert asyncio.run(plugin._run_task_once(task)) == "continued once"
     event, scope, text, has_image, context = calls[0]
     assert isinstance(event, TaskEvent)
@@ -152,7 +153,8 @@ def test_task_native_path_reuses_tools_transcript_media_and_saved_goal(productio
     assert envelope["task"]["_delivery_outcome"]["delivery_attempted"] is False
     assert envelope["task"]["goal"] == "saved-goal-nonce"
     assert envelope["conversation"]["scope"] == "42"
-    assert envelope["conversation"]["messages"][0]["body"] == "continue-nonce"
+    assert envelope["conversation"]["messages"] == []
+    assert envelope["task"]["resume_prompt"] == "continue-nonce"
     paired = [message for message in requests[-1]["messages"] if message["role"] == "tool"]
     assert len(paired) == 1 and paired[0]["tool_call_id"] == "task_media"
     record = plugin._tool_evidence().recent("42")[0]
@@ -209,7 +211,9 @@ def test_task_loop_claims_before_execution_marks_only_own_task(production, monke
         """Advance scheduler time locally without sleeps or periodic background work."""
         assert delay == 25
 
-    plugin._tasks_mod = lambda: SimpleNamespace(due=due, claim=claim, mark=mark)
+    plugin._tasks_mod = lambda: SimpleNamespace(
+        due=due, claim=claim, mark=mark,
+        listing=lambda **kwargs: [dict(task, status="active")])
     plugin._run_task_once, plugin._send = run, send
     monkeypatch.setattr(asyncio, "sleep", tick)
     asyncio.run(plugin._task_loop())
@@ -293,6 +297,7 @@ def test_task_safe_final_raises_instead_of_successful_acknowledgement(production
 
     plugin = production()
     task = {"id": "uncertain", "scope": "42", "origin": "offline:42", "goal": "continue saved work"}
+    plugin._tasks_mod = lambda: SimpleNamespace(listing=lambda **kwargs: [dict(task, status="active")])
     _provider(monkeypatch, [(SAFE_FINAL, [])])
     with pytest.raises(RuntimeError, match="task_finalization_failed"):
         asyncio.run(plugin._run_task_once(task))

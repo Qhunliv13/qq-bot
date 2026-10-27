@@ -86,7 +86,7 @@ async def probe(directory, output):
             event = ProbeEvent("isolated no-send message transfer probe")
             names = [item["function"]["name"] for item in bot._tool_schemas()]
             new_tools = {"qq_copy_message", "qq_paste_message", "qq_forward_messages"}
-            checks["metadata_104_unique_tools"] = len(names) == len(set(names)) == 104
+            checks["metadata_106_unique_tools"] = len(names) == len(set(names)) == 106
             checks["new_three_tools_present"] = new_tools.issubset(names)
 
             copied = await dispatch(bot, "qq_copy_message", {"source_group_id": 42, "message_id": 111})

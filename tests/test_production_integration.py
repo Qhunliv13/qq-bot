@@ -18,7 +18,7 @@ import random
 import re
 import sys
 import time
-from types import SimpleNamespace
+from types import FunctionType, MethodType, SimpleNamespace
 import urllib.request
 from urllib.error import HTTPError
 
@@ -133,6 +133,7 @@ def _load_production(root):
         "_to_plain", "_strip_tool_syntax", "_strip_internal", "_tool_schemas",
         "_task_tool_schemas", "_llm_tools", "_dispatch_tool", "_decide_tools_first",
         "_send", "_deliver_media", "_at_components", "on_message", "_drain_previous_instances",
+        "_drain_pending", "_start_background",
         "_web_search", "_search_queries", "_run_task_once", "_task_loop", "_ensure_task_loop", "_vm_tool", "_qq_send",
     }
     original = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "HiganPlugin")
@@ -177,6 +178,32 @@ def production(tmp_path, monkeypatch):
         """Recreate plugin process state while sharing only temporary durable stores."""
         plugin = klass()
         plugin._stopping = False
+        plugin._background_tasks = set()
+        native_on_message = plugin.on_message
+
+        async def settled_on_message(self, event):
+            """Await initiating work for legacy contracts, not true ingress timing tests.
+
+            Later busy arrivals must return immediately to avoid deadlocking tests
+            holding a model/send gate. Native ingress tests bypass this adapter by
+            invoking type(plugin).on_message(plugin, event) explicitly.
+            """
+            group = str(event.get_group_id() or "") or "private:" + str(event.get_sender_id() or "unknown")
+            already_busy = bool(plugin._busy.get(group))
+            await native_on_message(event)
+            if not already_busy:
+                while plugin._background_tasks:
+                    await asyncio.gather(*tuple(plugin._background_tasks))
+
+        # AST extension fixtures obtain production globals through bound methods.
+        # Reuse that exact namespace while retaining this adapter's closure, so
+        # helper imports/constants and legacy __func__ introspection stay native.
+        settled = FunctionType(settled_on_message.__code__,
+                               native_on_message.__func__.__globals__,
+                               settled_on_message.__name__,
+                               settled_on_message.__defaults__,
+                               settled_on_message.__closure__)
+        plugin.on_message = MethodType(settled, plugin)
         plugin.context = SimpleNamespace(get_using_provider=lambda origin: object())
         plugin.persona = "offline persona"
         plugin._recent, plugin._pending, plugin._busy = {}, {}, {}

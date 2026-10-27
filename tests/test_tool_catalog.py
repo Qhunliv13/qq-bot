@@ -18,8 +18,9 @@ from plugin.interim_reply import schema as interim_schema  # noqa: E402
 from plugin.image_search import schema as image_schema  # noqa: E402
 from plugin.qq_requests import schema as request_schema  # noqa: E402
 from plugin.message_transfer import schema as transfer_schema  # noqa: E402
+from plugin.fact_tools import schemas as fact_schema  # noqa: E402
 
-IMPORTED_BUILDERS = (social_schema, workspace_schema, discovery_schema, delegation_schema, planning_schema, interim_schema, image_schema, request_schema, transfer_schema)
+IMPORTED_BUILDERS = (social_schema, workspace_schema, discovery_schema, delegation_schema, planning_schema, interim_schema, image_schema, request_schema, transfer_schema, fact_schema)
 from plugin.tool_catalog import NATIVE_TOOL_COUNT, TOOL_DESCRIPTIONS, neutralize_schemas  # noqa: E402
 
 
@@ -61,7 +62,7 @@ def native_schemas():
 def test_exact_coverage_of_all_native_tool_names(native_schemas):
     """A new or removed native tool requires an explicit metadata review."""
     names = {schema["function"]["name"] for schema in native_schemas}
-    assert len(names) == NATIVE_TOOL_COUNT == 104
+    assert len(names) == NATIVE_TOOL_COUNT == 106
     assert len(TOOL_DESCRIPTIONS) == NATIVE_TOOL_COUNT
     assert set(TOOL_DESCRIPTIONS) == names
     assert all(isinstance(text, str) and text.strip() for text in TOOL_DESCRIPTIONS.values())
@@ -75,7 +76,7 @@ def test_import_owned_descriptions_are_shared_without_a_second_definition():
             function = item["function"]
             names.append(function["name"])
             assert TOOL_DESCRIPTIONS[function["name"]] == function["description"]
-    assert len(names) == len(set(names)) == 37
+    assert len(names) == len(set(names)) == 39
 
 
 def test_all_descriptions_are_neutral_metadata(native_schemas):

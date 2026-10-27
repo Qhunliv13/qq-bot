@@ -66,7 +66,9 @@ def test_due_task_waits_without_preemption_then_precedes_later_chat(production, 
 
         plugin._execution_lock = ObservedLock()
         plugin._pending["42"] = [("continuous pending chat",)]
-        plugin._tasks_mod = lambda: SimpleNamespace(due=due, claim=claim, mark=mark)
+        plugin._tasks_mod = lambda: SimpleNamespace(
+            due=due, claim=claim, mark=mark,
+            listing=lambda **kwargs: [{**task, "status": "active"}])
         plugin._run_task_once = run
         monkeypatch.setattr(asyncio, "sleep", tick)
         await plugin._execution_lock.acquire()

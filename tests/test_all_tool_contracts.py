@@ -81,7 +81,7 @@ def test_new_native_contracts_use_reviewed_receipts_and_actions(report):
 def test_request_contracts_distinguish_unavailable_from_route_errors(report):
     """All six native handlers execute while exactly three remain honestly unavailable."""
     rows = {row["name"]: row for row in report["tools"]}
-    assert report["result_quality_counts"] == {"acknowledged": 101, "capability_unavailable": 3}
+    assert report["result_quality_counts"] == {"acknowledged": 103, "capability_unavailable": 3}
     for name in AUDIT.REQUEST_NAMES:
         assert rows[name]["handler_body_executed"] and rows[name]["boundary_contract_matches"], rows[name]
         assert rows[name]["result_quality"]["contract_satisfied"] is True
@@ -164,7 +164,7 @@ def test_generic_success_cannot_mask_wrong_transfer_native_action(tmp_path, monk
 def test_imported_workspace_discovery_and_workers_execute_real_contracts(report):
     """All additive classes require native receipts and locally exercised helpers."""
     rows = {row["name"]: row for row in report["tools"]}
-    assert report["effective_schema_count"] == report["canonical_schema_count"] == 104
+    assert report["effective_schema_count"] == report["canonical_schema_count"] == 106
     assert report["workspace_helpers_executed"] >= 20
     assert report["native_worker_calls"]
     assert {row["status"] for row in report["native_worker_receipts"]} == {"completed", "cancelled"}
@@ -415,7 +415,7 @@ def test_native_provider_honors_explicit_worker_schema_snapshot(tmp_path, monkey
     assert requests[0]["tools"] == snapshot
     assert requests[1]["tools"] == parent
     assert len(requests[0]["tools"]) == 1
-    assert len(requests[1]["tools"]) == 104
+    assert len(requests[1]["tools"]) == 106
     assert explicit == snapshot
     assert plugin._tool_schemas() == parent
 

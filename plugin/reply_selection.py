@@ -143,6 +143,11 @@ def decode_reply(raw: str | None, records: Any, *, allow_unattributed: bool = Fa
     Plain prose never implies a selection. Its leading legacy controls are
     removed, and a native decimal quote may still refer to historical messages.
     The transport remains responsible for conversation-scoped authorization.
+    Optional ``delivery`` is exactly ``new`` or ``already_delivered``. The latter
+    marks a draft as internal rather than a new public reply; validated targets
+    remain metadata, but text and quote side effects are suppressed. It does not
+    assert delivery success or create a receipt. Omitted delivery preserves the
+    legacy five-key result contract and all existing routing behavior.
     """
     text = "" if raw is None else raw
     result = {"text": text, "reply_to": [], "quote_id": None,
@@ -161,6 +166,16 @@ def decode_reply(raw: str | None, records: Any, *, allow_unattributed: bool = Fa
         result["structured"] = True
         targets = payload["reply_to"]
         reply_text = payload["text"]
+        delivery = payload.get("delivery", "new")
+        # Only explicit enum strings control disposition; malformed values must
+        # fail closed, never become visible JSON or implicitly publish a draft.
+        if not isinstance(delivery, str) or delivery not in ("new", "already_delivered"):
+            result.update(text="", error="invalid_reply_delivery")
+            return result
+        if "delivery" in payload:
+            # Keep omitted-field compatibility, including callers comparing the
+            # complete historical five-key result, rather than adding a default.
+            result["delivery"] = delivery
         current_ids = {_message_id(record.get("id")) for record in (records or [])
                        if isinstance(record, dict)}
         current_ids.discard(None)
@@ -179,10 +194,16 @@ def decode_reply(raw: str | None, records: Any, *, allow_unattributed: bool = Fa
             # Current-batch replies still require attribution for nonempty text.
             # Explicit no-batch tasks can speak without it, but the empty ID set
             # above rejects every target rather than guessing a historical one.
-            if records:
+            if records and delivery != "already_delivered":
                 valid = valid and (bool(selected) or not reply_text.strip())
         if not valid:
             result.update(text="", error="invalid_reply_targets")
+            return result
+        # A model-selected internal draft never enters public transport. This is
+        # not a success receipt: only the caller's real tool results prove sends.
+        # Validate every supplied target before permitting this disposition.
+        if delivery == "already_delivered":
+            result.update(text="", reply_to=selected)
             return result
         # Validate attribution first: a control token cannot legitimize bad IDs.
         if is_silence(reply_text):
