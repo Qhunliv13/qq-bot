@@ -27,6 +27,7 @@ def build_context(
     image_refs: Any = None,
     attachment_origins: Any = None,
     anchor_message_id: Any = None,
+    history_context: Any = None,
 ) -> str:
     """Serialize caller-provided JSON data with distinct origins and no I/O.
 
@@ -38,6 +39,10 @@ def build_context(
     rather than being silently converted into misleading strings.
     """
     conversation = {"scope": scope, "history": history, "messages": messages}
+    if history_context is not None:
+        # Explicit group-memory mode is source metadata, never an instruction or
+        # a claim that stored participant statements are verified facts.
+        conversation["history_context"] = history_context
     if anchor_message_id is not None:
         # The caller owns anchor selection; position or prose never implies it.
         conversation["anchor"] = {"message_id": anchor_message_id}

@@ -7,6 +7,7 @@ business facts, identities, owner roles, or private filename aliases are inferre
 from __future__ import annotations
 
 from copy import deepcopy
+import math
 import re
 from typing import Mapping
 
@@ -14,6 +15,9 @@ from typing import Mapping
 # context budget. This limits presentation only; keyword retrieval reads all rows.
 DEFAULT_LIMIT_PER_SCOPE = 20
 SOURCE = {"name": "cross_scope_history", "trust": "untrusted_data"}
+# One shared presentation budget, independent of the legacy per-group overview.
+DEFAULT_SHARED_LIMIT = 240
+UNIFIED_SOURCE = {"name": "unified_group_memory", "trust": "untrusted_data"}
 
 
 def _group(scope: str) -> bool:
@@ -112,6 +116,72 @@ class CrossScopeMemory:
                                         "limit": self.limit_per_scope,
                                         "more_available": len(rows) > self.limit_per_scope}})
         return result
+
+    def unified_snapshot(self, *, exclude_messages=(), exclude_message_ids=(),
+                         limit: int = DEFAULT_SHARED_LIMIT) -> dict:
+        """Merge persisted public groups; unknown dates stay unknown, never inferred.
+
+        Exclusions are native (scope, record.id) pairs or context dictionaries
+        carrying scope and id/message_id. Bare IDs cannot establish provenance.
+        This disk-only view deliberately ignores live caches and mute policy.
+        """
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+            raise ValueError("limit must be a positive integer")
+        excluded = []
+        for values in (exclude_messages, exclude_message_ids):
+            for value in values:
+                if isinstance(value, dict):
+                    scope = value.get("scope")
+                    message_id = value.get("id", value.get("message_id"))
+                elif isinstance(value, (tuple, list)) and len(value) == 2:
+                    scope, message_id = value
+                else:
+                    # A bare ID or legacy display string is not a scoped identity.
+                    continue
+                if scope is not None and message_id is not None:
+                    excluded.append((str(scope), message_id))
+        rows = []
+        scope_count = 0
+        more_available = False
+        scopes = {str(scope) for scope in self.recorder.group_scopes()
+                  if _group(str(scope))}
+        for scope in sorted(scopes, key=lambda value: (int(value), value)):
+            # An extra persisted row proves a source exceeds the shared budget;
+            # never load unbounded histories or reuse the legacy 20-row quota.
+            stored = self.recorder.load_records(scope, limit=limit + 1)
+            if not stored:
+                continue
+            scope_count += 1
+            more_available = more_available or len(stored) > limit
+            for source in stored:
+                record = source.get("record")
+                origin = source["scope"]
+                if isinstance(record, dict) and "id" in record and any(
+                        str(origin) == pair_scope and record["id"] == message_id
+                        for pair_scope, message_id in excluded):
+                    continue
+                row = deepcopy(source)
+                row["origin_scope"] = origin
+                rows.append(row)
+
+        def chronological_key(row):
+            """Sort only finite native numbers; retain stable source order for unknown dates."""
+            timestamp = row.get("ts")
+            valid = (not isinstance(timestamp, bool)
+                     and (isinstance(timestamp, int)
+                          or isinstance(timestamp, float) and math.isfinite(timestamp)))
+            # Unknown dates precede dated evidence without assigning a fake date;
+            # Python's stable sort preserves source order and timestamp ties.
+            return (1, timestamp) if valid else (0, 0)
+
+        rows.sort(key=chronological_key)
+        more_available = more_available or len(rows) > limit
+        selected = rows[-limit:]
+        return {"source": deepcopy(UNIFIED_SOURCE), "mode": "one_shared_timeline",
+                "records": selected,
+                "coverage": {"returned": len(selected), "limit": limit,
+                             "more_available": more_available,
+                             "scope_count": scope_count}}
 
     def search(self, keyword: str, current_scope: str, scope: str = "", limit: int = 10,
                muted=()) -> list[dict]:

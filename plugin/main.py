@@ -819,7 +819,8 @@ class HiganPlugin(Star):
             trigger=turn.get("trigger"), activity=turn.get("activity"),
             image_refs=turn.get("image_refs", self._image_refs(event)),
             attachment_origins=origins if origins else None,
-            anchor_message_id=str(getattr(getattr(event, "message_obj", None), "message_id", "") or ""))
+            anchor_message_id=str(getattr(getattr(event, "message_obj", None), "message_id", "") or ""),
+            history_context=turn.get("history_context"))
 
     def _record_visible_reply(self, group: str, text: str) -> None:
         """Commit a delivered visible utterance to in-memory and existing disk chat history."""
@@ -2422,7 +2423,8 @@ class HiganPlugin(Star):
             try:
                 from .cross_scope_memory import CrossScopeMemory, visible_scope
                 requested = str(args.get("scope") or "")
-                muted = self._group_policy(scope).get("muted", ())
+                # Mute controls sending, not inclusion in the shared group memory.
+                muted = ()
                 if requested and not visible_scope(requested, str(scope), muted=muted):
                     return {"ok": False, "error": "history_scope_not_visible"}
                 hits = CrossScopeMemory(self._hist()).search(
@@ -2774,7 +2776,7 @@ class HiganPlugin(Star):
             try:
                 from .memory import Memory
                 _mm = Memory(str(Path(HIGAN_ROOT) / "memory" / "memory.json")).load()
-                _muted = self._group_policy(scope).get("muted", ())
+                _muted = ()  # All group facts share one memory; send policies are unchanged.
                 if name == "facts_list":
                     return {"ok": True, "facts": _mm.list_facts(current_scope=str(scope), muted=_muted)}
                 if name == "facts_search":
@@ -3235,15 +3237,26 @@ class HiganPlugin(Star):
         turn = (getattr(self, "_turn_context", {}) or {}).setdefault(group, {})
         self._turn_context = getattr(self, "_turn_context", {})
         self._turn_context[group] = turn
-        from .cross_scope_memory import CrossScopeMemory
-        try:
-            policy = self._group_policy(group)
-            turn["other_scopes"] = CrossScopeMemory(self._hist()).snapshot(
-                str(group), muted=policy.get("muted", ()))
-        except Exception as exc:
-            # Shared-memory failure cannot broaden visibility or break current chat.
-            turn["other_scopes"] = []
-            logger.warning("[higan] 跨群来源读取失败：%s", type(exc).__name__)
+        turn["other_scopes"] = []
+        if str(group).isascii() and str(group).isdigit() and int(group) > 0:
+            from .cross_scope_memory import CrossScopeMemory
+            current_records = turn.get("messages") or []
+            excluded = [(str(group), str(record["id"])) for record in current_records
+                        if isinstance(record, dict) and record.get("id") is not None]
+            try:
+                shared = CrossScopeMemory(self._hist()).unified_snapshot(exclude_messages=excluded)
+                turn["history"] = shared["records"]
+                turn["history_context"] = {key: shared[key] for key in ("mode", "source", "coverage")}
+            except Exception as exc:
+                # Do not silently fall back to separate current/other group silos.
+                turn["history"] = []
+                turn["history_context"] = {"mode": "one_shared_timeline", "available": False,
+                                           "error": type(exc).__name__}
+                logger.warning("[higan] 统一群记忆读取失败：%s", type(exc).__name__)
+        else:
+            # Only group memory was unified; a private conversation keeps its own
+            # native context and never joins the public-group history pool.
+            turn.pop("history_context", None)
         turn["task"] = task_context
         # Delivery receipts belong only to this native turn, never a later chat.
         turn["_interim_replies"] = []
