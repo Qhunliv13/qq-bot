@@ -139,6 +139,26 @@ metadata was refused with HTTP 403 in the initial check; no installation was per
 Official software binaries, if staged for static analysis, stay outside the repository
 and contain no copied account data.
 
+## Isolated transport core increment
+
+`qq_transport/` now provides independently authored, offline-testable operation
+journaling, injected action dispatch and a durable source-event outbox/pump. It has
+no NapCat imports, endpoint fallback or copied handlers. No default native handlers
+are installed and importing it starts no service. **Zero real QQ native handlers are
+implemented or verified.** See `qq_transport/README.md` for the exact contract.
+
+Mutations are claimed durably before invocation; pending/unknown claims cannot be
+automatically retried. Complete responses are immutable and replayable. Events retain
+source fields and account separation and are acknowledged in insertion order. A crash
+after remote acceptance but before local acknowledgement can replay the same event ID:
+this is at-least-once delivery, not an exactly-once network guarantee. Application-level
+acknowledgement for the existing AstrBot reverse WebSocket remains unimplemented.
+
+The internal mutation interface requires an operation ID and therefore is not yet a
+drop-in OneBot compatibility layer. HTTP/WS serving, authentication, native QQ binding,
+real login, event subscription and lossless migration remain future work. No production
+adapter or configuration has been changed.
+
 ## Next validation gates
 
 1. Complete the installed backend API/event inventory and preserve configuration mappings.

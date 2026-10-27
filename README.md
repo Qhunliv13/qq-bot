@@ -43,7 +43,7 @@ python -m compileall -q plugin
 
 ## 独立 QQ 接入重写（未完成）
 
-目标是保留现有个人 QQ、全部功能与数据，完全移除 NapCat 运行依赖；当前仅完成依赖盘点与离线覆盖检查，**尚无可替换的独立原生 QQ 后端**。详见 [实施边界与验收计划](docs/QQ_TRANSPORT_REWRITE.md) 和 [最小已观察契约](docs/qq-transport-required.json)。运行 `python tools/qq_transport_parity_audit.py` 可审查声明覆盖，结果不授权生产切换；现有接入保持不变。
+目标是保留现有个人 QQ、全部功能与数据，完全移除 NapCat 运行依赖；当前已建立依赖清单、离线覆盖检查，以及独立的[事务／事件传输基础模块](qq_transport/README.md)；**尚无可替换的独立原生 QQ 后端**。详见 [实施边界与验收计划](docs/QQ_TRANSPORT_REWRITE.md) 和 [最小已观察契约](docs/qq-transport-required.json)。运行 `python tools/qq_transport_parity_audit.py` 可审查声明覆盖，结果不授权生产切换；现有接入保持不变。
 
 ## 版本与档案
 
