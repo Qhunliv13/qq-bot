@@ -37,6 +37,7 @@ python tools/validate_release.py
 | 回复与群策略 | [interim_reply_probe.py](interim_reply_probe.py)、[reply_finish_probe.py](reply_finish_probe.py)、[structured_silence_probe.py](structured_silence_probe.py)、[mention_policy_probe.py](mention_policy_probe.py) |
 | 转发与复制粘贴 | [message_transfer_probe.py](message_transfer_probe.py)：真实分发、剪贴板与防重流程，平台接口替换为本地记录器，不执行真实转发 |
 | 事实与队列 | [fact_queue_probe.py](fact_queue_probe.py)：临时事实库、只读 worker 目录、任务认领边界和锁等待合批；不改真实记忆，不验证真实入口耗时 |
+| 指令来源与条件 | [instruction_provenance_probe.py](instruction_provenance_probe.py)：真实模型、小型合成上下文验证历史条件与当前触发分离；工具副作用禁用，不代替真实大上下文行为验证 |
 | 上下文与附件 | [attachment_read_probe.py](attachment_read_probe.py)、[forward_read_probe.py](forward_read_probe.py)、[nontext_read_probe.py](nontext_read_probe.py)、[file_source_probe.py](file_source_probe.py) |
 | 能力与主动观察 | [capability_probe.py](capability_probe.py)、[dsh_capability_probe.py](dsh_capability_probe.py)、[autonomy_read_probe.py](autonomy_read_probe.py) |
 | 缓存与历史 | [cache_layout_probe.py](cache_layout_probe.py)、[cache_prefix_probe.py](cache_prefix_probe.py)、[history_cache_probe.py](history_cache_probe.py) |
