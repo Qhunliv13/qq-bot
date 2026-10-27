@@ -35,6 +35,8 @@ This is a single bot runtime with scoped state,not separate independent group ag
 
 20rows per other group is an explicit context overview budget,not deletion of stored history.
 Detailed questions can use history_search;records outside the overview remain on disk.
+This is not a persistent search index or vector database:current JSONL readers still scan
+selected history files,so disk cost grows with retained history. No latency speedup is claimed.
 After reload,cross-group context is reconstructed from persisted scopes rather than the old
 volatile global120-line buffer. Bot replies are also persisted as rendered lines;where their
 native sender/receipt metadata was not stored,the system does not invent it.
@@ -93,7 +95,7 @@ The sender uses the shared helper rather than maintaining a second regex impleme
 
 ## Verification
 
-1886pytestpassed,24platform skips,25subtests;syntax,pyflakes and release validation clean.
+1887pytestpassed,24platform skips,25subtests;syntax,pyflakes and release validation clean.
 95tool route/provider contracts remain passing offline. New actual-dispatch fixtures prove
 restart provenance,foreign-private rejection,public source preservation,full-history search
 outside bounded overview,valid nativeReply and malformed-control/literal-example handling.

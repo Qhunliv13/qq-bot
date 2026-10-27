@@ -122,8 +122,13 @@ async def probe(directory, output):
     report["web_fetch"] = {"ok": fetch.get("ok"), "body_chars": len(fetch.get("body") or ""), "error": fetch.get("error")}
     files = await original("vm_files", {"dir": "files"}, scope, event)
     report["vm_files"] = {"ok": bool(files.get("ok")), "error": files.get("error")}
+    # A synthetic release scope is not a public group or a real private origin.
+    # The new visibility boundary must reject it, rather than reading real chat
+    # histories to make an isolated probe appear successful.
     history = await original("history_search", {"keyword": "release-probe-no-match", "scope": scope, "limit": 1}, scope, event)
-    report["history_search"] = {"ok": bool(history.get("ok")), "count": history.get("count"), "error": history.get("error")}
+    report["history_search"] = {"ok": bool(history.get("ok")), "count": history.get("count"),
+                               "error": history.get("error"),
+                               "synthetic_scope_denied_as_expected": history.get("error") == "history_scope_not_visible"}
     output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(report, ensure_ascii=False))
     return 0 if ("self_status" in called and report["self_status_success"]
