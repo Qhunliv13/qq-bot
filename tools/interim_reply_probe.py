@@ -32,6 +32,10 @@ async def probe(directory,output):
     bot._send=record_send
     text='隔离验收：请先用 reply_now 自行写一句简短的开始说明，再调用 tool_describe 查看 workspace_read，得到结果后再用 reply_now 自行写一句不同的结果说明，最后用一句不同的话结束。不要发送图片、创建文件或调用其他工具。这里只验证能力，不规定任何固定话术。'
     event=ProbeEvent(text)
+    from release_probe_plugin.message_batch import message_record
+    # An isolated explicit test request must still be a real current-batch record;
+    # messages=[] would intentionally present no request and invite valid silence.
+    bot._turn_context['release-probe']['messages']=[message_record(event,text)]
     original=bot._dispatch_tool
     calls=[]
     async def dispatch(name,args,scope='',event=None):
