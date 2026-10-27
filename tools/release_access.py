@@ -21,6 +21,9 @@ from datetime import datetime, timezone
 
 
 NAME = "context-tools-20261025"
+# Command administration needs only the framework's separate tool scope. Existing
+# plugin releases retain their default scope and cannot silently gain privileges.
+SCOPES = ("plugin", "tool")
 # Pin the exact production source inspected on 2026-10-25; fail before import on drift.
 EXPECTED_FRAMEWORK = {
     "astrbot/core/db/sqlite.py": "cde20f8d33df9feb6a3580c95499a65c3b94ec490ed34f1c1d041516b5a070d4",
@@ -109,27 +112,32 @@ async def run(args: argparse.Namespace) -> dict:
     db_helper.inited = True
     db_helper.initialize = refuse_migration
     service = ApiKeyService(db_helper)
+    # A distinct name plus exact scope binds revocation to the same narrow key.
+    scope = getattr(args, "scope", "plugin")
+    if scope not in SCOPES:
+        raise ValueError("Unsupported administrative scope")
+    name = NAME if scope == "plugin" else "command-toggle-20261027"
     created_id = None
     try:
         if args.action == "revoke":
             # Limit revocation to this tool's named plugin-only release key.
             existing = await db_helper.get_api_key_by_id(args.key_id)
-            if existing is None or existing.name != NAME or existing.scopes != ["plugin"]:
+            if existing is None or existing.name != name or existing.scopes != [scope]:
                 raise RuntimeError("Refusing to revoke an unrelated API key")
             success = await service.revoke_api_key(args.key_id)
             return {"action": "revoke", "key_id": args.key_id, "success": bool(success)}
         result = await service.create_api_key(
-            {"name": NAME, "scopes": ["plugin"], "expires_in_days": 1},
+            {"name": name, "scopes": [scope], "expires_in_days": 1},
             created_by=args.created_by,
         )
         created_id = result["key_id"]
         # The raw secret is written only to the already restricted descriptor.
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             descriptor = None
-            json.dump({"key_id": created_id, "api_key": result["api_key"], "scopes": ["plugin"], "expires_at": result["expires_at"]}, handle)
+            json.dump({"key_id": created_id, "api_key": result["api_key"], "scopes": [scope], "expires_at": result["expires_at"]}, handle)
             handle.flush()
             os.fsync(handle.fileno())
-        return {"action": "create", "key_id": created_id, "scope": "plugin", "success": True}
+        return {"action": "create", "key_id": created_id, "scope": scope, "success": True}
     except Exception:
         if created_id is not None:
             # A failed secret delivery must not leave an untracked usable credential.
@@ -145,6 +153,7 @@ def main() -> None:
     """Require root and an explicit action; never echo exception values or secrets."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", required=True)
+    parser.add_argument("--scope", choices=SCOPES, default="plugin")
     actions = parser.add_subparsers(dest="action", required=True)
     create = actions.add_parser("create")
     create.add_argument("--credential", required=True)
