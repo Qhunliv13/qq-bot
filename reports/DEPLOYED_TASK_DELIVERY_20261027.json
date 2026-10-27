@@ -1,0 +1,68 @@
+{
+  "date": "2026-10-27",
+  "timezone": "Asia/Shanghai",
+  "deployed_commit": "d9982aaa742b3cba61db6bb35d4c12dd335b657c",
+  "initial_fix_commit": "bd3a4f02bed4e2ed84463b5142b3260857a2f214",
+  "status": "active",
+  "incident": {
+    "native_task_store_used": true,
+    "etf_attempted_rounds": 3,
+    "etf_sends_missing_native_receipt_and_group_delivery": 3,
+    "water_reminder_task_executed_but_no_confirmed_at_delivery": true,
+    "failed_route": "VM OneBot root health endpoint mistaken for action success",
+    "self_repair_native_arrays_verified": true,
+    "self_repair_was_tool_workaround_not_vm_source_edit": true
+  },
+  "verification": {
+    "full_pytest_passed": 1799,
+    "platform_skips": 24,
+    "subtests_passed": 25,
+    "unique_native_tool_schemas": 95,
+    "native_tool_routes_offline_audited": 95,
+    "all_95_external_actions_physically_executed": false,
+    "deployed_hashes_verified": 30,
+    "astrbot_pid_before_after": 714988,
+    "astrbot_restart_count": 0,
+    "vm_api_pid_before_after": 1436779,
+    "napcat_started_before_after": "2026-10-25T02:31:45.216352424Z",
+    "group_policies_unchanged": true,
+    "postrelease_tracebacks": 0,
+    "postrelease_batch_failures": 0,
+    "postrelease_reload_errors": 0,
+    "qq_test_messages_sent": 0,
+    "temporary_plugin_access_revoked": true
+  },
+  "fresh_live_readonly_edges": {
+    "sampled_utc8": "2026-10-27T12:25:31+08:00",
+    "onebot_status_login_version_group_list": "passed",
+    "vm_health_and_file_list": "passed",
+    "browser_cdp_version_and_targets": "passed",
+    "native_serializer_signature_and_source": "matched",
+    "existing_screenshot_transfer": "HTTP200 but incomplete diagnostic SSH transfer; not certified"
+  },
+  "reviewed_task_corrections": {
+    "opening_task_id": "cc015497",
+    "opening_deadline_before_epoch": 1793077159.7343097,
+    "opening_deadline_after_epoch": 1793077200.0,
+    "opening_deadline_after_utc8": "2026-10-27T13:00:00+08:00",
+    "opening_status_at_124841": "active",
+    "opening_execution_state_at_124841": "idle",
+    "opening_run_count_at_124841": 0,
+    "repeating_task_id": "33bce5a9",
+    "repeating_interval_s": 60,
+    "repeating_cadence": "fixed_rate",
+    "repeating_status_at_124841": "paused",
+    "not_resumed_early": true,
+    "goal_origin_and_other_tasks_preserved": true,
+    "corrections_triggered_qq_messages_or_task_runs": false,
+    "precision_cas_first_attempt_rejected_without_change": true,
+    "exact_json_epoch_cas_used_without_tolerance": true
+  },
+  "limits": [
+    "The 13:00 task was pending at the last recorded check, so this receipt does not assert it has already reminded anyone or resumed broadcasts.",
+    "A 25-second poll, shared execution queue and model latency remain; fixed_rate skips missed ticks and is not a hard-real-time promise.",
+    "Native upload acceptance is distinct from a confirmed send-message ID.",
+    "Arbitrary vm_exec/job code can still call any configured endpoint; only named tools are rerouted from the known legacy VM root implementation.",
+    "No retrospective duplicate water reminder, synthetic QQ test message, arbitrary recall or profile change was performed."
+  ]
+}
