@@ -1848,9 +1848,10 @@ class HiganPlugin(Star):
             _f("send_shot", "把截图发出去（不传 path 就发最新一张）；发不发由你决定",
                {"path": {"type": "string"}, "kind": {"type": "string"},
                 "user_id": {"type": "integer"}, "group_id": {"type": "integer"}}),
-            _f("qq_send", "主动发消息：kind=group|private|temp，可指定 user_id/group_id",
+            _f("qq_send", "通过原生消息数组主动发送，kind=group|private|temp；群内 mentions 指定 QQ ID，返回实际消息 ID 才确认。",
                {"kind": {"type": "string"}, "text": {"type": "string"},
-                "user_id": {"type": "integer"}, "group_id": {"type": "integer"}},
+                "user_id": {"type": "integer"}, "group_id": {"type": "integer"},
+                "mentions": {"type": "array", "items": {"type": "string"}}},
                ["kind", "text"]),
             _f("vm_hold_drag", "按住式拖拽：按住(x,y)先停 hold_ms，再拖 distance 像素后松开",
                {"x": {"type": "integer"}, "y": {"type": "integer"},
@@ -2214,6 +2215,8 @@ class HiganPlugin(Star):
                {"title": {"type": "string"}, "goal": {"type": "string"},
                 "interval_s": {"type": "integer"}, "repeat": {"type": "string"},
                 "delay_s": {"type": "integer"}, "scope": {"type": "string"},
+                "run_at": {"type": "number"},
+                "cadence": {"type": "string", "enum": ["after_completion", "fixed_rate"]},
                  "brief": {"type": "string"}, "resume_prompt": {"type": "string"},
                  "trigger_kind": {"type": "string", "enum": ["time", "script"]},
                  "trigger_script": {"type": "string"}, "trigger_every_s": {"type": "integer"}},
@@ -2236,7 +2239,9 @@ class HiganPlugin(Star):
             _f("task_add_script", "添加脚本条件触发任务；脚本应只读检测条件，返回非空真值才执行目标",
                {"title": {"type": "string"}, "goal": {"type": "string"},
                 "trigger_script": {"type": "string"}, "trigger_every_s": {"type": "integer"},
-                "resume_prompt": {"type": "string"}, "repeat": {"type": "string"}},
+                "resume_prompt": {"type": "string"}, "repeat": {"type": "string"},
+                "run_at": {"type": "number"}, "cadence": {"type": "string", "enum": ["after_completion", "fixed_rate"]},
+                "interval_s": {"type": "integer"}, "delay_s": {"type": "integer"}, "scope": {"type": "string"}},
                ["title", "trigger_script"]),
             _f("task_pause", "暂停明确指定的后台任务，不撤销已经完成的动作",
                {"id": {"type": "string"}, "note": {"type": "string"}}, ["id"]),
@@ -2248,7 +2253,8 @@ class HiganPlugin(Star):
                 "interval_s": {"type": "integer"}, "next_step_note": {"type": "string"},
                  "trigger_kind": {"type": "string"}, "trigger_script": {"type": "string"},
                  "trigger_every_s": {"type": "integer"}, "delay_s": {"type": "integer"},
-                 "repeat": {"type": "string"}, "goal": {"type": "string"}}),
+                 "repeat": {"type": "string"}, "goal": {"type": "string"},
+                 "run_at": {"type": "number"}, "cadence": {"type": "string", "enum": ["after_completion", "fixed_rate"]}}),
         ]
 
     async def _dispatch_tool(self, name: str, args: dict, scope: str = "", event=None) -> dict:
@@ -2862,7 +2868,39 @@ class HiganPlugin(Star):
                     raise ValueError("destination")
             except (TypeError, ValueError):
                 return {"ok": False, "error": "invalid_delivery_destination"}
-            return await self._vm_tool(name, delivery)
+            destination = ("private:" if delivery["kind"] == "private" else "") + str(delivery[key])
+            if not self._policy_allows(event, destination):
+                return {"ok": False, "error": "destination_policy_denied"}
+            from .qq_native_actions import media_kind, upload, prepare_container_file
+            local = Path(str(delivery.get("path") or ""))
+            if not local.is_absolute():
+                local = Path(HIGAN_ROOT) / local
+            if not local.is_file():
+                return {"ok": False, "delivered": False, "error": "local_file_required"}
+            if local.stat().st_size > 200 * 1024 * 1024:
+                return {"ok": False, "delivered": False, "error": "file_too_large"}
+            send_as = media_kind(str(local))
+            if send_as != "file":
+                return {"ok": True, "deliver": "plugin", "path": str(local),
+                        "send_as": send_as, "name": str(delivery.get("name") or local.name)}
+            async def native_upload(action, parameters):
+                """Submit the actual upload action, never the VM welcome endpoint."""
+                return await asyncio.to_thread(self._onebot_http, action, parameters)
+            return await upload(delivery["kind"], str(local),
+                                user_id=int(delivery.get("user_id") or 0),
+                                group_id=int(delivery.get("group_id") or 0),
+                                name=str(delivery.get("name") or ""), call_action=native_upload,
+                                prepare_file=prepare_container_file)
+        if name == "vm_recall":
+            if scope.startswith("private:") or not scope.isdigit():
+                return {"ok": False, "error": "group_scope_required"}
+            if not self._policy_allows(event, scope):
+                return {"ok": False, "error": "destination_policy_denied"}
+            from .qq_native_actions import recall
+            async def native_recall(action, parameters):
+                """Use the same checked native bridge for readback and explicit own-message recall."""
+                return await asyncio.to_thread(self._onebot_http, action, parameters)
+            return await recall(scope, count=args.get("count", 1), call_action=native_recall)
         if name == "send_shot":
             return await self._vm_tool("vm_send_shot", args) or await self._vm_tool("send_shot", args)
         if name == "qq_send":
@@ -2881,12 +2919,21 @@ class HiganPlugin(Star):
             destination = ("private:" if kind == "private" else "") + str(target)
             if not self._policy_allows(event, destination):
                 return {"ok": False, "error": "destination_policy_denied"}
+            options = {"mentions": args["mentions"]} if "mentions" in args else {}
             return await self._qq_send(kind, str(args.get("text") or ""),
                                        int(target) if kind == "private" else int(args.get("user_id") or 0),
-                                       int(target) if kind != "private" else 0)
+                                       int(target) if kind != "private" else 0, **options)
         if name in ("task_add", "task_add_script") and tasks is not None:
             if name == "task_add_script" and not str(args.get("trigger_script") or "").strip():
                 return {"ok": False, "error": "trigger_script_required"}
+            destination = str(args.get("scope") or scope or "")
+            origin = str(getattr(event, "unified_msg_origin", "") or "")
+            # Scope and authentic framework origin must describe the SAME transport.
+            # A task cannot use another scope while keeping this event's destination.
+            if not origin:
+                return {"ok": False, "error": "task_origin_missing", "scheduler_accepted": False}
+            if not destination or destination != str(scope):
+                return {"ok": False, "error": "task_destination_mismatch", "scheduler_accepted": False}
             task = tasks.add(str(args.get("title") or ""), str(args.get("goal") or ""),
                              str(args.get("scope") or scope or ""),
                              int(args.get("interval_s") or 120),
@@ -2897,10 +2944,13 @@ class HiganPlugin(Star):
                               "script" if name == "task_add_script" else str(args.get("trigger_kind") or "time"),
                              str(args.get("trigger_script") or ""),
                               int(args.get("trigger_every_s") or 60),
-                              origin=str(getattr(event, "unified_msg_origin", "") or ""))
+                              origin=origin, run_at=args.get("run_at"),
+                              cadence=str(args.get("cadence") or "after_completion"))
             logger.info("[higan] 新任务 %s「%s」每 %ds 一次（scope=%s）"
                         % (task["id"], task["title"], task["interval_s"], task["scope"]))
-            return {"ok": True, "task": task}
+            return {"ok": True, "task": task, "scheduler_accepted": task.get("status") == "active",
+                    "delivery": "not_attempted", "scheduled_at": task.get("next_run_at"),
+                    "cadence": task.get("cadence", "after_completion")}
         if name == "task_list" and tasks is not None:
             return {"ok": True, "tasks": tasks.listing(str(args.get("scope") or scope or ""),
                 only_active=bool(args.get("only_active", False)), status=str(args.get("status") or ""))}
@@ -2913,7 +2963,8 @@ class HiganPlugin(Star):
                                str(args.get("trigger_script") or ""),
                                 int(args.get("trigger_every_s") or 0),
                                 repeat=str(args.get("repeat") or ""), delay_s=args.get("delay_s"),
-                                goal=str(args.get("goal") or ""))
+                                goal=str(args.get("goal") or ""), run_at=args.get("run_at"),
+                                cadence=str(args.get("cadence") or ""))
             logger.info("[higan] 任务改写：%s" % [h.get("title") for h in hit])
             return {"ok": bool(hit), "updated": [h.get("title") for h in hit]}
         if name in ("task_done", "task_cancel", "task_pause", "task_resume") and tasks is not None:
@@ -2926,30 +2977,16 @@ class HiganPlugin(Star):
         return await self._vm_tool(name, args)
 
     def _send_onebot_sync(self, scope: str, text: str) -> bool:
-        """通过本机 NapCat 直接发消息（群号或 private:QQ ✓）。"""
-        import urllib.request
-
-        if not text:
-            return False
-        body = None
-        if scope.startswith("private:"):
-            body = {"action": "send_private_msg", "params": {
-                "user_id": int(scope.split(":", 1)[1]), "message": text}}
-        else:
-            digits = "".join(ch for ch in scope if ch.isdigit())
-            if not digits:
-                return False
-            body = {"action": "send_group_msg", "params": {
-                "group_id": int(digits), "message": text}}
+        """Use the shared native payload and require a message-ID receipt, never root health."""
+        from .qq_delivery import build, receipt
         try:
-            req = urllib.request.Request("http://127.0.0.1:13000/",
-                                         data=json.dumps(body).encode("utf-8"), method="POST")
-            req.add_header("Content-Type", "application/json")
-            with urllib.request.urlopen(req, timeout=20) as resp:
-                ok = json.loads(resp.read().decode("utf-8", "replace")).get("status") == "ok"
-            return bool(ok)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("[higan] 后台任务发送失败：%r", str(exc)[:120])
+            private = scope.startswith("private:")
+            action, parameters = build("private" if private else "group", text,
+                                       user_id=int(scope.split(":", 1)[1]) if private else 0,
+                                       group_id=0 if private else int(scope))
+            return bool(receipt(self._onebot_http(action, parameters), action=action).get("delivered"))
+        except Exception as exc:
+            logger.warning("[higan] 后台原生发送未确认：%s", type(exc).__name__)
             return False
 
     async def _run_task_once(self, task: dict) -> str:
@@ -2979,9 +3016,9 @@ class HiganPlugin(Star):
                         continue
                     if not hasattr(self, "_execution_lock"):
                         self._execution_lock = asyncio.Lock()
-                    # Chat already waiting has priority over an unattended tick.
-                    if self._execution_lock.locked() or any(self._pending.values()):
-                        break
+                    # Join the same FIFO lock without preempting in-flight work.
+                    # Repeated polling/skip under pending chat could otherwise
+                    # starve an explicitly scheduled task indefinitely.
                     async with self._execution_lock:
                         task = await asyncio.to_thread(tasks.claim, str(candidate["id"]))
                         if task is None:
@@ -2992,16 +3029,27 @@ class HiganPlugin(Star):
                             scope = str(task.get("scope") or "")
                             if text and scope:
                                 from .task_event import TaskEvent
-                                delivered = await self._send(TaskEvent(self, task), scope, text, decoded=True)
+                                final_event = TaskEvent(self, task)
+                                delivered = await self._send(final_event, scope, text, decoded=True)
+                                from .task_delivery import fresh, observe
+                                outcome = task.setdefault("_delivery_outcome", fresh())
+                                receipt = getattr(final_event, "last_delivery_receipt", None)
+                                observe(outcome, "qq_send", receipt or {"ok": False, "error": "delivery_not_confirmed"})
                                 if not delivered:
                                     raise RuntimeError("task_reply_delivery_failed")
-                            tasks.mark(task["id"], text[:200], success=True, claim_id=task["claim_id"])
+                            from .task_delivery import completion_failure
+                            failure = completion_failure(task.get("_delivery_outcome") or {})
+                            if failure:
+                                raise RuntimeError(failure)
+                            evidence = {"outcome": task["_delivery_outcome"]} if "_delivery_outcome" in task else {}
+                            tasks.mark(task["id"], text[:200], success=True, claim_id=task["claim_id"], **evidence)
                         except asyncio.CancelledError:
                             tasks.mark(task["id"], "interrupted_outcome_requires_review", success=False,
                                        claim_id=task["claim_id"])
                             raise
                         except Exception as exc:
-                            tasks.mark(task["id"], type(exc).__name__, success=False, claim_id=task["claim_id"])
+                            evidence = {"outcome": task["_delivery_outcome"]} if "_delivery_outcome" in task else {}
+                            tasks.mark(task["id"], type(exc).__name__, success=False, claim_id=task["claim_id"], **evidence)
                             logger.warning("[higan] 后台任务暂停待检查：%s", task["id"])
                         finally:
                             self._task_executing = False
@@ -3018,28 +3066,18 @@ class HiganPlugin(Star):
             logger.info("[higan] 后台任务循环已启动（25s 一轮）")
 
     async def _qq_send(self, kind: str, text: str, user_id: int = 0,
-                       group_id: int = 146045691) -> dict:
-        """[proactive-social] 主动发消息（群 / 私聊 / 群临时会话）✓。"""
-        import asyncio
-        import urllib.request
-
-        if not (text or "").strip():
-            return {"ok": False, "error": "empty text"}
-        payload = {"kind": kind, "text": text, "user_id": int(user_id or 0),
-                   "group_id": int(group_id or 146045691)}
-
-        def _post() -> dict:
-            body = json.dumps(payload).encode("utf-8")
-            req = urllib.request.Request("http://127.0.0.1:18003/vm/qq/send",
-                                         data=body, method="POST")
-            req.add_header("Content-Type", "application/json")
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                return json.loads(resp.read().decode("utf-8", "replace"))
-
+                       group_id: int = 0, mentions: list | None = None) -> dict:
+        """Publish native message segments and require the actual platform message ID."""
+        from .qq_delivery import send
+        async def native_action(action, parameters):
+            """Share the inspected native bridge; do not route through the VM health endpoint."""
+            return await asyncio.to_thread(self._onebot_http, action, parameters)
         try:
-            return await asyncio.to_thread(_post)
-        except Exception as exc:  # noqa: BLE001
-            return {"ok": False, "error": repr(exc)[:200]}
+            return await send(kind, text, user_id=user_id, group_id=group_id,
+                              mentions=mentions, call_action=native_action)
+        except (ValueError, TypeError) as exc:
+            return {"ok": False, "delivered": False, "error": "invalid_send_arguments",
+                    "error_type": type(exc).__name__}
 
     # [proactive-social]
     async def _free_tick(self) -> None:
@@ -3204,6 +3242,12 @@ class HiganPlugin(Star):
         turn["task"] = task_context
         # Delivery receipts belong only to this native turn, never a later chat.
         turn["_interim_replies"] = []
+        from .task_delivery import fresh
+        turn["_delivery_outcome"] = fresh()
+        if task_context is not None:
+            # Share only this local attempt's evidence; never rewrite persisted
+            # completion based on a model's prose or inferred intention.
+            task_context["_delivery_outcome"] = turn["_delivery_outcome"]
         if turn.get("trigger") is not None:
             # Supply neutral unfinished-work/capability/error state instead of
             # inventing a human wake message or requiring a tool every turn.
@@ -3269,6 +3313,8 @@ class HiganPlugin(Star):
                 except Exception as exc:  # noqa: BLE001
                     return {"ok": False, "error": repr(exc)[:200]}
             res = await self._dispatch_tool(name, args, group, event=event)
+            from .task_delivery import observe
+            turn["_delivery_outcome"]["last_tools"].append(name)
             if name in ("read_forward", "forward_expand") and isinstance(res, dict):
                 # A later explicit forward read must have the same visual input
                 # pathway as a directly received forward, after its native tool
@@ -3307,6 +3353,9 @@ class HiganPlugin(Star):
                     logger.info("[higan] 截图已喂回模型：%s" % path)
             except Exception:  # noqa: BLE001
                 pass
+            # Media delivery completes after dispatch; inspect the final receipt,
+            # not the intermediate request to deliver it through the plugin.
+            observe(turn["_delivery_outcome"], name, res)
             return res
 
         def _observe(observation):
@@ -3320,7 +3369,13 @@ class HiganPlugin(Star):
                 logger.warning("[higan] 工具观察落盘失败：%s", type(exc).__name__)
 
         async def _tool(name, args):
-            """Only an explicit task state change revokes a continuation, never unrelated chat."""
+            """Only explicit state changes revoke work; failed sends cannot be called complete."""
+            from .task_delivery import completion_failure
+            if name == "task_done" and task_context is not None:
+                failure = completion_failure(turn["_delivery_outcome"])
+                if failure:
+                    return {"ok": False, "error": failure,
+                            "reason": "An attempted delivery has not been confirmed."}
             if task_context is not None:
                 current = self._tasks_mod().listing(only_active=False)
                 state = next((row.get("status") for row in current

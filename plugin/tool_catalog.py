@@ -70,11 +70,11 @@ TOOL_DESCRIPTIONS = {
     "remember": "将文本条目保存到通用长期记忆。",
     "vm_fetch": "将指定 URL 或消息关联的文件下载到虚拟机。",
     "send_shot": "发送指定路径的截图，未指定路径时发送最新截图。",
-    "qq_send": "向指定群聊、私聊或临时会话发送文本消息。",
+    "qq_send": "向指定群聊、私聊或临时会话发送原生数组消息；群内 mentions 为 QQ ID 列表，文本按字面发送，返回 message_id 才确认。",
     "vm_hold_drag": "在指定坐标按住指定时长，再横向拖动指定距离并松开。",
     "vm_frame_eval": "在匹配指定条件的页面或 iframe 中执行 JavaScript 并返回结果。",
     "vm_slider_drag": "从指定坐标横向拖动滑块指定距离。",
-    "task_add": "添加后台任务，支持定时调度或脚本条件触发。",
+    "task_add": "添加后台任务。run_at 为绝对 Unix 秒、delay_s 为相对延迟，不能混用；fixed_rate 保持周期相位且跳过错过轮次。返回状态和实际到期时间，创建不代表已执行或已送达。",
     "read_forward": "根据转发标识读取合并转发消息的内容。",
     "forward_expand": "根据转发标识或消息号展开合并转发消息中的各条内容。",
     "history_search": "按关键词搜索聊天档案，支持限定会话范围和结果数量。",
@@ -84,7 +84,7 @@ TOOL_DESCRIPTIONS = {
     "task_add_script": "添加由脚本检测结果触发的后台任务。",
     "task_pause": "暂停指定后台任务的后续调度。",
     "task_resume": "恢复指定已暂停后台任务的调度。",
-    "task_update": "更新后台任务的目标、简述、续做提示、调度或触发配置。",
+    "task_update": "更新后台任务的目标、简述、续做提示、调度或触发配置；run_at 为绝对 Unix 秒，不能与 delay_s 混用，cadence 可选 fixed_rate 或 after_completion。",
 }
 
 

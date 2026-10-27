@@ -38,10 +38,53 @@ class TaskEvent:
         return str(self.task.get("resume_prompt") or self.task.get("goal") or "")
 
     async def send(self, chain):
-        """Send through the same framework destination; never silently claim delivery without an origin."""
+        """Reuse native serialization and require a platform receipt for the saved scope.
+
+        Context.send_message returns a routing boolean (or None), not a OneBot
+        receipt. Dispatch once through the existing transport instead: retrying
+        an unknown outcome here could duplicate a visible task message.
+        """
+        import asyncio
+
+        from .qq_delivery import receipt
+
+        # A later failed send must not expose an earlier receipt as its outcome.
+        self.last_delivery_receipt = None
         if not self.unified_msg_origin:
             raise RuntimeError("task_origin_missing")
-        return await self.plugin.context.send_message(self.unified_msg_origin, chain)
+        scope = str(self.task.get("scope") or "")
+        private = scope.startswith("private:")
+        destination = scope.removeprefix("private:") if private else scope
+        # Bind the authenticated stored origin to the same explicit destination;
+        # a task must never turn a group origin into an arbitrary private send.
+        origin = self.unified_msg_origin.split(":")
+        expected_type = "FriendMessage" if private else "GroupMessage"
+        if (len(origin) != 3 or not origin[0] or origin[1] != expected_type
+                or origin[2] != destination or not destination.isascii()
+                or not destination.isdigit() or int(destination) <= 0):
+            raise RuntimeError("task_origin_scope_mismatch")
+
+        # This is the installed adapter's actual async serializer, including
+        # media conversion, native mentions and file URI handling. Do not build
+        # a competing renderer or fall back to CQ string interpolation.
+        from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
+
+        messages = await AiocqhttpMessageEvent._parse_onebot_json(chain)
+        if not isinstance(messages, list) or not messages or any(
+                not isinstance(segment, dict) or not isinstance(segment.get("type"), str)
+                or not isinstance(segment.get("data"), dict) for segment in messages):
+            raise RuntimeError("task_message_invalid")
+        action = "send_private_msg" if private else "send_group_msg"
+        parameters = {"user_id" if private else "group_id": int(destination), "message": messages}
+        response = await asyncio.to_thread(self.plugin._onebot_http, action, parameters)
+        result = receipt(response, action=action)
+        if not result["delivered"]:
+            # Never forward raw platform errors, credentials or misleading
+            # acknowledgements to callers that treat no exception as delivery.
+            raise RuntimeError("task_delivery_unconfirmed")
+        self.last_delivery_receipt = result
+        # The existing foreground sender consumes iterable native receipt items.
+        return [result]
 
 
 class _TaskAPI:

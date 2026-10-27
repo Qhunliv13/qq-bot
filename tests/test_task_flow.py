@@ -8,7 +8,8 @@ stubbed: no main import, startup, subprocess, sockets, or live credentials.
 import asyncio
 import copy
 import json
-from types import SimpleNamespace
+import sys
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -20,24 +21,43 @@ from plugin.task_event import TaskEvent
 production = integration.production
 
 
+@pytest.fixture
+def native_task_serializer(monkeypatch):
+    """Expose the adapter serializer boundary without importing AstrBot or sending IO."""
+    chains = []
+
+    async def parse(chain):
+        """Record the original framework chain and return native fixture segments."""
+        chains.append(chain)
+        return [{"type": "text", "data": {"text": "offline serialized message"}}]
+
+    module = ModuleType("astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event")
+    module.AiocqhttpMessageEvent = SimpleNamespace(_parse_onebot_json=parse)
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+    return chains
+
+
 @pytest.mark.parametrize("scope, group", [("42", "42"), ("private:10001", "")])
-def test_task_event_is_data_and_sending_adapter_only(scope, group):
+def test_task_event_is_data_and_sending_adapter_only(scope, group, native_task_serializer):
     """Stored destinations do not fabricate a human identity or bypass framework send."""
-    sent, actions = [], []
+    actions = []
     chain = MessageChain().message("offline task answer")
 
     async def send_message(origin, outgoing):
-        """Expose the awaited framework boundary with no actual message transport."""
-        sent.append((origin, outgoing))
-        return [{"message_id": "task-send-1"}]
+        """Reject the boolean-only routing API; native receipt transport must be used."""
+        pytest.fail("TaskEvent used unconfirmed context.send_message")
 
     def onebot(action, parameters):
-        """Record action forwarding without contacting the local OneBot HTTP service."""
+        """Record native action forwarding without contacting any OneBot HTTP service."""
         actions.append((action, parameters))
+        if action in {"send_group_msg", "send_private_msg"}:
+            return {"status": "ok", "retcode": 0, "data": {"message_id": 72001}}
         return {"ok": True, "nonce": "local-action-result"}
 
     plugin = SimpleNamespace(context=SimpleNamespace(send_message=send_message), _onebot_http=onebot)
-    task = {"scope": scope, "origin": "offline:stored-origin", "resume_prompt": "continue saved work"}
+    destination = scope.removeprefix("private:")
+    origin = "offline:%s:%s" % ("FriendMessage" if scope.startswith("private:") else "GroupMessage", destination)
+    task = {"scope": scope, "origin": origin, "resume_prompt": "continue saved work"}
     event = TaskEvent(plugin, task)
     assert event.get_group_id() == group
     assert event.get_sender_id() == "background-task"
@@ -46,29 +66,35 @@ def test_task_event_is_data_and_sending_adapter_only(scope, group):
     assert event.get_messages() == event.message_obj.message == []
     assert event.message_obj.message_id == ""
     assert event.get_message_str() == "continue saved work"
-    assert asyncio.run(event.send(chain)) == [{"message_id": "task-send-1"}]
-    assert sent == [(task["origin"], chain)]
+    action = "send_private_msg" if scope.startswith("private:") else "send_group_msg"
+    receipt = {"ok": True, "delivered": True, "message_id": "72001", "action": action}
+    assert asyncio.run(event.send(chain)) == [receipt]
+    assert event.last_delivery_receipt == receipt
+    assert native_task_serializer == [chain]
+    assert actions == [(action, {"user_id" if scope.startswith("private:") else "group_id": int(destination),
+                                "message": [{"type": "text", "data": {"text": "offline serialized message"}}]})]
     assert asyncio.run(event.bot.api.call_action("get_msg", message_id=1234)) == {
         "ok": True, "nonce": "local-action-result"}
-    assert actions == [("get_msg", {"message_id": 1234})]
+    assert actions[-1] == ("get_msg", {"message_id": 1234})
 
 
-def test_task_event_missing_origin_and_failed_delivery_never_claim_success():
-    """A task with no valid send boundary fails closed rather than returning fake receipts."""
-    sent = []
+def test_task_event_missing_origin_and_failed_delivery_never_claim_success(native_task_serializer):
+    """Missing origins and failed native acknowledgements fail closed without fake receipts."""
+    actions = []
 
-    async def fail_send(origin, chain):
-        """Model a framework send rejection without any actual delivery attempt."""
-        sent.append(origin)
-        raise RuntimeError("offline-framework-rejected")
+    def fail_send(action, parameters):
+        """Model a native rejection without any actual delivery attempt."""
+        actions.append((action, parameters))
+        return {"status": "failed", "retcode": 100, "data": None}
 
-    plugin = SimpleNamespace(context=SimpleNamespace(send_message=fail_send))
+    plugin = SimpleNamespace(_onebot_http=fail_send)
     with pytest.raises(RuntimeError, match="task_origin_missing"):
         asyncio.run(TaskEvent(plugin, {"scope": "42"}).send(MessageChain()))
-    assert sent == []
-    with pytest.raises(RuntimeError, match="offline-framework-rejected"):
-        asyncio.run(TaskEvent(plugin, {"scope": "42", "origin": "offline:42"}).send(MessageChain()))
-    assert sent == ["offline:42"]
+    assert actions == [] and native_task_serializer == []
+    with pytest.raises(RuntimeError, match="task_delivery_unconfirmed"):
+        asyncio.run(TaskEvent(plugin, {"scope": "42", "origin": "offline:GroupMessage:42"}).send(MessageChain()))
+    assert actions[0][0] == "send_group_msg"
+    assert len(native_task_serializer) == 1
 
 
 def test_run_task_once_passes_same_saved_context_to_foreground_path(production):
@@ -90,18 +116,19 @@ def test_run_task_once_passes_same_saved_context_to_foreground_path(production):
     assert scope == task["scope"] and text == task["resume_prompt"] and has_image is False
 
 
-def test_task_native_path_reuses_tools_transcript_media_and_saved_goal(production, monkeypatch, tmp_path):
+def test_task_native_path_reuses_tools_transcript_media_and_saved_goal(production, monkeypatch, tmp_path,
+                                                                     native_task_serializer):
     """Persisted work uses the foreground evidence/media flow, including actual send receipts."""
     plugin, sent, executed = production(), [], []
     media = tmp_path / "task-media.png"
     media.write_bytes(b"offline durable-task media")
-    task = {"id": "own", "scope": "42", "origin": "offline:task-origin",
+    task = {"id": "own", "scope": "42", "origin": "offline:GroupMessage:42",
             "goal": "saved-goal-nonce", "resume_prompt": "continue-nonce", "claim_id": "own-claim"}
 
-    async def send_message(origin, chain):
-        """Keep framework delivery inspectable and entirely local."""
-        sent.append((origin, chain))
-        return [{"message_id": "task-media-delivered"}]
+    def send_native(action, parameters):
+        """Keep the final native receipt transport inspectable and entirely local."""
+        sent.append((action, parameters))
+        return {"status": "ok", "retcode": 0, "data": {"message_id": 72002}}
 
     async def dispatch(name, args, scope="", event=None):
         """Replace only the external producer and retain the task event at dispatch."""
@@ -109,7 +136,7 @@ def test_task_native_path_reuses_tools_transcript_media_and_saved_goal(productio
         executed.append((name, scope))
         return {"ok": True, "deliver": "plugin", "path": str(media)}
 
-    plugin.context.send_message = send_message
+    plugin._onebot_http = send_native
     plugin._tasks_mod = lambda: SimpleNamespace(listing=lambda **kwargs: [dict(task, status="active")])
     plugin._dispatch_tool = dispatch
     saved_context = copy.deepcopy(task)
@@ -117,10 +144,12 @@ def test_task_native_path_reuses_tools_transcript_media_and_saved_goal(productio
     assert asyncio.run(plugin._run_task_once(task)) == "Saved work completed."
     assert executed == [("task_media", "42")]
     assert task["last_tools"] == ["task_media"]
-    assert sent[0][0] == "offline:task-origin"
-    assert any(isinstance(component, Image) and component.file == str(media) for component in sent[0][1].chain)
+    assert sent[0][0] == "send_group_msg" and sent[0][1]["group_id"] == 42
+    assert any(isinstance(component, Image) and component.file == str(media)
+               for component in native_task_serializer[0].chain)
     envelope = json.loads(requests[0]["messages"][1]["content"])
-    assert envelope["task"] == saved_context
+    assert {key: value for key, value in envelope["task"].items() if key != "_delivery_outcome"} == saved_context
+    assert envelope["task"]["_delivery_outcome"]["delivery_attempted"] is False
     assert envelope["task"]["goal"] == "saved-goal-nonce"
     assert envelope["conversation"]["scope"] == "42"
     assert envelope["conversation"]["messages"][0]["body"] == "continue-nonce"
@@ -171,6 +200,9 @@ def test_task_loop_claims_before_execution_marks_only_own_task(production, monke
         assert isinstance(event, TaskEvent) and event.task["id"] == "owned"
         assert scope == "42" and text == "confirmed task answer"
         trace.append(("send", event.task["id"]))
+        if outcome == "success":
+            event.last_delivery_receipt = {"ok": True, "delivered": True,
+                                           "message_id": "72003", "action": "send_group_msg"}
         return None if outcome == "delivery_error" else text
 
     async def tick(delay):
@@ -184,7 +216,15 @@ def test_task_loop_claims_before_execution_marks_only_own_task(production, monke
     assert len(marks) == 1
     task_id, result, kwargs = marks[0]
     assert task_id == "owned"
-    assert kwargs == {"success": outcome == "success", "claim_id": "claim-owned"}
+    assert kwargs["success"] is (outcome == "success") and kwargs["claim_id"] == "claim-owned"
+    if outcome in {"success", "delivery_error"}:
+        evidence = kwargs["outcome"]
+        assert evidence["delivery_attempted"] is True
+        assert evidence["delivery_confirmed"] is (outcome == "success")
+        assert evidence["delivery_unknown"] is (outcome == "delivery_error")
+        assert evidence["delivery_message_ids"] == (["72003"] if outcome == "success" else [])
+    else:
+        assert "outcome" not in kwargs
     expected = {"success": "confirmed task answer", "execution_error": "ValueError",
                 "delivery_error": "RuntimeError", "cancelled": "interrupted_outcome_requires_review"}
     assert result == expected[outcome]
@@ -194,34 +234,57 @@ def test_task_loop_claims_before_execution_marks_only_own_task(production, monke
 
 @pytest.mark.parametrize("blocker", ["pending_chat", "active_execution"])
 def test_task_loop_defers_claims_to_waiting_chat_or_active_execution(production, monkeypatch, blocker):
-    """A background candidate must not be claimed while foreground work owns the session."""
+    """Wait for active execution without claiming; pending chat alone cannot starve due work."""
     plugin, claims = production(), []
-    plugin._tasks_mod = lambda: SimpleNamespace(
-        due=lambda: [{"id": "deferred", "origin": "offline:42"}], claim=claims.append)
-    ticks = []
 
-    async def tick(delay):
-        """Stop after inspecting exactly one due batch, without a real timer."""
-        ticks.append(delay)
-        if len(ticks) > 1:
-            plugin._stopping = True
+    def claim(task_id):
+        """Stop after the candidate reaches exclusive ownership, without external effects."""
+        assert plugin._execution_lock.locked()
+        claims.append(task_id)
+        plugin._stopping = True
+        return None
+
+    plugin._tasks_mod = lambda: SimpleNamespace(
+        due=lambda: [{"id": "deferred", "origin": "offline:42"}], claim=claim)
 
     async def scenario():
-        """Hold the actual shared lock or queue throughout the scheduler's first tick."""
-        plugin._execution_lock = asyncio.Lock()
-        if blocker == "pending_chat":
-            plugin._pending["42"] = [("accepted chat",)]
-        else:
+        """Use a queue-entry event rather than timer races, always bounded by wait_for."""
+        waiting = asyncio.Event()
+
+        class ObservedLock(asyncio.Lock):
+            """Expose an actual contended acquire so the test can release foreground ownership."""
+
+            async def acquire(self):
+                """Announce only blocked acquisitions before awaiting the real FIFO lock."""
+                if self.locked():
+                    waiting.set()
+                return await super().acquire()
+
+        async def tick(delay):
+            """Advance the native scheduler tick without sleeping or counting polling loops."""
+            assert delay == 25
+
+        plugin._execution_lock = ObservedLock()
+        plugin._pending["42"] = [("accepted chat",)]
+        if blocker == "active_execution":
             await plugin._execution_lock.acquire()
+        monkeypatch.setattr(asyncio, "sleep", tick)
+        runner = asyncio.create_task(plugin._task_loop())
         try:
-            await plugin._task_loop()
+            if blocker == "active_execution":
+                await asyncio.wait_for(waiting.wait(), timeout=2)
+                assert claims == []
+                plugin._execution_lock.release()
+            await asyncio.wait_for(runner, timeout=2)
         finally:
+            if not runner.done():
+                runner.cancel()
+                await asyncio.gather(runner, return_exceptions=True)
             if plugin._execution_lock.locked():
                 plugin._execution_lock.release()
 
-    monkeypatch.setattr(asyncio, "sleep", tick)
     asyncio.run(scenario())
-    assert claims == [] and ticks == [25, 25]
+    assert claims == ["deferred"]
 
 
 def test_task_safe_final_raises_instead_of_successful_acknowledgement(production, monkeypatch):

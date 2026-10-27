@@ -13,11 +13,14 @@ import pytest
 
 from test_autonomy_boundaries import _extra_method
 from test_production_integration import Event, Reply, _provider
+import test_task_flow as task_flow
 from plugin.autonomous_turn import run_turn
 from plugin.message_batch import message_record
 from plugin.task_event import TaskEvent
 
 pytest_plugins = ("test_production_integration",)
+# Share the adapter leaf stub; production serialization and receipt handling stay wired.
+native_task_serializer = task_flow.native_task_serializer
 
 
 async def _no_forward(event):
@@ -26,7 +29,7 @@ async def _no_forward(event):
 
 
 @pytest.fixture
-def background(production, tmp_path, monkeypatch):
+def background(production, tmp_path, monkeypatch, native_task_serializer):
     """Keep real send/history/controller logic with isolated local transport and clock."""
     monkeypatch.setenv("HIGAN_ROOT", str(tmp_path))
     monkeypatch.setenv("HIGAN_BATCH_WINDOW", "0")
@@ -41,12 +44,20 @@ def background(production, tmp_path, monkeypatch):
     plugin._download_image = AsyncMock(side_effect=AssertionError("unexpected image download"))
     deliveries = []
 
-    async def send_message(origin, chain):
-        """Record actual TaskEvent transport without contacting a platform."""
-        deliveries.append((origin, chain))
-        return [{"message_id": "background-sent-1"}]
+    def send_native(action, parameters):
+        """Confirm one native delivery, retaining the serializer's original chain."""
+        assert action in {"send_group_msg", "send_private_msg"}
+        private = action == "send_private_msg"
+        destination = parameters["user_id" if private else "group_id"]
+        origin = "offline-native:%s:%s" % (
+            "FriendMessage" if private else "GroupMessage", destination)
+        # Serialization captures input, but only this confirmed transport records delivery.
+        response = {"status": "ok", "retcode": 0,
+                    "data": {"message_id": 73002}}
+        deliveries.append((origin, native_task_serializer[-1]))
+        return response
 
-    plugin.context.send_message = send_message
+    plugin._onebot_http = send_native
     # The shared fixture deliberately loads only selected production methods.
     if not hasattr(plugin, "_autonomy_controller"):
         method, namespace = _extra_method(plugin, "_autonomy_controller")
@@ -61,13 +72,15 @@ def background(production, tmp_path, monkeypatch):
     triggers = controller.opportunities(plugin._group_policy("42"))
     assert triggers, "the test must run a real due opportunity, not a deferred turn"
     return SimpleNamespace(plugin=plugin, controller=controller, clock=clock,
-                           origin=origin, triggers=triggers, deliveries=deliveries)
+                           origin=origin, triggers=triggers, deliveries=deliveries,
+                           serialized=native_task_serializer)
 
 
 def _quiet(native, event=None):
     """Reject transport, bot history, sent IDs, cooldown, and media side effects."""
     plugin = native.plugin
     assert native.deliveries == []
+    assert native.serialized == []
     if event is not None:
         assert event.sent == []
         assert event.actions == []

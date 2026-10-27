@@ -369,3 +369,93 @@ def test_completed_plan_does_not_complete_task_and_can_be_cleared(tasks):
         {"id": "all_done", "content": "checked", "status": "completed"}], 0)
     assert by_id(tasks)[task["id"]]["status"] == "active"
     assert tasks.update_plan(task["id"], "one", [], 1)["revision"] == 2
+
+
+@pytest.mark.parametrize("invalid", [True, False, -1, float("inf"), float("nan"), "1200"])
+def test_absolute_deadline_rejects_invalid_values(tasks, invalid):
+    """Absolute times are finite nonnegative numbers, never booleans or coerced strings."""
+    with pytest.raises(ValueError, match="run_at"):
+        tasks.add("absolute", "goal", "one", run_at=invalid)
+    task = tasks.add("existing", "goal", "one")
+    before = by_id(tasks)
+    with pytest.raises(ValueError, match="run_at"):
+        tasks.update(task_id=task["id"], run_at=invalid)
+    assert by_id(tasks) == before
+
+
+def test_absolute_deadline_and_delay_conflicts(tasks):
+    """Add's historical zero default is allowed; update rejects even explicit zero delays."""
+    task = tasks.add("absolute", "goal", "one", run_at=2000.25)
+    assert task["next_run_at"] == 2000.25
+    assert tasks.due(now=2000.24) == []
+    assert tasks.due(now=2000.25)[0]["id"] == task["id"]
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        tasks.add("conflict", "goal", "one", delay_s=1, run_at=2000)
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        tasks.update(task_id=task["id"], delay_s=0, run_at=3000)
+    updated = tasks.update(task_id=task["id"], run_at=3000)[0]
+    assert updated["next_run_at"] == 3000
+    claimed = tasks.claim(task["id"], now=3000)
+    tasks.update(task_id=task["id"], run_at=4000)
+    assert by_id(tasks)[task["id"]]["next_run_at"] == 3000
+    assert by_id(tasks)[task["id"]]["claim_id"] == claimed["claim_id"]
+
+
+@pytest.mark.parametrize("completion, expected", [(1050, 1060), (1060, 1120), (1210, 1240)])
+def test_fixed_rate_skips_missed_ticks_without_overlap(tasks, monkeypatch, completion, expected):
+    """Fixed-rate deadlines retain phase and skip missed ticks rather than burst-replay."""
+    task = tasks.add("fixed", "goal", "one", interval_s=60, cadence="fixed_rate")
+    claimed = tasks.claim(task["id"])
+    assert tasks.due(now=9999) == []
+    monkeypatch.setattr(tasks.time, "time", lambda: completion)
+    assert tasks.mark(task["id"], claim_id=claimed["claim_id"])
+    state = by_id(tasks)[task["id"]]
+    assert state["next_run_at"] == expected
+    assert expected > completion
+    assert tasks.due(now=completion) == []
+
+
+def test_cadence_update_and_legacy_default(tasks, monkeypatch):
+    """Opt-in fixed cadence is validated; absent legacy metadata stays completion-relative."""
+    task = tasks.add("legacy", "goal", "one", interval_s=60)
+    with pytest.raises(ValueError, match="cadence"):
+        tasks.add("invalid", "goal", "one", cadence="typo")
+    with pytest.raises(ValueError, match="cadence"):
+        tasks.update(task_id=task["id"], cadence="typo")
+    tasks.update(task_id=task["id"], cadence="fixed_rate")
+    assert by_id(tasks)[task["id"]]["cadence"] == "fixed_rate"
+    rows = tasks._load()
+    rows[0].pop("cadence")
+    tasks._save(rows)
+    claimed = tasks.claim(task["id"])
+    monkeypatch.setattr(tasks.time, "time", lambda: 1100)
+    tasks.mark(task["id"], claim_id=claimed["claim_id"])
+    assert by_id(tasks)[task["id"]]["next_run_at"] == 1160
+
+
+def test_mark_copies_typed_delivery_outcome_and_preserves_idempotency(tasks):
+    """Persist actual delivery evidence independently of scheduler success, without aliasing."""
+    task = tasks.add("outcome", "goal", "one")
+    claimed = tasks.claim(task["id"])
+    outcome = {"delivery_attempted": True, "delivery_confirmed": False,
+               "delivery_failed": False, "delivery_unknown": True,
+               "delivery_message_ids": [], "last_tools": ["qq_send"]}
+    assert tasks.mark(task["id"], "unknown", success=False, claim_id=claimed["claim_id"], outcome=outcome)
+    state = by_id(tasks)[task["id"]]
+    assert state["status"] == "paused" and state["last_outcome"] == outcome
+    outcome["last_tools"].append("later")
+    assert by_id(tasks)[task["id"]]["last_outcome"]["last_tools"] == ["qq_send"]
+    assert not tasks.mark(task["id"], outcome={"delivery_confirmed": True})
+    assert by_id(tasks)[task["id"]] == state
+
+
+@pytest.mark.parametrize("outcome", [{"secret": "no"}, {"delivery_confirmed": 1},
+                                     {"delivery_message_ids": [1]}, {"last_tools": "qq_send"}])
+def test_mark_rejects_untyped_or_arbitrary_outcome_without_acknowledging(tasks, outcome):
+    """Malformed or arbitrary data cannot silently change the persisted claim or delivery evidence."""
+    task = tasks.add("outcome", "goal", "one")
+    claimed = tasks.claim(task["id"])
+    before = by_id(tasks)
+    with pytest.raises(ValueError):
+        tasks.mark(task["id"], claim_id=claimed["claim_id"], outcome=outcome)
+    assert by_id(tasks) == before

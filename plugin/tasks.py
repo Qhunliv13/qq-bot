@@ -7,14 +7,17 @@
   · 任务字段：id / title / goal / scope（群号或 private:QQ）/ interval_s / repeat /
               status（active|paused|done|cancelled）/ next_run_at / nudges / origin
   · `due()` 只列候选；执行前必须 `claim(id)`，执行后 `mark(id, result, ...)`。
-  · `repeat="once"` 仅执行成功后 done；`repeat="every"` 从完成时间起按 interval_s 循环。
-  · 失败暂停，运行中的认领永久保留，避免不确定副作用被自动重试（单进程线程安全）。
+  · `repeat="once"` 仅执行成功后 done；循环默认从完成时间重排，fixed_rate 显式保持原定相位。
+  · 失败暂停，运行中的认领永久保留，避免不确定副作用被自动重试（线程安全，POSIX 进程间加锁）。
 """
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from functools import wraps
 import json
+import math
+from numbers import Real
 import os
 import re
 import subprocess
@@ -24,16 +27,50 @@ import threading
 import time
 import uuid
 
-# The plugin runs scheduler and tool calls in threads of one process.
+# Threads share a reentrant lock; POSIX processes additionally coordinate on a
+# stable sidecar inode, since atomic replacement changes the JSON file's inode.
 _LOCK = threading.RLock()
+_TRANSACTION_LOCAL = threading.local()
+
+
+@contextmanager
+def _file_transaction_lock():
+    """Hold a per-store POSIX advisory lock, reusing nested ownership in this thread.
+
+    Windows keeps the historical thread-only behavior. All cooperating POSIX
+    writers must call the public decorated API rather than _save directly.
+    """
+    if os.name != "posix":
+        yield
+        return
+    import fcntl
+
+    path = os.path.abspath(STORE) + ".lock"
+    owned = getattr(_TRANSACTION_LOCAL, "paths", None)
+    if owned is None:
+        owned = _TRANSACTION_LOCAL.paths = set()
+    if path in owned:
+        # Reopening/flocking a second descriptor could deadlock a nested call.
+        yield
+        return
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "a", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        owned.add(path)
+        try:
+            yield
+        finally:
+            owned.remove(path)
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def _locked(function):
-    """Serialize read/modify/write transactions in this single-process store."""
+    """Serialize the entire read/modify/write transaction across threads and POSIX processes."""
     @wraps(function)
     def wrapper(*args, **kwargs):
         with _LOCK:
-            return function(*args, **kwargs)
+            with _file_transaction_lock():
+                return function(*args, **kwargs)
     return wrapper
 
 ROOT = "/root/higan/tasks"
@@ -71,17 +108,60 @@ def _save(tasks: list) -> None:
             os.unlink(tmp)
 
 
+def _scheduled_at(run_at: float | None, delay_s, now: float, *, updating: bool = False) -> float:
+    """Validate explicit absolute deadlines without confusing them with relative delays."""
+    if run_at is None:
+        return now + max(0, int(delay_s or 0))
+    if isinstance(run_at, bool) or not isinstance(run_at, Real) or not math.isfinite(run_at) or run_at < 0:
+        raise ValueError("run_at must be a finite nonnegative epoch number")
+    # add historically defaults delay_s to zero; update uses None for omission.
+    if (updating and delay_s is not None) or (not updating and delay_s not in (None, 0)):
+        raise ValueError("run_at and delay_s are mutually exclusive")
+    return float(run_at)
+
+
+def _cadence(value: str) -> str:
+    """Reject misspelled scheduling modes rather than silently changing timing."""
+    if value not in ("after_completion", "fixed_rate"):
+        raise ValueError("cadence must be after_completion or fixed_rate")
+    return value
+
+
+def _outcome_snapshot(outcome: dict | None) -> dict | None:
+    """Copy only typed delivery evidence; never store arbitrary tool payloads or secrets."""
+    if outcome is None:
+        return None
+    boolean_keys = {"delivery_attempted", "delivery_confirmed", "delivery_failed", "delivery_unknown"}
+    list_keys = {"delivery_message_ids", "last_tools"}
+    if not isinstance(outcome, dict) or set(outcome) - boolean_keys - list_keys:
+        raise ValueError("invalid outcome metadata")
+    result = {}
+    for key, value in outcome.items():
+        if key in boolean_keys:
+            if type(value) is not bool:
+                raise ValueError("delivery outcome flags must be booleans")
+            result[key] = value
+        else:
+            if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+                raise ValueError("delivery message IDs and tool names must be string lists")
+            result[key] = list(value)
+    return result
+
+
 @_locked
 def add(title: str, goal: str, scope: str, interval_s: int = 120,
         repeat: str = "every", delay_s: int = 0,
         brief: str = "", resume_prompt: str = "",
         trigger_kind: str = "time", trigger_script: str = "",
-        trigger_every_s: int = 60, origin: str = "") -> dict:
+        trigger_every_s: int = 60, origin: str = "", *,
+        run_at: float | None = None, cadence: str = "after_completion") -> dict:
     """Upsert by normalized scope/title; never resume paused or running work."""
     tasks = _load()
     title = (title or "未命名任务")[:60]
     scope = scope or ""
     now = time.time()
+    deadline = _scheduled_at(run_at, delay_s, now)
+    cadence = _cadence(cadence)
     for task in tasks:
         if task.get("scope") == scope and task.get("title") == title \
                 and task.get("status") in ("active", "paused"):
@@ -89,6 +169,7 @@ def add(title: str, goal: str, scope: str, interval_s: int = 120,
                 "goal": (goal or task.get("goal") or title)[:1200],
                 "interval_s": max(MIN_INTERVAL, int(interval_s or 120)),
                 "repeat": repeat if repeat in ("once", "every") else "every",
+                "cadence": cadence,
                 "trigger_kind": trigger_kind if trigger_kind in ("time", "script") else "time",
                 "trigger_script": (trigger_script or "")[:6000],
                 "trigger_every_s": max(MIN_INTERVAL, int(trigger_every_s or 60)),
@@ -101,7 +182,7 @@ def add(title: str, goal: str, scope: str, interval_s: int = 120,
             if origin:
                 task["origin"] = origin
             if task.get("execution_state") != "running":
-                task["next_run_at"] = now + max(0, int(delay_s or 0))
+                task["next_run_at"] = deadline
             _save(tasks)
             return task
     if len(tasks) >= MAX_TASKS:
@@ -122,10 +203,11 @@ def add(title: str, goal: str, scope: str, interval_s: int = 120,
         "scope": scope or "",
         "interval_s": max(MIN_INTERVAL, int(interval_s or 120)),
         "repeat": repeat if repeat in ("once", "every") else "every",
+        "cadence": cadence,
         "status": "active",
         "nudges": 0,
         "created_at": now,
-        "next_run_at": now + max(0, int(delay_s or 0)),
+        "next_run_at": deadline,
         "execution_state": "idle",
         "origin": origin or "",
         "note": "",
@@ -302,13 +384,14 @@ def claim(task_id: str, now: float | None = None) -> dict | None:
 
 @_locked
 def mark(task_id: str, result: str = "", schedule_next: bool = True, *,
-         success: bool = True, claim_id: str = "") -> bool:
+         success: bool = True, claim_id: str = "", outcome: dict | None = None) -> bool:
     """Acknowledge only a claimed task; repeat acknowledgements are no-ops.
 
     The obsolete mark(result) form deliberately cannot bulk-update tasks.
     Pass claim_id to reject stale completions after an explicit resume/reclaim.
     Failures pause rather than blindly replay possibly mutating operations.
     """
+    evidence = _outcome_snapshot(outcome)
     tasks = _load()
     now = time.time()
     for task in tasks:
@@ -319,6 +402,8 @@ def mark(task_id: str, result: str = "", schedule_next: bool = True, *,
         task["execution_state"] = "succeeded" if success else "failed"
         task["completed_at"] = now
         task["note"] = (result or "")[:300]
+        if evidence is not None:
+            task["last_outcome"] = evidence
         task["nudges"] = int(task.get("nudges") or 0) + 1
         task.pop("claim_id", None)
         # task_done/cancel/pause from inside the task must not be undone here.
@@ -331,7 +416,15 @@ def mark(task_id: str, result: str = "", schedule_next: bool = True, *,
             elif not schedule_next:
                 task["status"] = "paused"
             else:
-                task["next_run_at"] = now + max(MIN_INTERVAL, int(task.get("interval_s") or 120))
+                interval = max(MIN_INTERVAL, int(task.get("interval_s") or 120))
+                if task.get("cadence") == "fixed_rate":
+                    # Preserve the last scheduled tick, skipping missed ticks without catch-up bursts.
+                    anchor = float(task["next_run_at"])
+                    ticks = max(1, math.floor((now - anchor) / interval) + 1)
+                    task["next_run_at"] = anchor + ticks * interval
+                else:
+                    # Missing cadence on legacy records retains completion-relative behavior.
+                    task["next_run_at"] = now + interval
         _save(tasks)
         return True
     return False
@@ -391,12 +484,16 @@ def update(task_id: str = "", title: str = "", brief: str = "",
            next_step_note: str = "", trigger_kind: str = "",
            trigger_script: str = "", trigger_every_s: int = 0,
            origin: str = "", repeat: str = "", delay_s: int | None = None,
-           goal: str = "") -> list:
+           goal: str = "", *, run_at: float | None = None,
+           cadence: str = "") -> list:
     """Incrementally update active/paused work, preserving claims and context.
 
     Existing positional arguments retain their meaning. New scheduling options
     are opt-in; delay_s=0 means now, while None leaves the deadline unchanged.
     """
+    deadline = _scheduled_at(run_at, delay_s, time.time(), updating=True) if run_at is not None or delay_s is not None else None
+    if cadence:
+        _cadence(cadence)
     tasks = _load()
     hit = []
     for task in tasks:
@@ -410,8 +507,10 @@ def update(task_id: str = "", title: str = "", brief: str = "",
                 task["origin"] = origin
             if repeat in ("once", "every"):
                 task["repeat"] = repeat
-            if delay_s is not None and task.get("execution_state") != "running":
-                task["next_run_at"] = time.time() + max(0, int(delay_s))
+            if cadence:
+                task["cadence"] = cadence
+            if deadline is not None and task.get("execution_state") != "running":
+                task["next_run_at"] = deadline
             if brief:
                 task["brief"] = brief[:600]
             if resume_prompt:

@@ -11,11 +11,14 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from test_production_integration import Event, Reply, _call, _provider
+import test_task_flow as task_flow
 from plugin.autonomous_turn import AutonomyEvent
 from plugin.message_batch import message_record
 from plugin.task_event import TaskEvent
 
 pytest_plugins = ("test_production_integration",)
+# Reuse the existing leaf-module serializer fixture rather than creating another renderer.
+native_task_serializer = task_flow.native_task_serializer
 
 
 async def _no_forward(event):
@@ -34,7 +37,7 @@ def _final(text, targets=None):
 
 
 @pytest.fixture
-def interim(production, tmp_path, monkeypatch):
+def interim(production, tmp_path, monkeypatch, native_task_serializer):
     """Keep production methods while isolating only external transport and wake edges."""
     monkeypatch.setenv("HIGAN_ROOT", str(tmp_path))
     monkeypatch.setenv("HIGAN_BATCH_WINDOW", "0")
@@ -47,6 +50,22 @@ def interim(production, tmp_path, monkeypatch):
     plugin._pick_sticker_reviewed = AsyncMock(side_effect=AssertionError("unexpected sticker"))
     plugin._download_image = AsyncMock(side_effect=AssertionError("unexpected download"))
     plugin._vm_tool = AsyncMock(return_value={"ok": True, "files": ["measurement-17.txt"]})
+    plugin._native_deliveries = []
+
+    def send_native(action, parameters):
+        """Record receipt-confirmed native sends without replacing TaskEvent.send."""
+        assert action in {"send_group_msg", "send_private_msg"}
+        private = action == "send_private_msg"
+        destination = parameters["user_id" if private else "group_id"]
+        origin = "offline-native:%s:%s" % (
+            "FriendMessage" if private else "GroupMessage", destination)
+        # Keep the original chain inspectable; serialization itself is not delivery.
+        response = {"status": "ok", "retcode": 0,
+                    "data": {"message_id": 73001}}
+        plugin._native_deliveries.append((origin, native_task_serializer[-1]))
+        return response
+
+    plugin._onebot_http = send_native
     return plugin
 
 
@@ -217,15 +236,8 @@ def test_interim_literal_json_is_decoded_once_and_exact_final_is_not_duplicated(
 def test_no_batch_direct_dispatch_uses_real_destination_not_fabricated_targets(interim, kind, targets, delivered):
     """Typed background events may send unattributed text, never invented message IDs."""
     plugin = interim
-    outgoing = []
-
-    async def send_message(origin, chain):
-        """Observe the real TaskEvent transport instead of replacing shared delivery."""
-        outgoing.append((origin, chain))
-        return [{"message_id": "background-interim-1"}]
-
-    plugin.context.send_message = send_message
-    origin = "offline:GroupMessage:42"
+    outgoing = plugin._native_deliveries
+    origin = "offline-native:GroupMessage:42"
     event = (TaskEvent(plugin, {"scope": "42", "origin": origin}) if kind == "task"
              else AutonomyEvent(plugin, "42", origin, []))
     args = {"text": "An unattributed local background observation."}
@@ -297,21 +309,14 @@ def test_prior_turn_delivery_never_suppresses_next_turn_final(interim, monkeypat
 def test_background_native_final_guard_suppresses_confirmed_exact_duplicate(interim, monkeypatch):
     """Callers outside foreground handling share same-turn exact final suppression."""
     plugin = interim
-    event = TaskEvent(plugin, {"scope": "42", "origin": "offline:GroupMessage:42"})
-    delivered = []
-
-    async def send_message(origin, chain):
-        """Capture an authentic background transport confirmation."""
-        delivered.append(chain)
-        return [{"message_id": "background-final-1"}]
-
-    plugin.context.send_message = send_message
+    event = TaskEvent(plugin, {"scope": "42", "origin": "offline-native:GroupMessage:42"})
+    delivered = plugin._native_deliveries
     body = "A background result already delivered explicitly."
     requests = _provider(monkeypatch, [
         ("private", [_call("reply_now", {"text": body})]), (_final(body, []), []),
     ])
     result = asyncio.run(plugin._decide_tools_first(event, "42", "", False))
     assert result == ""
-    assert _texts(delivered) == [body]
+    assert _texts([chain for _, chain in delivered]) == [body]
     assert _bot_history(plugin) == ["彼岸酱：" + body]
     assert len(requests) == 2

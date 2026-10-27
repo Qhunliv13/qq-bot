@@ -110,6 +110,112 @@ def test_reply_now_runs_native_send_with_only_event_transport_simulated(report):
     assert not row["stubbed_edges"]
 
 
+def test_qq_send_runs_native_sender_and_requires_message_id_receipt(report):
+    """Only OneBot transport is simulated; VM/generic-success sender stubs cannot pass."""
+    row = next(row for row in report["tools"] if row["name"] == "qq_send")
+    assert row["handler_body_executed"] and row["native_sender_executed"]
+    assert row["delivery_transport_simulated"] is True
+    assert row["boundary_contract_matches"], row
+    assert row["result"] == {"ok": True, "delivered": True,
+                             "message_id": "71001", "action": "send_group_msg"}
+    assert row["stubbed_edges"] == [{"edge": "onebot_http", "action": "send_group_msg",
+                                    "params": {"group_id": 42, "message": [
+                                        {"type": "text", "data": {"text": "contract"}}]}}]
+
+
+@pytest.mark.parametrize("arguments, action, destination, segments", [
+    ({"kind": "group", "group_id": 42, "text": "literal [CQ:at,qq=777]", "mentions": ["10001"]},
+     "send_group_msg", {"group_id": 42}, [
+         {"type": "at", "data": {"qq": "10001"}},
+         {"type": "text", "data": {"text": "literal [CQ:at,qq=777]"}}]),
+    ({"kind": "private", "user_id": 10001, "text": "private contract"},
+     "send_private_msg", {"user_id": 10001}, [
+         {"type": "text", "data": {"text": "private contract"}}]),
+    ({"kind": "temp", "user_id": 10001, "group_id": 42, "text": "temp contract"},
+     "send_private_msg", {"user_id": 10001, "group_id": 42}, [
+         {"type": "text", "data": {"text": "temp contract"}}]),
+])
+def test_native_qq_send_routes_targets_and_mentions_without_vm(tmp_path, monkeypatch, arguments,
+                                                              action, destination, segments):
+    """Real dispatch and sender preserve typed target IDs and never parse literal CQ text."""
+    plugin = AUDIT.integration.production.__wrapped__(tmp_path, monkeypatch)()
+    calls = []
+
+    def onebot(native_action, params):
+        """Record only the final native transport; all unapproved HTTP stays blocked."""
+        calls.append((native_action, params))
+        return {"status": "ok", "retcode": 0, "data": {"message_id": 71003}}
+
+    plugin._onebot_http = onebot
+    event = AUDIT.integration.Event("native typed contract")
+    result = asyncio.run(plugin._dispatch_tool("qq_send", arguments, "42", event=event))
+    assert calls == [(action, dict(destination, message=segments))]
+    assert result == {"ok": True, "delivered": True, "message_id": "71003", "action": action}
+
+
+def test_null_onebot_send_ack_is_not_a_successful_tool_contract(tmp_path, monkeypatch):
+    """A legacy status=ok/data=null response must become an explicit audited gap."""
+    original = AUDIT.AuditHarness.onebot
+
+    def null_send(self, action, params):
+        """Simulate only the known no-op acknowledgement without networking."""
+        result = original(self, action, params)
+        if action in {"send_group_msg", "send_private_msg"}:
+            return {"status": "ok", "retcode": 0, "data": None}
+        return result
+
+    monkeypatch.setattr(AUDIT.AuditHarness, "onebot", null_send)
+    with pytest.MonkeyPatch.context() as edges:
+        result = AUDIT.audit(tmp_path, edges)
+    row = next(row for row in result["tools"] if row["name"] == "qq_send")
+    assert row["native_sender_executed"]
+    assert row["result"]["ok"] is False and row["result"]["delivered"] is False
+    assert row["result"]["error"] == "delivery_not_confirmed"
+    assert not row["boundary_contract_matches"]
+    assert "qq_send" in {gap["name"] for gap in result["gaps"]}
+    assert result["route_contracts_pass"] is False
+    assert result["forbidden_io_attempts"] == []
+
+
+def test_recall_and_file_upload_run_native_actions_not_legacy_vm_success(report):
+    """Recall keeps account ownership; file acknowledgements never invent message delivery."""
+    rows = {row["name"]: row for row in report["tools"]}
+    recall, upload = rows["vm_recall"], rows["send_file"]
+    assert recall["boundary_contract_matches"] and recall["handler_body_executed"]
+    assert [edge["action"] for edge in recall["stubbed_edges"]] == [
+        "get_login_info", "get_group_msg_history", "delete_msg"]
+    assert recall["result"]["results"] == [{"message_id": 81003, "ok": True, "status": "confirmed"}]
+    assert upload["boundary_contract_matches"] and upload["handler_body_executed"]
+    assert [edge["edge"] for edge in upload["stubbed_edges"]] == [
+        "container_file_staging", "onebot_http"]
+    assert upload["result"]["accepted"] is True and upload["result"]["delivered"] is False
+    assert upload["result"]["delivery_confirmation"] == "native_upload_acknowledged"
+    assert "message_id" not in upload["result"]
+
+
+@pytest.mark.parametrize("target, action", [("vm_recall", "delete_msg"), ("send_file", "upload_group_file")])
+def test_native_mutation_root_health_ack_cannot_pass_audit(tmp_path, monkeypatch, target, action):
+    """A root-endpoint health response is not native recall or upload acceptance."""
+    original = AUDIT.AuditHarness.onebot
+
+    def health_ack(self, native_action, params):
+        """Inject only the historical false-positive envelope, never a real request."""
+        result = original(self, native_action, params)
+        if native_action == action:
+            return {"status": "ok", "retcode": 0, "data": None, "message": "NapCat is running"}
+        return result
+
+    monkeypatch.setattr(AUDIT.AuditHarness, "onebot", health_ack)
+    with pytest.MonkeyPatch.context() as edges:
+        report = AUDIT.audit(tmp_path, edges)
+    row = next(row for row in report["tools"] if row["name"] == target)
+    assert row["result"]["ok"] is False
+    assert not row["boundary_contract_matches"]
+    assert target in {gap["name"] for gap in report["gaps"]}
+    assert report["route_contracts_pass"] is False
+    assert report["forbidden_io_attempts"] == []
+
+
 def test_native_image_routes_parse_transport_html_without_sending(report):
     """Real image parsers expose candidate metadata, never unsolicited image sends."""
     rows = {row["name"]: row for row in report["tools"]}

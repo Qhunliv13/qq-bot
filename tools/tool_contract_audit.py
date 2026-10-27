@@ -37,7 +37,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT / "tests") not in sys.path:
     sys.path.insert(0, str(ROOT / "tests"))
 import test_production_integration as integration  # noqa: E402
-from plugin import browser_eval, memory, tasks, workspace_tools, tool_discovery, delegation, task_planning, image_search  # noqa: E402
+from plugin import browser_eval, memory, tasks, workspace_tools, tool_discovery, delegation, task_planning, image_search, qq_native_actions  # noqa: E402
 import base64
 import hashlib
 from plugin.autonomy import AutonomousController  # noqa: E402
@@ -145,10 +145,10 @@ EXPECTED_VM_PATHS = {
     "vm_job_list": "/vm/exec",
     "vm_key": "/vm/key", "vm_job_start": "/vm/exec", "vm_job_status": "/vm/exec",
     "vm_job_cancel": "/vm/exec", "vm_exec": "/vm/exec", "vm_files": "/vm/files?dir=files",
-    "vm_recall": "/vm/qq/recall", "vm_eval": "/vm/eval", "vm_slider_gap": "/vm/slider/gap",
+    "vm_eval": "/vm/eval", "vm_slider_gap": "/vm/slider/gap",
     "mail_recent": "/vm/mail/recent", "mail_list": "/vm/mail/list",
     "mail_web_login": "/vm/mail/web_login", "mail_web_read": "/vm/mail/web_read",
-    "mail_code": "/vm/mail/code", "send_file": "/vm/qq/send_file", "vm_fetch": "/vm/download",
+    "mail_code": "/vm/mail/code", "vm_fetch": "/vm/download",
     "send_shot": "/vm/qq/send_shot", "vm_hold_drag": "/vm/hold_drag",
     "vm_frame_eval": "/vm/frame_eval", "vm_slider_drag": "/vm/slider/drag",
 }
@@ -310,7 +310,8 @@ class AuditHarness:
         # async parent routes execute unchanged, with no DNS/image-byte requests.
         self.patch.setattr(image_search, "get_public", self.image_metadata_fetch)
         self.plugin._onebot_http = self.onebot
-        self.plugin._qq_send = self.qq_send
+        self.patch.setattr(qq_native_actions, "prepare_container_file", self.prepare_upload)
+        # Keep the actual native sender; only its final OneBot transport is fake.
         self.plugin._deliver_media = self.deliver
         self.patch.setattr(urllib.request, "urlopen", self.urlopen)
         self.patch.setattr(socket.socket, "connect", self.forbidden)
@@ -454,15 +455,27 @@ class AuditHarness:
             "get_stranger_info": {"long_nick": self.signature},
             "set_self_longnick": None, "set_qq_profile": None,
             "send_qzone_msg": {"tid": "offline-contract-post"},
+            "send_group_msg": {"message_id": 71001},
+            "send_private_msg": {"message_id": 71002},
+            "get_group_msg_history": {"messages": [
+                {"message_id": 81001, "sender": {"user_id": 90001}},
+                {"message_id": 81002, "sender": {"user_id": 10001}},
+                {"message_id": 81003, "sender": {"user_id": 90001}}]},
+            "delete_msg": None, "upload_group_file": None, "upload_private_file": None,
         }
         if action in social_data:
             return {"status": "ok", "retcode": 0, "data": copy.deepcopy(social_data[action])}
         return {"messages": [{"sender": {"nickname": "fixture"}, "message": [{"type": "text", "data": {"text": "contract"}}]}]}
 
-    async def qq_send(self, *args):
-        """Record intended delivery only, never contact a messaging platform."""
-        self.edges.append({"edge": "qq_send"})
-        return {"ok": True, "simulated": True, "message_id": "offline-contract"}
+    async def prepare_upload(self, path, container="napcat"):
+        """Simulate only container staging; validate the fixture file without Docker IO."""
+        local = Path(path).resolve()
+        if local.parent != self.root.resolve() or not local.is_file() or container != "napcat":
+            self.denied.append("unapproved upload staging source")
+            raise AssertionError("upload escaped isolated fixture")
+        self.edges.append({"edge": "container_file_staging", "source": str(local),
+                           "staged": "/tmp/offline-upload.txt"})
+        return "/tmp/offline-upload.txt"
 
     async def deliver(self, *args):
         """Acknowledge the stubbed media edge without opening attachment bytes."""
@@ -499,6 +512,11 @@ class AuditHarness:
     def prepare(self, name):
         """Seed independent local state so mutation routes do not depend on tool order."""
         args = copy.deepcopy(CASES[name])
+        if name == "send_file":
+            # The native upload validates an actual local file before its fake edge.
+            upload = self.root / "contract-upload.txt"
+            upload.write_text("isolated upload contract\n", encoding="utf-8")
+            args["path"] = str(upload.resolve())
         if name.startswith("workspace_"):
             if name in {"workspace_write", "workspace_edit"}:
                 args["path"] = name + ".txt"
@@ -609,7 +627,7 @@ async def _audit(root, monkeypatch, batch_size):
 
         def trace(frame, action, arg):
             """Record only real dispatcher/VM source lines for this one invocation."""
-            if action == "line" and frame.f_code.co_name in {"_dispatch_tool", "_vm_tool", "_execute_tool", "_send"}:
+            if action == "line" and frame.f_code.co_name in {"_dispatch_tool", "_vm_tool", "_execute_tool", "_send", "_qq_send"}:
                 executed_lines.add((frame.f_code.co_name, frame.f_lineno))
             return trace
 
@@ -668,6 +686,45 @@ async def _audit(root, monkeypatch, batch_size):
                     and images[0].get("title") == "Contract & image")
             else:
                 entry["boundary_contract_matches"] &= bool(native_edges) and native_edges[0]["url"] == args["url"]
+        elif name == "vm_recall":
+            native_edges = [edge for edge in entry["stubbed_edges"] if edge["edge"] == "onebot_http"]
+            entry["boundary_contract_matches"] = (
+                native_edges == [
+                    {"edge": "onebot_http", "action": "get_login_info", "params": {}},
+                    {"edge": "onebot_http", "action": "get_group_msg_history", "params": {"group_id": 42, "count": 20}},
+                    {"edge": "onebot_http", "action": "delete_msg", "params": {"message_id": 81003}}]
+                and isinstance(result, dict) and result.get("ok") is True
+                and result.get("recall_count") == 1
+                and result.get("results") == [{"message_id": 81003, "ok": True, "status": "confirmed"}]
+                and not any(edge["edge"] == "vm_http_stub" for edge in entry["stubbed_edges"]))
+        elif name == "send_file":
+            native_edges = [edge for edge in entry["stubbed_edges"] if edge["edge"] == "onebot_http"]
+            entry["boundary_contract_matches"] = (
+                len(native_edges) == 1 and native_edges[0]["action"] == "upload_group_file"
+                and native_edges[0]["params"].get("group_id") == 42
+                and native_edges[0]["params"].get("name") == "contract-upload.txt"
+                and native_edges[0]["params"].get("file") == "/tmp/offline-upload.txt"
+                and len([edge for edge in entry["stubbed_edges"] if edge["edge"] == "container_file_staging"]) == 1
+                and isinstance(result, dict) and result.get("ok") is True
+                and result.get("accepted") is True and result.get("delivered") is False
+                and result.get("delivery_confirmation") == "native_upload_acknowledged"
+                and "message_id" not in result
+                and not any(edge["edge"] == "vm_http_stub" for edge in entry["stubbed_edges"]))
+        elif name == "qq_send":
+            # The real sender must emit a native action and retain its message ID;
+            # neither a generic VM success nor status=ok/null can prove delivery.
+            native_edges = [edge for edge in entry["stubbed_edges"] if edge["edge"] == "onebot_http"]
+            entry["native_sender_executed"] = any(function == "_qq_send" for function, _ in executed_lines)
+            entry["delivery_transport_simulated"] = True
+            entry["boundary_contract_matches"] = (
+                entry["native_sender_executed"]
+                and native_edges == [{"edge": "onebot_http", "action": "send_group_msg",
+                                      "params": {"group_id": 42, "message": [
+                                          {"type": "text", "data": {"text": args["text"]}}]}}]
+                and isinstance(result, dict) and result.get("ok") is True
+                and result.get("delivered") is True and result.get("message_id") == "71001"
+                and result.get("action") == "send_group_msg"
+                and not any(edge["edge"] == "vm_http_stub" for edge in entry["stubbed_edges"]))
         elif name in EXPECTED_SOCIAL_ACTIONS:
             native_edges = [edge for edge in entry["stubbed_edges"] if edge["edge"] == "onebot_http"]
             entry["boundary_contract_matches"] = [edge["action"] for edge in native_edges] == EXPECTED_SOCIAL_ACTIONS[name]
@@ -732,7 +789,7 @@ async def _audit(root, monkeypatch, batch_size):
         batch = [name for name in names[offset:offset + batch_size] if name in CASES]
         plugin = harness.make_plugin()
         harness.bind_worker(plugin)
-        for attribute in ("manifest", "_autonomy_controller", "_tasks_mod", "_web_search", "_fetch_page", "_onebot_http", "_qq_send", "_deliver_media"):
+        for attribute in ("manifest", "_autonomy_controller", "_tasks_mod", "_web_search", "_fetch_page", "_onebot_http", "_deliver_media"):
             setattr(plugin, attribute, getattr(harness.plugin, attribute))
         scope = str(4200 + offset)
         calls = []

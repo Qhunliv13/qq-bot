@@ -129,7 +129,7 @@ def _load_production(root):
         "_to_plain", "_strip_tool_syntax", "_strip_internal", "_tool_schemas",
         "_task_tool_schemas", "_llm_tools", "_dispatch_tool", "_decide_tools_first",
         "_send", "_deliver_media", "_at_components", "on_message", "_drain_previous_instances",
-        "_web_search", "_search_queries", "_run_task_once", "_task_loop", "_ensure_task_loop", "_vm_tool",
+        "_web_search", "_search_queries", "_run_task_once", "_task_loop", "_ensure_task_loop", "_vm_tool", "_qq_send",
     }
     original = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "HiganPlugin")
     methods = [copy.deepcopy(node) for node in original.body
@@ -914,21 +914,39 @@ def test_vm_negative_or_excessive_hold_rejected_before_transport(production, hol
     ("private:10001", {"kind": "group", "group_id": 77}, {"kind": "group", "group_id": 77, "user_id": 0}),
     ("42", {"kind": "private", "user_id": 88}, {"kind": "private", "user_id": 88, "group_id": 0}),
 ])
-def test_send_file_routes_only_to_inferred_same_kind_or_explicit_destination(production, monkeypatch, scope, args, expected):
-    """Actual VM payload keeps private/group targets separate without a hardcoded group fallback."""
-    plugin, requests = production(), []
+def test_send_file_routes_only_to_inferred_same_kind_or_explicit_destination(production, monkeypatch, tmp_path,
+                                                                           scope, args, expected):
+    """Native upload parameters preserve explicit private/group targets without VM or fallback groups."""
+    from plugin import qq_native_actions
 
-    def urlopen(request, timeout):
-        """Capture file-routing JSON at the local mocked transport boundary."""
-        assert request.full_url == "http://127.0.0.1:18003/vm/qq/send_file"
-        requests.append(json.loads(request.data.decode("utf-8")))
-        return io.BytesIO(b'{"ok":true}')
+    plugin, requests, staged = production(), [], []
+    local = tmp_path / "offline-report.pdf"
+    local.write_bytes(b"isolated report fixture")
 
-    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
-    original = {"path": "offline-report.pdf", **args}
-    assert asyncio.run(plugin._dispatch_tool("send_file", original, scope)) == {"ok": True}
-    assert requests == [{"path": "offline-report.pdf", "name": "", **expected}]
-    assert original == {"path": "offline-report.pdf", **args}
+    async def prepare_file(path):
+        """Simulate only Docker staging while checking the actual isolated local file."""
+        assert Path(path) == local and local.is_file()
+        staged.append(path)
+        return "/tmp/offline-report.pdf"
+
+    def onebot(action, parameters):
+        """Acknowledge only the native upload action, never an HTTP root welcome page."""
+        requests.append((action, parameters))
+        return {"status": "ok", "retcode": 0, "data": None}
+
+    monkeypatch.setattr(qq_native_actions, "prepare_container_file", prepare_file)
+    plugin._onebot_http = onebot
+    original = {"path": str(local), **args}
+    result = asyncio.run(plugin._dispatch_tool("send_file", original, scope))
+    action = "upload_private_file" if expected["kind"] == "private" else "upload_group_file"
+    key = "user_id" if expected["kind"] == "private" else "group_id"
+    assert requests == [(action, {key: expected[key], "file": "/tmp/offline-report.pdf", "name": local.name})]
+    assert staged == [str(local)]
+    assert result == {"ok": True, "accepted": True, "delivered": False,
+                      "delivery_confirmation": "native_upload_acknowledged", "action": action,
+                      "name": local.name, "status": "confirmed"}
+    assert "message_id" not in result
+    assert original == {"path": str(local), **args}
 
 
 @pytest.mark.parametrize("scope, args, error", [
@@ -966,7 +984,7 @@ def test_task_add_script_schema_and_dispatch_preserve_origin(production):
     assert result["ok"] is True
     args, kwargs = calls[0]
     assert args[2] == "42" and args[8:10] == ("script", "print('ready')")
-    assert kwargs == {"origin": event.unified_msg_origin}
+    assert kwargs == {"origin": event.unified_msg_origin, "run_at": None, "cadence": "after_completion"}
 
 
 @pytest.mark.parametrize("name, args", [
