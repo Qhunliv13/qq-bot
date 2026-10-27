@@ -2,6 +2,7 @@
 
 import importlib.util
 import json
+import sys
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -46,7 +47,7 @@ def sandbox(tmp_path):
         resume_prompt="Continue the existing task, do not create another one")
     other = tasks.add("unrelated task", "Do not edit", "test-room", run_at=REVIEWED_AT + 600,
                       origin="group")
-    return SimpleNamespace(tasks=tasks, review=review.review, plugin=plugin, store=store,
+    return SimpleNamespace(tasks=tasks, review=review.review, cli=review.main, plugin=plugin, store=store,
                            output=tmp_path / "review output.json", target=target, other=other)
 
 
@@ -148,6 +149,43 @@ def test_unknown_origin_or_scope_rejected(sandbox, changes):
     before = sandbox.store.read_bytes()
     with pytest.raises(ValueError, match="^task_origin_missing$"):
         _review(sandbox, apply=True)
+    assert sandbox.store.read_bytes() == before
+    assert not sandbox.output.exists()
+
+
+def test_cli_exact_epoch_preserves_snapshot_precision(sandbox, monkeypatch, capsys):
+    """Use the exact JSON float when its fractional precision exceeds ISO microseconds."""
+    precise_epoch = 1793077159.7343097
+    _patch_target(sandbox, next_run_at=precise_epoch)
+    before = sandbox.tasks.listing(only_active=False)
+    monkeypatch.setattr(sys, "argv", [
+        "task_deadline_review.py", "--plugin", str(sandbox.plugin),
+        "--id", sandbox.target["id"], "--expected-epoch", repr(precise_epoch),
+        "--run-at", "2026-10-27T13:00:00+08:00", "--output", str(sandbox.output), "--apply",
+    ])
+    sandbox.cli()
+    result = json.loads(capsys.readouterr().out)
+    assert result["deadline_before"] == precise_epoch
+    assert result["deadline_after"] == REVIEWED_AT
+    before[0]["next_run_at"] = REVIEWED_AT
+    assert sandbox.tasks.listing(only_active=False) == before
+    assert json.loads(sandbox.output.read_text(encoding="utf-8")) == result
+
+
+def test_cli_rounded_iso_snapshot_still_fails_exact_cas(sandbox, monkeypatch):
+    """Do not introduce tolerance when datetime rounds a precise saved JSON deadline."""
+    precise_epoch = 1793077159.7343097
+    rounded_iso = "2026-10-27T12:59:19.734310+08:00"
+    assert datetime.fromisoformat(rounded_iso).timestamp() != precise_epoch
+    _patch_target(sandbox, next_run_at=precise_epoch)
+    before = sandbox.store.read_bytes()
+    monkeypatch.setattr(sys, "argv", [
+        "task_deadline_review.py", "--plugin", str(sandbox.plugin),
+        "--id", sandbox.target["id"], "--expected-at", rounded_iso,
+        "--run-at", "2026-10-27T13:00:00+08:00", "--output", str(sandbox.output), "--apply",
+    ])
+    with pytest.raises(ValueError, match="^reviewed_snapshot_changed$"):
+        sandbox.cli()
     assert sandbox.store.read_bytes() == before
     assert not sandbox.output.exists()
 

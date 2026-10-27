@@ -55,15 +55,22 @@ def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--plugin',type=Path,required=True)
     parser.add_argument('--id',required=True)
-    parser.add_argument('--expected-at',required=True)
+    expected=parser.add_mutually_exclusive_group(required=True)
+    expected.add_argument('--expected-at')
+    expected.add_argument('--expected-epoch',type=float)
     parser.add_argument('--run-at',required=True)
     parser.add_argument('--cadence',choices=['after_completion','fixed_rate'])
     parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--apply',action='store_true')
     args=parser.parse_args()
-    dates=[datetime.fromisoformat(value) for value in (args.expected_at,args.run_at)]
-    if any(date.tzinfo is None for date in dates):raise ValueError('explicit_time_zone_required')
-    print(json.dumps(review(args.plugin,args.id,dates[0].timestamp(),dates[1].timestamp(),args.output,
+    requested=datetime.fromisoformat(args.run_at)
+    expected=datetime.fromisoformat(args.expected_at) if args.expected_at else None
+    if requested.tzinfo is None or (expected is not None and expected.tzinfo is None):
+        raise ValueError('explicit_time_zone_required')
+    # JSON epochs can carry more fractional precision than datetime's microseconds.
+    # Accept the exact observed numeric snapshot without weakening compare-and-set.
+    expected_epoch=expected.timestamp() if expected is not None else args.expected_epoch
+    print(json.dumps(review(args.plugin,args.id,expected_epoch,requested.timestamp(),args.output,
                             cadence=args.cadence,apply=args.apply),ensure_ascii=False))
 
 
