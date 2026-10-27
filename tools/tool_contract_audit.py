@@ -37,7 +37,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT / "tests") not in sys.path:
     sys.path.insert(0, str(ROOT / "tests"))
 import test_production_integration as integration  # noqa: E402
-from plugin import browser_eval, memory, tasks, workspace_tools, tool_discovery, delegation, task_planning, image_search, qq_native_actions, qq_requests  # noqa: E402
+from plugin import browser_eval, memory, tasks, workspace_tools, tool_discovery, delegation, task_planning, image_search, qq_native_actions, qq_requests, message_transfer  # noqa: E402
 import base64
 import hashlib
 from plugin.autonomy import AutonomousController  # noqa: E402
@@ -75,6 +75,12 @@ CASES = {
     "reply_now": {"text": "Contract interim reply.", "reply_to": ["1234"]},
     "autonomy_status": {},
     "autonomy_schedule": {"scope": "42", "interval_seconds": 600, "enabled": True},
+    "qq_forward_messages": {"source_group_id": 42, "target_group_id": 43,
+                            "mode": "merged", "message_ids": [82001, 82002],
+                            "operation_id": "audit-transfer-forward"},
+    "qq_copy_message": {"source_group_id": 42, "message_id": 82001},
+    "qq_paste_message": {"clipboard_id": "SEEDED", "target_group_id": 43,
+                         "operation_id": "audit-transfer-paste"},
     "qq_account_info": {},
     "qq_set_signature": {"signature": "contract signature", "operation_id": "audit-signature"},
     "qq_publish_post": {"content": "contract post", "visibility": "private", "operation_id": "audit-post"},
@@ -272,7 +278,8 @@ def _handler_inventory():
                             (tool_discovery.schema, "discovery_schema"),
                             (delegation.schema, "delegation_schema"),
                             (task_planning.schema, "planning_schema"),
-                            (qq_requests.schema, "request_schema")):
+                            (qq_requests.schema, "request_schema"),
+                            (message_transfer.schema, "transfer_schema")):
         branch = next(node for node in ast.walk(klass)
                       if isinstance(node, ast.If) and marker in ast.dump(node.test))
         for item in builder():
@@ -356,6 +363,14 @@ class AuditHarness:
 
     async def resolve_args(self, plugin, name, args, scope, event):
         """Resolve real scope-bound IDs immediately before a native invocation."""
+        if name == "qq_paste_message":
+            # Persist a real scope-bound clipboard, never a fabricated magic ID.
+            from plugin.message_transfer_store import TransferStore
+            args["clipboard_id"] = TransferStore(
+                self.root / "message_transfer" / "clipboard.sqlite").put(scope, {
+                    "source_group_id": 42, "source_message_id": 82001,
+                    "group_id": 42, "message_id": 82001, "message_type": "group",
+                    "message": [{"type": "text", "data": {"text": "contract source message"}}]})["clipboard_id"]
         if name in {"task_plan_read", "task_plan_update"}:
             # Each actual scope gets an existing scheduler task, not a second store.
             task = tasks.add("seed " + name, "inert planning goal", scope)
@@ -465,11 +480,22 @@ class AuditHarness:
         self.edges.append({"edge": "onebot_http", "action": action, "params": copy.deepcopy(params)})
         if action == "set_self_longnick":
             self.signature = params["longNick"]
+        if action == "get_msg":
+            # The native source proof is explicit, not inferred from requested IDs.
+            if set(params) != {"message_id"} or str(params["message_id"]) not in {"82001", "82002"}:
+                self.denied.append("unapproved transfer message source")
+                raise AssertionError("unexpected transfer get_msg payload")
+            return {"status": "ok", "retcode": 0, "data": {
+                "group_id": 42, "message_type": "group", "message_id": params["message_id"],
+                "sender": {"user_id": 10001, "nickname": "Native fixture sender"},
+                "message": [{"type": "text", "data": {"text": "contract source message"}}]}}
         social_data = {
             "get_login_info": {"user_id": 90001, "nickname": "fixture"},
             "get_stranger_info": {"long_nick": self.signature},
             "set_self_longnick": None, "set_qq_profile": None,
             "send_qzone_msg": {"tid": "offline-contract-post"},
+            "send_group_forward_msg": {"message_id": 71003},
+            "forward_group_single_msg": None,
             "send_group_msg": {"message_id": 71001},
             "send_private_msg": {"message_id": 71002},
             "get_group_msg_history": {"messages": [
@@ -783,6 +809,34 @@ async def _audit(root, monkeypatch, batch_size):
                 and result.get("delivered") is True and result.get("message_id") == "71001"
                 and result.get("action") == "send_group_msg"
                 and not any(edge["edge"] == "vm_http_stub" for edge in entry["stubbed_edges"]))
+        elif name in {"qq_forward_messages", "qq_copy_message", "qq_paste_message"}:
+            # Grade exact native actions and payloads independently of router metadata;
+            # a generic success or the wrong native forwarding action cannot pass.
+            native_edges = [edge for edge in entry["stubbed_edges"] if edge["edge"] == "onebot_http"]
+            lookups = [{"edge": "onebot_http", "action": "get_msg", "params": {"message_id": value}}
+                       for value in ([82001, 82002] if name == "qq_forward_messages" else [82001])]
+            if name == "qq_copy_message":
+                from plugin.message_transfer_store import TransferStore
+                clipboard_id = result.get("clipboard_id") if isinstance(result, dict) else None
+                copied = (TransferStore(harness.root / "message_transfer" / "clipboard.sqlite").get(
+                    "42", clipboard_id) if isinstance(clipboard_id, str) and clipboard_id else None)
+                entry["boundary_contract_matches"] = (
+                    native_edges == lookups and isinstance(copied, dict)
+                    and copied.get("source_group_id") == 42 and copied.get("source_message_id") == 82001
+                    and copied.get("message") == [{"type": "text", "data": {"text": "contract source message"}}]
+                    and "message" not in result and not event.actions and not event.sent)
+            else:
+                action = "send_group_forward_msg" if name == "qq_forward_messages" else "send_group_msg"
+                payload = ({"group_id": 43, "messages": [
+                    {"type": "node", "data": {"id": "82001"}}, {"type": "node", "data": {"id": "82002"}}]}
+                    if name == "qq_forward_messages" else {"group_id": 43, "message": [
+                        {"type": "text", "data": {"text": "contract source message"}}]})
+                expected = (lookups if name == "qq_forward_messages" else []) + [
+                    {"edge": "onebot_http", "action": action, "params": payload}]
+                entry["boundary_contract_matches"] = (
+                    native_edges == expected and result.get("delivered") is True
+                    and result.get("delivery_message_ids") == ["71003" if name == "qq_forward_messages" else "71001"]
+                    and result.get("accepted_count") == 1 and not event.actions and not event.sent)
         elif name in REQUEST_NAMES:
             # All request routes execute native parent branches. Only decisions may
             # call OneBot, and even accepted approvals never assert friendship.

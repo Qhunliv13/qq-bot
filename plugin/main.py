@@ -1659,6 +1659,7 @@ class HiganPlugin(Star):
         from .interim_reply import schema as interim_schema
         from .image_search import schema as image_schema
         from .qq_requests import schema as requests_schema
+        from .message_transfer import schema as transfer_schema
         return neutralize_schemas([
             _f("web_search", "搜索公开网页，返回来源标题、URL和摘要；按需要调用而非固定触发。",
                {"query": {"type": "string"}}, ["query"]),
@@ -1783,7 +1784,7 @@ class HiganPlugin(Star):
                 "reason": {"type": "string"}, "scopes": {"type": "array", "items": {"type": "string"}}}),
             _f("vm_job_list", "列出机器人虚拟机内受管后台脚本的状态摘要，不读取输出日志。",
                {"offset": {"type": "integer"}, "limit": {"type": "integer"}}),
-        ] + list(self._task_tool_schemas()) + social_schema() + workspace_schema() + discovery_schema() + delegation_schema() + planning_schema() + interim_schema() + image_schema() + requests_schema())
+        ] + list(self._task_tool_schemas()) + social_schema() + workspace_schema() + discovery_schema() + delegation_schema() + planning_schema() + interim_schema() + image_schema() + requests_schema() + transfer_schema())
 
     def _as_llm_url(self, ref) -> str:
         """把图片引用转成 LLM 能接受的 URL（data: / http(s)）。
@@ -2199,6 +2200,26 @@ class HiganPlugin(Star):
                     return {"ok": False, "error": "autonomy_destination_not_observed"}
                 if not self._policy_allows(event, destination):
                     return {"ok": False, "error": "destination_policy_denied"}
+        from .message_transfer import dispatch as transfer_dispatch, schema as transfer_schema
+        if name in {item["function"]["name"] for item in transfer_schema()}:
+            from .message_transfer_store import TransferStore
+            async def transfer_action(action, parameters):
+                """Share the existing authenticated native action bridge without retries."""
+                return await asyncio.to_thread(self._onebot_http, action, parameters)
+            def transfer_read_source(group_id):
+                """Public-group memory is shared; native reads must prove each source group."""
+                return event is not None and str(group_id).isascii() and str(group_id).isdigit() and int(group_id) > 0
+            def transfer_send_target(group_id):
+                """Apply persisted destination policy and autonomy's observed-origin boundary."""
+                destination = str(group_id)
+                if event is None or not self._policy_allows(event, destination):
+                    return False
+                return not autonomous or bool(self._autonomy_controller().origin(destination))
+            return await transfer_dispatch(
+                name, args, transfer_action, scope=str(scope),
+                store=TransferStore(Path(HIGAN_ROOT) / "message_transfer" / "clipboard.sqlite"),
+                audit_path=Path(HIGAN_ROOT) / "message_transfer" / "operations.sqlite",
+                can_read_source=transfer_read_source, can_send_target=transfer_send_target)
         from .qq_requests import dispatch as request_dispatch, schema as request_schema
         if name in {item["function"]["name"] for item in request_schema()}:
             from .qq_request_store import RequestStore

@@ -81,7 +81,7 @@ def test_new_native_contracts_use_reviewed_receipts_and_actions(report):
 def test_request_contracts_distinguish_unavailable_from_route_errors(report):
     """All six native handlers execute while exactly three remain honestly unavailable."""
     rows = {row["name"]: row for row in report["tools"]}
-    assert report["result_quality_counts"] == {"acknowledged": 98, "capability_unavailable": 3}
+    assert report["result_quality_counts"] == {"acknowledged": 101, "capability_unavailable": 3}
     for name in AUDIT.REQUEST_NAMES:
         assert rows[name]["handler_body_executed"] and rows[name]["boundary_contract_matches"], rows[name]
         assert rows[name]["result_quality"]["contract_satisfied"] is True
@@ -129,10 +129,42 @@ def test_generic_success_stub_for_unavailable_request_action_is_a_route_gap(tmp_
     assert mutated["route_contracts_pass"] is False
 
 
+def test_transfer_contracts_use_real_scoped_store_and_exact_native_boundaries(report):
+    """The three transfer routes require actual source provenance and native receipts."""
+    rows = {row["name"]: row for row in report["tools"]}
+    for name in ("qq_forward_messages", "qq_copy_message", "qq_paste_message"):
+        assert rows[name]["handler_body_executed"] and rows[name]["boundary_contract_matches"], rows[name]
+        assert rows[name]["result_quality"]["contract_satisfied"] is True
+    assert rows["qq_forward_messages"]["result"]["delivery_message_ids"] == ["71003"]
+    assert rows["qq_paste_message"]["result"]["delivery_message_ids"] == ["71001"]
+    assert rows["qq_copy_message"]["result"]["clipboard_id"]
+
+
+@pytest.mark.parametrize("name", ["qq_forward_messages", "qq_copy_message", "qq_paste_message"])
+def test_generic_success_cannot_mask_wrong_transfer_native_action(tmp_path, monkeypatch, name):
+    """Each transfer audit gate rejects an invented success without its native IO."""
+    original = AUDIT.message_transfer.dispatch
+
+    async def generic_success(tool_name, *args, **kwargs):
+        """Mutate only one native router seam while leaving schema and inventory real."""
+        if tool_name == name:
+            return {"ok": True, "delivered": True, "delivery_message_ids": ["invented"]}
+        return await original(tool_name, *args, **kwargs)
+
+    monkeypatch.setattr(AUDIT.message_transfer, "dispatch", generic_success)
+    with pytest.MonkeyPatch.context() as edges:
+        mutated = AUDIT.audit(tmp_path, edges)
+    row = next(row for row in mutated["tools"] if row["name"] == name)
+    assert row["handler_body_executed"] is True
+    assert row["boundary_contract_matches"] is False
+    assert name in {gap["name"] for gap in mutated["gaps"]}
+    assert mutated["route_contracts_pass"] is False
+
+
 def test_imported_workspace_discovery_and_workers_execute_real_contracts(report):
     """All additive classes require native receipts and locally exercised helpers."""
     rows = {row["name"]: row for row in report["tools"]}
-    assert report["effective_schema_count"] == report["canonical_schema_count"] == 101
+    assert report["effective_schema_count"] == report["canonical_schema_count"] == 104
     assert report["workspace_helpers_executed"] >= 20
     assert report["native_worker_calls"]
     assert {row["status"] for row in report["native_worker_receipts"]} == {"completed", "cancelled"}
@@ -383,7 +415,7 @@ def test_native_provider_honors_explicit_worker_schema_snapshot(tmp_path, monkey
     assert requests[0]["tools"] == snapshot
     assert requests[1]["tools"] == parent
     assert len(requests[0]["tools"]) == 1
-    assert len(requests[1]["tools"]) == 101
+    assert len(requests[1]["tools"]) == 104
     assert explicit == snapshot
     assert plugin._tool_schemas() == parent
 

@@ -5,7 +5,8 @@ persistence; this module performs no IO, retries, content inference or logging.
 """
 
 # These tools have reviewed outbound semantics; names resembling them do not count.
-_OUTBOUND_TOOLS = frozenset({"qq_send", "reply_now", "send_file", "send_shot", "vm_send_shot"})
+_OUTBOUND_TOOLS = frozenset({"qq_send", "reply_now", "send_file", "send_shot", "vm_send_shot",
+                             "qq_forward_messages", "qq_paste_message"})
 # An exception/empty acknowledgement can occur after sending, so retry is unsafe.
 _UNKNOWN_ERRORS = frozenset({"transport_exception", "send_exception", "delivery_not_confirmed"})
 
@@ -78,8 +79,9 @@ def observe(outcome: dict, name: str, result) -> None:
     ids = _receipt_ids(payload, name)
     confirmed = False
     if payload.get("ok") is True:
-        if name == "qq_send":
-            # Neither a generic success nor a native ID alone proves this send.
+        if name in {"qq_send", "qq_forward_messages", "qq_paste_message"}:
+            # Forward acknowledgements can legitimately lack output message IDs;
+            # acceptance alone cannot satisfy a scheduled delivery commitment.
             confirmed = payload.get("delivered") is True and bool(ids)
         elif name == "reply_now":
             # Foreground decoded transport confirms its actual body without an
