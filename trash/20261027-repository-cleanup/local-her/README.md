@@ -1,6 +1,6 @@
 # local-her：本机调试资料
 
-本目录在源码仓库中只包含说明与整理档案，不包含 AstrBot、NapCat、QQ 登录状态、运行数据库或聊天记忆。插件源码位于 [`../plugin/`](../plugin/)，测试位于 [`../tests/`](../tests/)，运维脚本索引见 [README_HER_OPS.md](../tools/ops/README_HER_OPS.md)。
+本目录在源码仓库中只包含说明与整理档案，不包含 AstrBot、NapCat、QQ 登录状态、运行数据库或聊天记忆。插件源码位于 [`plugin/`](../../../plugin/)，测试位于 [`tests/`](../../../tests/)，运维脚本索引见 [README_HER_OPS.md](../tools/ops/README_HER_OPS.md)。
 
 ## 本机环境边界
 
@@ -32,4 +32,4 @@ python -m compileall -q plugin
 
 本目录保留的整理报告是历史工作区记录，不是当前目录清单、部署契约或操作授权；不得依据其中的“可删”结论直接清理数据。报告原文保留，不随现状说明或协议调整追溯改写。
 
-本项目采用 GNU Affero General Public License v3.0（AGPL-3.0-only），完整条款见 [LICENSE](../LICENSE)；第三方依赖遵循各自协议。
+本项目采用 GNU Affero General Public License v3.0（AGPL-3.0-only），完整条款见 [LICENSE](../../../LICENSE)；第三方依赖遵循各自协议。

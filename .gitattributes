@@ -1,0 +1,2 @@
+# Keep historical operational material in Git, not in release source archives.
+/trash export-ignore
