@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 
 
-# Match the task core's public modes; legacy missing cadence means completion-relative.
+# Match the task core's public modes; a missing cadence means completion-relative.
 CADENCES = ("after_completion", "fixed_rate")
 STATUSES = ("active", "paused")
 
@@ -21,8 +21,8 @@ def review(plugin, task_id, expected_interval, cadence, output, *,
     """CAS cadence only for a reviewed non-running repeat; never replace a report.
 
     Expected interval and status remain mandatory preconditions even on retries.
-    An already-requested cadence is a no-write success, including legacy rows
-    with missing cadence when their effective completion-relative mode matches.
+    An already-requested cadence is a no-write success, including rows with
+    missing cadence when their effective completion-relative mode matches.
     """
     if not task_id or type(expected_interval) is not int or expected_interval <= 0:
         raise ValueError("invalid_reviewed_task_or_interval")

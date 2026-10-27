@@ -1,20 +1,13 @@
 # -*- coding: utf-8 -*-
-"""彼岸酱的记忆内核（2026-10-19）。
+"""摘要、长期事实与唤醒人记录的本地存储接口。
 
-三层记忆 + 自动压缩（对应 docs/QQBOT_CAPABILITY_PLAN.md 与 MULTI_SCOPE 设计）：
+Memory 读写按 scope 的摘要和全局事实，保留显式来源证据；可见性过滤不从
+文字推导身份或权限，未知旧来源标签保持兼容。WakePersonFacts 独立保存
+按人的记录，不占用 global.facts 配额。
 
-    L1 短期：调用方传入的最近消息（本模块不持有）
-    L2 摘要：按 scope 一份 + 一份全局摘要（本模块负责读写与压缩）
-    L3 长期：全局事实片段（带 source_scope，便于追溯）
-
-scope 约定（单一实现，别在别处再拼）：
-    "group:<群号>" / "private:<QQ>" / 其它 "<platform>:<id>"
-
-设计约束：
-    · 压缩**只写 L2**，绝不改写用户原话（原话在 L1，由调用方保管）
-    · 本模块**不调用模型**：压缩动作由调用方把 `compress_messages()` 的结果交给模型，
-      再把模型输出写回 `set_summary()` —— 保持本模块可单测、无网络、无依赖 ✓
-    · 全部原子写盘（tmp + replace）✓ 读失败一律返回安全默认 ✓
+compress_messages() 是可选摘要请求构造接口，不调用模型、不修改原消息；
+调用方自行决定是否调用、是否写回摘要，不意味着主流程自动压缩。
+Memory.save() 使用临时文件替换写盘，WakePersonFacts.save() 直接写 JSON。
 """
 
 from __future__ import annotations
@@ -27,7 +20,7 @@ from typing import Iterable, Optional
 
 #: 每条摘要的长度上限（字符）：防止摘要膨胀成第二份全文
 MAX_SUMMARY_CHARS = 100000
-#: L3 最多保留多少条（超出按重要度/时间淘汰）
+#: 全局事实数量上限；超出时按插入顺序移除最早的条目。
 MAX_FACTS = 2000
 
 
@@ -42,14 +35,14 @@ class Memory:
     """按 scope 组织的小型记忆库（JSON 落盘）。"""
 
     def __init__(self, path: str) -> None:
-        """绑定一个 JSON 文件路径（目录不存在会自动创建）。"""
+        """绑定 JSON 文件路径；保存时创建所需目录。"""
         self.path = path
         self.data: dict = {"version": 1, "global": {"summary": "", "facts": []},
                            "scopes": {}}
 
     # ---------- 读写 ----------
     def load(self) -> "Memory":
-        """从磁盘载入（缺失/损坏时保持空记忆，绝不抛）。"""
+        """从磁盘载入；缺失或读取失败时保留当前内存数据，不抛异常。"""
         try:
             with open(self.path, encoding="utf-8") as handle:
                 loaded = json.load(handle)
@@ -86,12 +79,12 @@ class Memory:
         return str((self.data.get("global") or {}).get("summary") or "")
 
     def set_summary(self, scope: str, summary: str, *, global_too: bool = False) -> None:
-        """写入摘要（截断到上限 ✓ 幂等 ✓）。
+        """写入摘要并更新计数与时间，按字符上限截断。
 
         Args:
             scope: 作用域（"group:123" / "private:456"）。
             summary: 模型产出的摘要文本。
-            global_too: 是否同时更新全局摘要（低频调用 ✓）。
+            global_too: 是否同时合并到全局摘要。
         """
         text = (summary or "").strip()[:MAX_SUMMARY_CHARS]
         item = self._scope(scope)
@@ -99,7 +92,7 @@ class Memory:
         item["updated_at"] = int(time.time())
         item["turns"] = int(item.get("turns") or 0) + 1
         if global_too:
-            # [shared-memory-v2] 合并而不是覆盖（每群各写一份 ⇒ 保留最近几段 ✓）
+            # 合并全局摘要，保留最后 12 个非空行并应用字符上限。
             g = self.data.setdefault("global", {})
             old = str(g.get("summary") or "").strip()
             merged = (old + "\n" + text).strip() if old and text not in old else (old or text)
@@ -110,7 +103,7 @@ class Memory:
         self.save()
 
     def bump_turns(self, scope: str) -> int:
-        """累加该 scope 的消息计数（用于触发压缩 ✓）。"""
+        """累加该 scope 的消息计数（用于触发压缩）。"""
         item = self._scope(scope)
         item["turns"] = int(item.get("turns") or 0) + 1
         return item["turns"]
@@ -147,7 +140,7 @@ class Memory:
 
     def list_facts(self, limit: Optional[int] = 500, *, current_scope=None,
                    muted=()) -> list[dict]:
-        """List detached facts; None removes only the historical 500-row view cap.
+        """List detached facts; None returns all stored facts in the selected view.
 
         No current_scope preserves the legacy global view. The source string is
         kept for callers; provenance separately exposes the actual source record.
@@ -225,7 +218,7 @@ class Memory:
 
     def search_facts(self, query: str, limit: int = 500, *,
                      allowed_scopes=None) -> list[str]:
-        """Keep historical OR scoring over all stored facts, optionally exact scopes.
+        """Rank stored facts by OR keyword matches, optionally within exact scopes.
 
         allowed_scopes is a caller-supplied retrieval filter, not an authorization
         derived from provenance. Main's AND search can instead filter list_facts(None).
@@ -245,18 +238,18 @@ class Memory:
         scored.sort(reverse=True)
         return [t for _s, _a, t in scored[:limit]]
 
-    # ---------- 自动压缩（模型侧动作由调用方执行） ----------
+    # ---------- 可选摘要请求（模型侧动作由调用方执行） ----------
     def compress_messages(self, scope: str, recent: Iterable[str],
                           max_chars: int = 600000) -> Optional[list[dict]]:
-        """构造"压缩请求"的 messages；返回 None 表示当前无需压缩 ✓。
+        """构造"压缩请求"的 messages；返回 None 表示当前无需压缩。
 
         调用方拿到后交给模型，再把输出用 `set_summary(scope, out)` 写回，
-        并自行把 recent 里的旧消息丢弃（保留锚点 ✓）。
+        本方法不修改 recent，历史保留策略由调用方负责。
 
         Args:
             scope: 作用域。
             recent: 该 scope 的最近消息（"昵称: 内容"）。
-            max_chars: 超过该字符数才需要压缩（默认 4000 ≈ 2k token）。
+            max_chars: 超过该字符数才构造摘要请求（默认 600000 字符）。
 
         Returns:
             Optional[list[dict]]: OpenAI 兼容 messages；无需压缩时 None。
@@ -278,13 +271,13 @@ class Memory:
 
 
 if __name__ == "__main__":
-    # 自检（不依赖 pytest，可直接 python3 memory.py 跑 ✓）
+    # 自检（不依赖 pytest，可直接 python3 memory.py 跑）
     mem = Memory("/tmp/_higan_mem_selftest.json").load()
     mem.set_summary("group:1", "群 1 里大家在聊显卡价格")
     assert "显卡" in mem.get_summary("group:1")
-    assert mem.get_summary("private:9") == ""            # scope 隔离 ✓
+    assert mem.get_summary("private:9") == ""            # scope 隔离
     mem.add_fact("小七是群友，做二手显卡", "private:9")
-    mem.add_fact("小七是群友，做二手显卡", "private:9")   # 去重 ✓
+    mem.add_fact("小七是群友，做二手显卡", "private:9")   # 去重
     assert len(mem.search_facts("小七 显卡")) == 1
     assert mem.compress_messages("group:1", ["a" * 5000]) is not None
     assert mem.compress_messages("group:1", ["短"]) is None

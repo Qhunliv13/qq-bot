@@ -21,10 +21,10 @@ from datetime import datetime, timezone
 
 
 NAME = "context-tools-20261025"
-# Command administration needs only the framework's separate tool scope. Existing
-# plugin releases retain their default scope and cannot silently gain privileges.
+# This tool authorizes plugin release keys only; command administration requires
+# separate authorization and must not silently expand the release key's scope.
 SCOPES = ("plugin",)
-# Pin the exact production source inspected on 2026-10-25; fail before import on drift.
+# Require these exact framework source hashes; fail before import on drift.
 EXPECTED_FRAMEWORK = {
     "astrbot/core/db/sqlite.py": "cde20f8d33df9feb6a3580c95499a65c3b94ec490ed34f1c1d041516b5a070d4",
     "astrbot/core/db/__init__.py": "72978bdfe56266815c1c24d7c3e198c0c69de331c0b5039047a16f46f9162e80",

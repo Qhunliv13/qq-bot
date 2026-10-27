@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""她的后台任务存储（2026-10-19）。
+"""后台任务的持久存储、排程、认领和结果记录。
 
-设计要点：
-  · 单一存储：/root/higan/tasks/tasks.json（持久 ✓ 在虚拟机里 ✓）
+存储与执行约束：
+  · 单一存储：/root/higan/tasks/tasks.json（持久 在虚拟机里）
   · 任务字段：id / title / goal / scope（群号或 private:QQ）/ interval_s / repeat /
               status（active|paused|done|cancelled）/ next_run_at / nudges / origin
   · `due()` 只列候选；执行前必须 `claim(id)`，执行后 `mark(id, result, ...)`。
@@ -37,7 +37,7 @@ _TRANSACTION_LOCAL = threading.local()
 def _file_transaction_lock():
     """Hold a per-store POSIX advisory lock, reusing nested ownership in this thread.
 
-    Windows keeps the historical thread-only behavior. All cooperating POSIX
+    Windows uses thread-only locking. All cooperating POSIX
     writers must call the public decorated API rather than _save directly.
     """
     if os.name != "posix":
@@ -114,7 +114,7 @@ def _scheduled_at(run_at: float | None, delay_s, now: float, *, updating: bool =
         return now + max(0, int(delay_s or 0))
     if isinstance(run_at, bool) or not isinstance(run_at, Real) or not math.isfinite(run_at) or run_at < 0:
         raise ValueError("run_at must be a finite nonnegative epoch number")
-    # add historically defaults delay_s to zero; update uses None for omission.
+    # add defaults delay_s to zero; update uses None for omission.
     if (updating and delay_s is not None) or (not updating and delay_s not in (None, 0)):
         raise ValueError("run_at and delay_s are mutually exclusive")
     return float(run_at)
@@ -222,9 +222,9 @@ SCRIPT_DIR = ROOT
 
 
 def run_trigger_script(code: str) -> tuple:
-    """[script-trigger] 跑她自己写的触发脚本；返回 (是否成立, 说明)。
+    """执行任务触发脚本；返回 (是否成立, 说明)。
 
-    判定：退出码 0 且 stdout 非空、且不是 false/0/no/none ⇒ 成立 ✓
+    判定：退出码 0 且 stdout 非空、且不是 false/0/no/none/null 时成立。
     """
     if not (code or "").strip():
         return False, "empty script"
@@ -334,7 +334,7 @@ def update_plan(task_id: str, scope: str, steps: list, expected_revision: int) -
 def due(now: float | None = None) -> list:
     """List due candidates without executing scripts; claim before any effects.
 
-    Unlike the old poller, listing cannot run arbitrary trigger code repeatedly.
+    Listing does not execute trigger scripts.
     The caller must claim each candidate immediately before executing it.
     """
     now = now if now is not None else time.time()

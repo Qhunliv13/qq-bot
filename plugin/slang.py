@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""俚语/黑话学习库（2026-10-22，参考 qq-bridge 的 slang learning，仅取此能力）。
+"""俚语与黑话的持久学习、查询和最近使用视图。
 
 存储：/root/higan/slang.json
 结构：{"words": {"词": {"meaning": "...", "source": "...", "count": N, "ts": 时间}}}
-跨群共享 ✓（和记忆一致）
+按调用方提供的文件路径共享词库。
 用法：
   s = Slang("/root/higan/slang.json").load()
   s.learn("红温", "被人气到脸红", "群聊")
@@ -31,7 +31,7 @@ class Slang:
         self.data: dict = {"words": {}}
 
     def load(self) -> "Slang":
-        """读盘（失败保持空库 ✓）。"""
+        """读盘（失败保持空库）。"""
         try:
             with open(self.path, encoding="utf-8") as handle:
                 loaded = json.load(handle)
@@ -53,7 +53,7 @@ class Slang:
             pass
 
     def learn(self, word: str, meaning: str, source: str = "") -> bool:
-        """学一个词（词义去重、次数累加 ✓）。没有词或意思就不学 ✗。"""
+        """学一个词（词义去重、次数累加）。没有词或意思就不学。"""
         key = str(word or "").strip()[:24]
         val = str(meaning or "").strip()[:200]
         if not key or not val:
@@ -66,14 +66,14 @@ class Slang:
         item["source"] = str(source or item.get("source") or "")[:40]
         item["count"] = int(item.get("count") or 0) + 1
         item["ts"] = int(time.time())
-        if len(words) > MAX_WORDS:                        # 只留最近用过的 ✓
+        if len(words) > MAX_WORDS:                        # 只留最近用过的
             order = sorted(words.items(), key=lambda kv: int(kv[1].get("ts") or 0), reverse=True)
             self.data["words"] = dict(order[:MAX_WORDS])
         self.save()
         return True
 
     def lookup(self, word: str) -> str:
-        """查词（返回学过的最多两条意思；没学过返回空串）。"""
+        """查询已存词义；没学过时返回空串。"""
         key = str(word or "").strip()
         item = (self.data.get("words") or {}).get(key) or {}
         return str(item.get("meaning") or "")

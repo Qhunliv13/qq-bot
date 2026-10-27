@@ -11,8 +11,8 @@ import math
 import re
 from typing import Mapping
 
-# An overview of roughly seven groups stays near the former 120-line shared
-# context budget. This limits presentation only; keyword retrieval reads all rows.
+# The legacy snapshot API bounds each group's overview independently.
+# Unified timelines use DEFAULT_SHARED_LIMIT; keyword retrieval reads all rows.
 DEFAULT_LIMIT_PER_SCOPE = 20
 SOURCE = {"name": "cross_scope_history", "trust": "untrusted_data"}
 # One shared presentation budget, independent of the legacy per-group overview.
@@ -50,7 +50,7 @@ def visible_scope(candidate: str, current_scope: str, muted=()) -> bool:
 
 
 class CrossScopeMemory:
-    """Expose bounded per-group snapshots and complete scoped keyword retrieval."""
+    """Expose one shared timeline, legacy bounded group views, and scoped keyword retrieval."""
 
     def __init__(self, recorder, histories: Mapping | None = None,
                  source_records: Mapping | None = None, *,

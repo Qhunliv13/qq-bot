@@ -1,6 +1,7 @@
 name: astrbot_plugin_higan
 display_name: 彼岸酱 · 自主回复与表情包
-desc: 让彼岸酱自己决定要不要接话（不是随机概率），并能收集与发送表情包
+desc: QQ 群聊机器人，支持共享群记忆、工具调用、定时任务与原生消息发送
 version: 1.0.0
 author: Q-API
-repo: https://aiapi.qhunliv13.online
+repo: https://github.com/Qhunliv13/qq-bot
+license: AGPL-3.0-only

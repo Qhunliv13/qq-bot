@@ -1,8 +1,10 @@
 """Append-only history prefixes within the existing recent-history budgets.
 
-The 120-entry prompt window and 2000-entry live capacity originate in main.py.
-Blocks derive only from that existing prompt window; they do not batch messages,
-delay replies, truncate individual entries, or change admission/delivery policy.
+The default prompt suffix contains 120 through 239 entries when enough history
+exists; shorter histories are retained intact. Its start advances on 120-entry
+boundaries to keep unchanged source prefixes stable between calls. The live
+capacity is 2000 entries. This module does not batch messages, delay replies,
+truncate individual entries, or change admission/delivery policy.
 """
 
 from __future__ import annotations
@@ -39,7 +41,7 @@ def append_history(
 def history_snapshot(
     history: Sequence[str], origin: int, minimum: int = 120
 ) -> tuple[str, ...]:
-    """Freeze a chronological suffix containing every latest minimum source entry.
+    """Return an immutable chronological suffix containing the latest minimum entries.
 
     The start advances only at blocks derived from minimum. With enough source
     entries, the result contains minimum through 2 * minimum - 1 entries; shorter

@@ -1,15 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""她把群聊历史存到自己虚拟机里（2026-10-20）。
+"""按来源作用域追加和读取 JSONL 聊天档案。
 
-背景：NapCat 的 HTTP action 是空壳（`get_group_msg_history` 恒返回 data:{}）✗
-⇒ 无法从上游回看历史 ⇒ 自己存 ✓（这也是"回看历史消息"唯一可靠的实现）
-
-接口：
-  rec  = Recorder("/root/higan/history")
-  rec.append(scope, line)            追加一行（自动滚动，最多 5000 行/scope ✓）
-  rec.load(scope, limit=200)         读最近 N 行（启动时恢复上下文 ✓）
-  rec.search(keyword, scope="", limit=10)  关键词搜索（给她一个工具 ✓）
+Recorder.append() 保存最多 2000 字符的显示文本，并独立保留完整原始元数据；
+写入不按 MAX_LINES 滚动裁剪。load() 按旧到新返回显示文本，load_records()
+返回带来源 scope 的原存储文本与元数据，limit=None 时读取全部有效记录。
+group_scopes() 只发现已有的正整数群号档案，不猜测私聊文件对应的身份。
+search() 提供显示文本关键词检索，受 MAX_SCOPES 和调用方结果数量限制。
 """
 
 from __future__ import annotations
@@ -26,10 +23,10 @@ MAX_SCOPES = 30
 
 
 class Recorder:
-    """按 scope 存聊天记录（JSONL，一行一条 ✓）。"""
+    """按 scope 存聊天记录（JSONL，一行一条）。"""
 
     def __init__(self, root: str = "/root/higan/history") -> None:
-        """初始化（目录不存在就建 ✓）。"""
+        """初始化（目录不存在就建）。"""
         self.root = root
         try:
             os.makedirs(root, exist_ok=True)
@@ -37,7 +34,7 @@ class Recorder:
             pass
 
     def _path(self, scope: str) -> str:
-        """scope → 文件名（把 : 等非法字符换掉 ✓）。"""
+        """scope → 文件名（把 : 等非法字符换掉）。"""
         safe = re.sub(r"[^0-9A-Za-z_.-]", "_", str(scope or "default"))[:60]
         return os.path.join(self.root, safe + ".jsonl")
 
@@ -58,7 +55,7 @@ class Recorder:
             pass
 
     def load(self, scope: str, limit: int = 200) -> list:
-        """读最近 limit 行（旧 → 新 ✓）。"""
+        """读最近 limit 行（旧 → 新）。"""
         path = self._path(scope)
         if not os.path.exists(path):
             return []
@@ -118,7 +115,7 @@ class Recorder:
         return list(records)
 
     def search(self, keyword: str, scope: str = "", limit: int = 10) -> list:
-        """按关键词找记录（跨 scope ✓ 返回 [{scope, line}]）。"""
+        """按关键词找记录（跨 scope 返回 [{scope, line}]）。"""
         key = str(keyword or "").strip()
         if not key:
             return []

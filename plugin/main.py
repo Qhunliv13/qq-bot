@@ -1,28 +1,15 @@
-"""彼岸酱 · 自主回复 + 表情包（AstrBot 插件）。
+"""彼岸酱的 AstrBot 消息、表情包与工具入口。
 
-用户 2026-09-19 要求：
-  1. **不要固定概率**：由**模型自己决定**要不要接话（不是随机掷骰子）。
-  2. **表情包**：能收（群友发的表情存成库）、能发（模型想发就发）。
-  3. **回复要短**：**尽量 20 字以内**。
-  4. **别太频繁**：默认沉默，且同群有间隔与频率上限。
-  5. **快速连发不逐句回**：短窗口内合批，模型选择回应子集，一条可回应多句。
-
-设计要点：
-  · `on_message` 处理所有群消息；先让模型判断要不要接话（输出 `SILENT` 就不回）。
-  · **顺序保证**：每群一个处理循环，保留所有接受的消息，在有界窗口或等待执行锁时合批；
-    一批只给模型一次裁决机会，不要求逐条答复，不取消已开始工具，也不重放已消费消息。
-    昵称、@和引用保留结构化来源，不能当成正文含义。
-  · **表情包收集**：群友发图 → 存进 `data/stickers/`。注意 AstrBot 会把收到的图
-    **下载到 `data/temp/`**，此时组件里是**本地路径**而不是 http URL —— 两种都要处理
-    （2026-09-19 实测：只认 http 会一张都收不到）。
-  · **表情包扫描**：启动时扫描目录，把**手动放进去的**图也登记进索引（并异步补描述）。
-  · **表情包发送**：模型在回复里写 `[表情包:关键词]`，插件按描述匹配一张发出去。
+按会话接收和合批消息，通过共享模型工具循环裁决与发送，保留消息来源。
+执行锁串行化消息与任务；已开始的工具和发送操作不因新消息取消。
+表情包支持本地路径与 HTTP 图片，启动扫描索引并补充视觉描述。
+后台任务负责成员名单观察、主动机会与持久任务；热加载按实例归属排空工作。
 """
 
 from __future__ import annotations
 
-# [basedir] 插件目录（wp_fact_* 按路径加载 memory.py 时用）
-BASE_DIR = str(__import__("pathlib").Path(__file__).resolve().parent)  # [basedir] 不依赖 os 是否已导入
+# 插件目录，用于按路径加载 memory.py。
+BASE_DIR = str(__import__("pathlib").Path(__file__).resolve().parent)  # 不依赖 os 的导入顺序。
 
 
 def _dedupe_tool_schemas(items: list) -> list:
@@ -42,7 +29,7 @@ def _dedupe_tool_schemas(items: list) -> list:
     return [seen[n] for n in order]
 
 
-# [forget-not-compress] 不按条数限制；只在接近 100 万 token 时忘掉最早 60%
+#  不按条数限制；只在接近 100 万 token 时忘掉最早 60%
 # 中文近似：1 字符 ≈ 1 token，故用"累计字符数 > 1,000,000"作为触发条件
 FORGET_TOKEN_LIMIT = 1000000
 FORGET_RATIO = 0.6
@@ -74,42 +61,42 @@ TEMP_DIR = Path("data/temp")
 
 #: 只在这些群里工作（留空 = 所有群）。填群号可避免影响其它群。
 TARGET_GROUPS: set[str] = set()
-#: **成员变动监听**只针对这些群（用户 2026-09-19 要求"只监听 146045691"）。
-#: 与 `TARGET_GROUPS` 分开：监听只是读名单，不必因此限制机器人在别的群也能聊天。
-#: 顺带省流量 —— 有个群 993 人，每分钟拉一次名单约 1MB。
+#: 成员变动监听的群名单，与回复范围分开配置。
+#: TARGET_GROUPS 控制回复范围；这里仅控制名单观察。
+
 MEMBER_WATCH_GROUPS: set[str] = {"146045691"}
-#: 两条回复之间的最小间隔（秒）。用户 2026-09-19 反馈"非 @ 回复频率太低" → 90 降到 30。
+#: 普通回复之间的最小间隔（秒），0 表示无间隔。
 MIN_REPLY_INTERVAL = 0
-#: **被 @ 时**的最小间隔（秒）。对方明确叫你就该回，不该被间隔挡掉
-#: —— 2026-09-19 实测：群主 @ 了机器人却被限流静默丢弃，随后 AstrBot 默认流程
-#: 用人设里的 `[表情包:关键词]` 写法回了纯文本，看起来就是"表情包没发出来"。
+#: 唤醒回复之间的最小间隔（秒），与普通回复独立。
+
+
 MIN_WOKEN_INTERVAL = 0
-#: 每群每分钟最多回复条数（用户 2026-09-19 反馈太少 → 1 提到 3）
+#: 每群每分钟普通回复条数上限。
 MAX_REPLY_PER_MIN = 1000000
-#: 被 @ 时每分钟允许多少条（明确呼叫不受"少回复"限制）
+#: 每群每分钟唤醒回复条数上限。
 MAX_WOKEN_PER_MIN = 1000000
 #: 表情包库上限（超过后按最久未用淘汰）
 MAX_STICKERS = 300
 #: 单张表情包体积上限（字节）
 MAX_STICKER_BYTES = 4 * 1024 * 1024
-#: **动图抽几帧**（用户 2026-09-19 要求"动图需要模型多看几帧"）
+#: 动图最多抽取的帧数。
 GIF_MAX_FRAMES = 4
-#: 让模型能**主动丢掉没用的图**：写 `[删表情:关键词]`（只移出索引，不删文件）
+#: 让模型能主动丢掉没用的图：写 `[删表情:关键词]`（只移出索引，不删文件）
 DELETE_STICKER_MARKER = re.compile(
     r"[\[【（(［]\s*删(?:表情|图)\s*[:：]\s*([^\]】）)］]{1,60})\s*[\]】）)］]", re.I)
-#: 让模型能**下载图并发出**：`[下图:关键词]` 或 `[下图:图片直链]`
-#: 用户 2026-09-19 要求"可以下载搜到的图也可以下载群成员头像"。
+#: 让模型能下载图并发出：`[下图:关键词]` 或 `[下图:图片直链]`
+
 DOWNLOAD_IMG_MARKER = re.compile(
     r"[\[【（(［]\s*下图\s*[:：]\s*([^\]】）)］]{1,120})\s*[\]】）)］]", re.I)
 #: 下载图片的体积上限（字节）
 MAX_DOWNLOAD_BYTES = 5 * 1024 * 1024
 #: 从搜索结果里找图片时，最多打开几个页面去找 <img>
 IMG_SEARCH_PAGES = 3
-#: 挑图时最多给模型看几张候选（看得多挑得准，但每张都费 token）
+#: 视觉挑图的候选数量上限，用于控制请求体积。
 MAX_CANDIDATES = 5
-#: 挑图时把图片压到多少像素（越大越慢；判断"合不合适"512 足够）
+#: 视觉挑图的图片最长边像素数。
 REVIEW_IMAGE_MAX_SIDE = 512
-#: 单次挑图的超时（秒）。超时就跳过挑图直接发，不能让用户干等。
+#: 单次视觉挑图超时（秒）；超时后使用调用方的回退路径。
 REVIEW_TIMEOUT = 25
 #: 生成回复的超时（秒）。超时就本次不回，避免用户无限等待。
 CHAT_TIMEOUT = 45
@@ -120,18 +107,18 @@ TOOL_TURN_TIMEOUT = float(os.environ.get("HIGAN_TOOL_TURN_TIMEOUT", "0")) or Non
 AVATAR_CACHE = Path("data/higan_avatar.json")
 #: 下载来的图片（搜图/头像）放这里
 DOWNLOAD_DIR = Path("data/downloads")
-#: 轮询群成员变动的间隔（秒）。用于感知"加群/退群"（用户 2026-09-19 要求）
+#: 轮询群成员名单的间隔（秒），用于识别加入和退出。
 MEMBER_WATCH_INTERVAL = 60
-#: NapCat 的 OneBot HTTP 地址（同机，零跳转）
+#: 同机 NapCat 的 OneBot HTTP 地址。
 ONEBOT_BASE = "http://127.0.0.1:13000"
 #: 每个群记住最近几张图（供"看看刚才那张图"这类请求）
 MAX_REMEMBER_IMAGES = 5
-#: 单次送给模型的图片上限（含被引用的图），避免 token 爆炸
+#: 单次模型请求图片上限，含引用图片。
 MAX_IMAGES_PER_CALL = 3
 
 #: 表情包标记：兼容半角/全角方括号、书名号、圆括号与全角冒号；
-#: 内容放宽到 60 字符，因为**允许给多个关键词**（用户 2026-09-19 要求）。
-#: （模型写法不统一，只认一种会让标记原样发出去 —— 2026-09-19 实测踩到。）
+#: 标记内容最多 60 字符，支持多个关键词。
+
 STICKER_MARKER = re.compile(
     r"[\[【（(［]\s*表情包\s*[:：]\s*([^\]】）)］]{1,60})\s*[\]】）)］]", re.I)
 #: 多关键词的分隔符（中英文逗号、顿号、竖线、斜杠、分号、空白）
@@ -146,9 +133,9 @@ AVATAR_MARKER = re.compile(
 SEARCH_TOP_N = 5
 # Generic equivalent query normalization; no product or relevance keyword rules.
 SEARCH_QUERY_MAX = 2
-#: 搜索后**打开**前几个网页读正文（用户 2026-09-19 要求"模型得打开网页"）
+#: 搜索后读取正文的页面数量。
 PAGE_FETCH_TOP = 2
-#: 最多尝试打开几个网页（百度百科/知乎等会反爬 403，多试几个才有成功的）
+#: 最多尝试读取的页面数量，用于容忍抓取失败。
 PAGE_FETCH_TRY = 4
 #: 单个网页正文最多取多少字符（避免 prompt 过长）
 PAGE_TEXT_LIMIT = 2500
@@ -156,9 +143,9 @@ PAGE_TEXT_LIMIT = 2500
 SEARCH_TIMEOUT = 20
 SILENT_MARKERS = ("SILENT", "silent", "（不回复）", "(不回复)", "不回复")
 
-#: 主人的 QQ（用户 2026-09-19 指定）：群主 qhunliv + 管理员 Qhunliv13。
-#: **必须在提示词里把身份标出来** —— 只给昵称的话模型分不清谁是主人
-#: （2026-09-19 用户反馈"现在不认人"）。
+#: 主人 QQ 名单，用于身份标注与权限判断。
+#: 提示词同时提供 QQ 与身份，避免仅凭昵称推断。
+
 OWNER_QQS = {"2084526117", "3974648486"}
 
 # 系统提示词单独放在 prompts.py（文案与逻辑分离，改文案不必碰逻辑）
@@ -174,16 +161,16 @@ class HiganPlugin(Star):
         super().__init__(context)
         STICKER_DIR.mkdir(parents=True, exist_ok=True)
         self.manifest: list[dict] = self._load_manifest()
-        # [cross-group-ears] 全局聊天缓冲（跨群只读视野 ✓ 最近 120 行）
+        # 跨群只读的近期聊天缓冲。
         self._all_recent: list = []
         self._last_reply_at: dict[str, float] = {}
         self._reply_times: dict[str, list[float]] = {}
         self._recent: dict[str, list[str]] = {}
-        # 每个群最近出现过的图（供"看看刚才那张图"这类请求，用户 2026-09-19 要求）
+        # 按群保存最近图片，供后续指代解析。
         self._recent_images: dict[str, list[str]] = {}
-        # 各群成员名单快照（用于 diff 出"加群/退群"，用户 2026-09-19 要求）
+        # 按群保存成员名单快照，用于识别加入和退出。
         self._member_snapshot: dict[str, dict[str, str]] = {}
-        # 顺序保证：每个群一个"忙碌"标记 + 只保留最新一条待处理消息
+        # 按会话标记执行状态，待处理消息保存在列表中。
         self._busy: dict[str, bool] = {}
         self._last_sent: dict = {}
         self._pending: dict[str, list] = {}
@@ -191,18 +178,17 @@ class HiganPlugin(Star):
         self._ready = asyncio.Event()
         self._background_tasks: set = set()
         self._stopping = False
-        # 人设文本：插件自己调 LLM 会**覆盖** AstrBot 的 system prompt，
-        # 所以必须把人设读进来拼在最前面，否则"人设就不牢靠"（2026-09-19 实测踩到）。
+        # 独立调用模型时显式拼接人设，不依赖框架注入。
+
         self.persona: str = self._load_persona()
         scanned = self._scan_sticker_dir()
         logger.info("[higan] 插件加载，表情包库 %d 张（新登记 %d），人设 %d 字"
                     % (len(self.manifest), scanned, len(self.persona)))
 
     async def initialize(self) -> None:
-        """启动后台任务：① 补表情包描述 ② 监听群成员变动（加群/退群）。
+        """启动表情包描述、成员观察与任务循环，并在实例排空后开放消息入口。
 
-        把**通用占位描述**（"表情包"）也算作"待补" —— 否则从 temp 导入或手动放进目录的
-        图会永远停在通用描述上，按关键词挑图时永远匹配不到。
+        空描述和通用占位描述均需补充，以便按关键词匹配表情包。
         """
         await self._drain_previous_instances()
         missing = [s for s in self.manifest
@@ -210,10 +196,10 @@ class HiganPlugin(Star):
         if missing:
             logger.info("[higan] 待补描述的表情包 %d 张" % len(missing))
             self._start_background(self._describe_missing(missing))
-        # 成员变动监听：用户 2026-09-19 要求"模型能看到加群退群"
+        # 后台轮询群成员变动。
         self._start_background(self._watch_members())
 
-        # [poll-loop-in-init] 定时查看循环（initialize 里启动最可靠 ✓）
+        # 在 initialize 中启动定时观察循环。
         try:
             if getattr(self, "_poll_loop_task", None) is None:
                 self._poll_loop_task = self._start_background(self._poll_loop())
@@ -227,18 +213,16 @@ class HiganPlugin(Star):
                        ",".join(sorted(MEMBER_WATCH_GROUPS)) or "全部"))
 
     def _start_background(self, coroutine):
-        """Keep task ownership explicit so future plugin reloads cannot duplicate loops."""
+        """登记后台任务的实例归属，完成后移出跟踪集合。"""
         task = asyncio.create_task(coroutine)
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
         return task
 
     async def _drain_previous_instances(self) -> None:
-        """Migrate old untracked tasks by exact instance ownership, never by task name alone.
+        """按实例归属排空消息与任务，只取消该实例处于空闲等待的后台循环。
 
-        Manager unbinds old handlers before initialize. Wait for already-running old
-        message workers and task execution to finish; cancel only idle background
-        loops of that exact old plugin object, not handlers or framework tasks.
+        等待正在执行的模型、工具和发送完成，不按任务名取消框架任务。
         """
         known = {"_watch_members", "_poll_loop", "_free_tick", "_task_loop", "_describe_missing"}
 
@@ -321,7 +305,7 @@ class HiganPlugin(Star):
 
     @staticmethod
     def _load_persona() -> str:
-        """从 AstrBot 的库里**只读**取出 higan 人设文本。
+        """从 AstrBot 的库里只读取出 higan 人设文本。
 
         只读，不写：直接写 `personas` 表会导致 AstrBot 崩溃循环（字段类型不匹配），
         所以这里只用 SELECT；取不到就返回空串（插件仍可工作，只是语气弱一些）。
@@ -362,7 +346,7 @@ class HiganPlugin(Star):
             logger.warning("[higan] 表情包索引写入失败：%r", exc)
 
     def _scan_sticker_dir(self) -> int:
-        """把目录里**未被索引登记**的图片补进索引（支持用户手动放进去的表情包）。"""
+        """把目录里未被索引登记的图片补进索引（支持用户手动放进去的表情包）。"""
         known = {s.get("file") for s in self.manifest}
         added = 0
         for path in sorted(STICKER_DIR.iterdir()):
@@ -406,12 +390,7 @@ class HiganPlugin(Star):
         return AVATAR_CACHE.parent / ("higan_avatar_%s.jpg" % qq)
 
     async def _self_knowledge(self, event: AstrMessageEvent) -> str:
-        """机器人对**自己**的认知：它的 QQ 头像长什么样（带缓存）。
-
-        用户 2026-09-19 反馈"模型不知道自己的头像是什么样" —— 它此前完全不了解自己。
-        这里拉一次自己的 QQ 头像、用视觉模型描述一次并缓存，之后每次对话都带上，
-        这样被问"你头像是什么 / 你长什么样"时能答得出来。
-        """
+        """获取并缓存机器人自身头像的视觉描述，供对话上下文使用。"""
         qq = str(event.get_self_id() or "")
         if not qq:
             return ""
@@ -441,18 +420,9 @@ class HiganPlugin(Star):
             return ""
 
     def _avatar_target(self, event: AstrMessageEvent, text: str) -> tuple[str, str]:
-        """判断这句话在问**谁**的头像，返回 `(QQ, 这是谁的头像)`。
+        """按提问对象解析头像归属，返回 (QQ, 头像说明)。
 
-        这是"头像老出错"的根治点（2026-09-19 实测）：
-        模型此前**看不到提问者的头像**，被问"我的头像是什么"时只能拿**自己的**头像描述
-        硬答（于是出现"主人的头像是银发猫耳女仆"这种把机器人自己当成对方的回答）。
-        现在插件先把**正确那个人的头像**找出来发给它，它照着看就行。
-
-        解析顺序：
-          1. 「你/彼岸酱 的头像」→ 机器人自己
-          2. 「我的头像」→ 说话人自己
-          3. 消息里 @ 了谁 → 那个人（用 At 组件的 qq）
-          4. 「XX 的头像」→ 按昵称在群成员名单里找
+        依次匹配机器人自己、发言人、At 组件目标与群成员昵称。
         """
         t = text or ""
         if not any(k in t for k in ("头像", "长什么样", "长啥样", "样子", "自拍",
@@ -491,7 +461,7 @@ class HiganPlugin(Star):
 
     @staticmethod
     async def _file_url_of_message(self, msg_id: str) -> str:
-        """按消息号找到那条消息里的文件/语音/图片地址（用于 vm_fetch ✓）。
+        """按消息号找到那条消息里的文件/语音/图片地址（用于 vm_fetch ）。
 
         Args:
             msg_id: OneBot 消息号（她上下文里看到的 #1234）。
@@ -591,7 +561,7 @@ class HiganPlugin(Star):
             return []
 
         def _list_for(key: str) -> list:
-            """取本群的名单（兼容旧的 list 写法）。"""
+            """获取本群名单，同时兼容按群字典与列表两种配置格式。"""
             val = conf.get(key) or {}
             if isinstance(val, dict):
                 return _pick(val)
@@ -662,13 +632,7 @@ class HiganPlugin(Star):
             return False
 
     def _recent_others_talking(self, group: str, who: str, window: int = 4) -> bool:
-        """最近几条里，是否**正好两个人在一问一答**（真正的两人对话）。
-
-        **必须严格**（2026-09-20 踩坑）：早先只要最近几条出现 ≥2 个不同发言人就判为
-        "别人在交谈"，可群里本来就人多，于是几乎每次都给模型"别插嘴"的线索，
-        结果它什么都不说了（用户反馈"怎么不回复了"）。
-        现在只认**恰好 2 个人、且交替发言**（A→B→A→B）这种真正的两人对话。
-        """
+        """识别最近消息中恰好两人交替发言的对话，不把多人闲聊视为两人对话。"""
         history = self._recent.get(group) or []
         seq: list[str] = []
         for line in history[-window:]:
@@ -687,18 +651,10 @@ class HiganPlugin(Star):
 
     @staticmethod
     def _who(event: AstrMessageEvent) -> str:
-        """把发言人描述成"昵称（身份，QQ 号）"，让模型能认出主人与群友。
-
-        **只给昵称是不够的**：模型没法把昵称对应到主人名单上（用户反馈"不认人"）。
-        这里直接算好身份再交给模型，比让它自己比对 QQ 号更可靠。
-
-        **QQ 缺失时不要瞎标身份**（2026-09-19 实测）：掉线期间积压补推的消息
-        `get_sender_id()` 会是 0，那时若仍标"群友，QQ 0"，模型可能把主人当群友。
-        此时只给昵称、并注明身份未知。
-        """
+        """用昵称、身份和 QQ 号标注发言人；QQ 缺失时只标明身份未知。"""
         qq = str(event.get_sender_id() or "")
         name = event.get_sender_name() or ""
-        # [self-label+robust-pct] 她自己说的话要标清楚（否则她认不出自己 ✗）
+        # 单独标注机器人自身发言，避免与群成员混淆。
         try:
             _self = str(event.get_self_id() or "")
             if _self and qq and qq == _self:
@@ -711,7 +667,7 @@ class HiganPlugin(Star):
             name = qq
         role = "主人" if qq in OWNER_QQS else "群友"
         base = "%s（%s，QQ %s）" % (name, role, qq)
-        # [wake-marker] 只按 QQ 号判定该群唤醒人，带"我记了他几条"（2026-10-25）
+        # 按 QQ 号判定本群唤醒人，并附带记录数量。
         try:
             import json as _j
             from pathlib import Path as _P
@@ -737,11 +693,7 @@ class HiganPlugin(Star):
         return base
 
     def _rate_ok(self, group: str, woken: bool = False) -> bool:
-        """防刷屏：间隔 + 每分钟条数。
-
-        **被 @ 时放宽**：对方明确叫你就该回，不该被"少回复"的 90 秒挡掉
-        （2026-09-19 实测：群主 @ 机器人却因限流被静默丢弃）。
-        """
+        """按回复间隔和每分钟条数限流；唤醒消息使用独立的阈值。"""
         now = time.time()
         interval = MIN_WOKEN_INTERVAL if woken else MIN_REPLY_INTERVAL
         limit = MAX_WOKEN_PER_MIN if woken else MAX_REPLY_PER_MIN
@@ -850,11 +802,7 @@ class HiganPlugin(Star):
         return ""
 
     def _quoted_text(self, event: AstrMessageEvent) -> str:
-        """取**被引用消息的文字**（用户 2026-09-19 反馈"看不到群员引用的内容"）。
-
-        `Reply` 组件自带 `message_str`（被引用消息解析后的纯文本）与 `sender_nickname`，
-        直接用它们；没有的话再从 `chain` 里的 Plain 段拼一份兜底。
-        """
+        """提取引用消息的文本，优先使用 Reply 属性，再从 chain 中拼接 Plain 段。"""
         for comp in event.get_messages():
             if not isinstance(comp, Reply):
                 continue
@@ -892,11 +840,9 @@ class HiganPlugin(Star):
     @staticmethod
     def _data_urls(path: Path, max_side: int = REVIEW_IMAGE_MAX_SIDE,
                    max_frames: int = GIF_MAX_FRAMES) -> list[str]:
-        """把图片转成 data URL **列表**：静图 1 张，**动图抽多帧**。
+        """生成视觉输入的 data URL 列表，静图缩放，动图抽帧后横向拼接。
 
-        用户 2026-09-19 要求"动图需要模型多看几帧" —— 只取第一帧根本看不懂动图在演什么
-        （例如"先是得意、然后翻车"这种）。这里对 GIF/WebP 动图等间隔抽 `max_frames` 帧，
-        横向拼成一张长条图再发：既让模型看到过程，又只占一张图的 token。
+        动图最多取 max_frames 帧，以保留画面变化并控制上传体积。
         """
         import base64
         import io
@@ -944,24 +890,11 @@ class HiganPlugin(Star):
 
     @staticmethod
     def _data_url(path: Path, max_side: int = REVIEW_IMAGE_MAX_SIDE) -> str:
-        """单张 data URL（静图用；动图请用 `_data_urls` 取多帧）。
-
-        会**先压缩到 `max_side` 像素**：判断"这张表情合不合适"不需要原图，
-        而群里表情包常有 1~2MB，base64 后 2.7MB，上传+视觉推理要 100 秒以上
-        （2026-09-19 实测：一次复核耗时 108s）。压到 512px/JPEG 后通常几十 KB。
-        """
+        """获取单张缩放后的 data URL；动图多帧处理复用 _data_urls。"""
         return HiganPlugin._data_urls(path, max_side=max_side, max_frames=1)[0]
 
     async def _pick_by_looking(self, keywords: list[str], context: str) -> dict | None:
-        """把候选表情包**直接给模型看**，让它自己挑一张（用户 2026-09-19 要求）。
-
-        为什么这样改：之前模型只看到**文字标签**，挑图等于盲选，再靠"复核"补救；
-        用户反馈"模型不知道自己的图长什么样"。现在把候选图连图带标签一起给它，
-        它**看得见**再挑 —— 一次调用同时完成"挑图 + 判断合不合适"，
-        比"盲选 + 复核"又快又准（少一次往返）。
-
-        @returns 选中的表情包条目；返回 None 表示"都不合适/没搜到"。
-        """
+        """将候选图及标签交给视觉模型选择，未选中时返回 None。"""
         if not self.manifest:
             return None
         pool = self._search_stickers(keywords)[:MAX_CANDIDATES]
@@ -1033,11 +966,7 @@ class HiganPlugin(Star):
         return pool[0]
 
     def _apply_drop(self, line: str, pool: list[dict]) -> None:
-        """处理模型给的"丢掉这张"指令：`删2` 或 `删表情:关键词`。
-
-        用户 2026-09-19 要求"增加模型可以主动丢掉一些没用的图"。
-        **只移出索引、不删文件**（可随时恢复；也避免误删）。
-        """
+        """处理删图指令，只移出索引并保留原文件，避免不可恢复的删除。"""
         try:
             body = line[1:].strip()
             if "：" in body or ":" in body:
@@ -1085,7 +1014,7 @@ class HiganPlugin(Star):
 
     async def _pick_sticker_reviewed(self, keywords: list[str],
                                      context: str) -> dict | None:
-        """兼容旧名：实际走 `_pick_by_looking`（看图挑一张）。"""
+        """兼容调用入口，复用 _pick_by_looking 的视觉挑图实现。"""
         return await self._pick_by_looking(keywords, context)
 
     def _register_sticker(self, path: Path, desc: str) -> None:
@@ -1106,7 +1035,7 @@ class HiganPlugin(Star):
 
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_message(self, event: AstrMessageEvent) -> None:
-        """所有消息入口：串行化 + latest-wins，保证回复顺序且不积压。"""
+        """接收消息并按会话排队合批，保留来源与到达顺序，不抢占正在执行的工作。"""
         try:
             if self._stopping:
                 return
@@ -1116,14 +1045,14 @@ class HiganPlugin(Star):
             # it must not start work after a newer initialization marked it stopping.
             if self._stopping:
                 return
-            # [private-scope] 2026-10-19: 私聊也处理（用户要求「在哪对话都能回」）
+            # 私聊按独立会话处理。
             group_raw = str(event.get_group_id() or "")
             if group_raw:
                 if TARGET_GROUPS and group_raw not in TARGET_GROUPS:
                     return
                 group = group_raw
             else:
-                # 私聊：按 QQ 建独立作用域 => 独立的 _recent/_pending/_busy/限流桶 ✓
+                # 私聊按 QQ 隔离历史、队列、执行状态和限流计数。
                 sender = str(event.get_sender_id() or "") or "unknown"
                 group = "private:" + sender
 
@@ -1153,7 +1082,7 @@ class HiganPlugin(Star):
                         ensure_ascii=False, allow_nan=False)).strip()
                 logger.info("[higan] nontext_context segments=%d image_refs=%d",
                             len(nontext["segments"]), len(nontext.get("image_refs") or []))
-            # [read-forward] 合并转发 ⇒ 把里面的聊天记录读出来给她看 ✓
+            # 读取合并转发的原始消息记录。
             try:
                 _fwd = await self._forward_to_text(event)
                 if _fwd:
@@ -1167,7 +1096,7 @@ class HiganPlugin(Star):
             # ① 群友发图 → 收集进表情包库（后台跑，不影响回复时序）+ 记住最近几张图
             if images:
                 self._remember_images(group, self._image_refs(event))
-                # [vm-archive] 2026-10-19: 收到的图也归进她的虚拟机，便于回看
+                # 将收到的图片归档到机器人虚拟机，供工具回看。
                 try:
                     await self._archive_images(event, group)
                 except Exception as _exc:  # noqa: BLE001
@@ -1193,17 +1122,17 @@ class HiganPlugin(Star):
                 except Exception:  # noqa: BLE001
                     pass
 
-            # **每条群消息都进历史**（含发言人身份），这样模型看到的上下文才完整。
-            # 之前只有"决定要不要回"的消息才进历史，被限流/SILENT 的全丢了，
-            # 导致它接不上话题（用户 2026-09-19 反馈"看到内容不够全面"）。
+            # 每条接收的群消息都记录发言人身份，保留完整上下文。
+
+
             quoted = self._quoted_text(event)
-            # [model-quote] 带消息号：`昵称（身份，QQ x）#1234：内容` ⇒ 模型可自己选引用哪条
+            # 保留消息号，供模型显式选择引用目标。
             _mid = getattr(getattr(event, "message_obj", None), "message_id", None)
             _tag = ("#%s" % _mid) if _mid else ""
             line = "%s%s：%s%s" % (self._who(event), _tag, ((text or "") if str(text or "").strip() else ("（这是 %s 发的图片/文件）" % self._who(event) if images else "（无正文消息）")),
                                    "（引用 %s）" % quoted if quoted else "")
             history = self._recent.setdefault(group, [])
-            # [history-persist] 首次见到该群 ⇒ 从磁盘恢复最近 200 行（重启不丢 ✓）
+            # 首次访问会话时从磁盘恢复历史。
             if not history:
                 try:
                     _old = self._hist().load(group, 200)
@@ -1216,7 +1145,7 @@ class HiganPlugin(Star):
             self._history_origins = getattr(self, "_history_origins", {})
             history_snapshot = stable_snapshot(history, self._history_origins.get(group, 0))
             append_history(self._recent, self._history_origins, group, line)
-            # [cross-group-ears] 同时进全局缓冲（带群标签 ✓）
+            # 同时写入带群标签的全局缓冲。
             try:
                 self._all_recent.append("[群%s] %s" % (group, line))
                 del self._all_recent[:-120]
@@ -1244,7 +1173,7 @@ class HiganPlugin(Star):
             _at_me_now = self._directly_mentioned(event)
             _woken_e = False
             try:
-                # [at-always-reply] @ 她 就一定回：直接比对 @ 目标与自己的 QQ
+                # 按真实 At 目标与机器人 QQ 判断唤醒。
                 _self_qq = ""
                 try:
                     _self_qq = str(event.get_self_id() or "")
@@ -1261,7 +1190,7 @@ class HiganPlugin(Star):
                 if _wake_why:
                     logger.info("[higan] 命中唤醒%s ⇒ 直接进入回复判定"
                                 % ("人" if _wake_why == "person" else "词"))
-                # [wake-person-conf] 唤醒人可单独配 pct / 专属词 / 时间段
+                # 唤醒人可单独配置回复率、专属词与时间段。
                 if _wake_why == "person":
                     try:
                         _sender = str(event.get_sender_id() or "")
@@ -1291,16 +1220,16 @@ class HiganPlugin(Star):
                 event.stop_event()
                 logger.info("[higan] 群 %s 策略拦截非准入消息（仅留历史）", group)
                 return
-            # ③ **单一回复通路**：@ 与非 @ 都由本插件处理，并**停止事件传播**，
-            #    从而阻止 AstrBot 默认 LLM 再回一条。
-            #
-            #    为什么必须 stop_event()：AstrBot 的判定是
-            #      `if (event.get_result() and not event.is_stopped()) or not event.get_result():`
-            #      → 只有"有结果 **且** 已停止"才会跳过默认 LLM。
-            #    而 `should_call_llm(False)` 的消费点在插件之前，**拦不住**（实测：@ 消息会
-            #    出现"一条带引用、一条不带引用"两条回复，2026-09-19 用户两次反馈）。
-            #    代价：管线停止后 RespondStage 不会执行，所以回复必须用 `event.send()` 直接发
-            #    （见 `_send`），不能再依赖 set_result。
+            # 插件统一处理唤醒与普通消息，并停止默认事件传播，避免重复回复。
+
+
+            # 框架只有在事件存在结果且已停止时才跳过默认模型调用。
+
+
+            # should_call_llm(False) 的消费点在插件之前，不能替代 stop_event。
+
+            # 停止管线后 RespondStage 不执行，回复需通过 event.send 直接发送。
+
             event.stop_event()
             self._pending.setdefault(group, []).append(
                 (event, text, bool(images or self._image_refs(event)), bool(_woken_e or _at_me_now), history_snapshot))
@@ -1350,8 +1279,8 @@ class HiganPlugin(Star):
 
         这类消息由 AstrBot 默认流程回复（带人设），插件不再插手，避免一次消息两条回复。
         """
-        # [private-scope] 2026-10-19: 私聊里对方就是在跟我说话 => 直接算唤醒
-        # （这样私聊不受群聊 30 秒限流约束；群聊仍然受控）
+        # 私聊消息视为对机器人的直接唤醒。
+
         try:
             if not str(event.get_group_id() or ""):
                 return True
@@ -1361,7 +1290,7 @@ class HiganPlugin(Star):
             value = getattr(event, attr, None)
             if isinstance(value, bool) and value:
                 return True
-        # [at-self-fix] 2026-10-19: detect '@ self' from OneBot segments
+        # 从 OneBot 原始消息段检查针对机器人的 At。
         self_id = ""
         for name in ("get_self_id", "self_id", "selfId"):
             raw = getattr(event, name, None)
@@ -1385,11 +1314,11 @@ class HiganPlugin(Star):
                   or getattr(seg, "target", None))
             if qq is None:
                 continue
-            # [strict-woken] 必须精确匹配（self_id 取不到就不算唤醒 ✓ 不误判）
+            # 严格匹配自身 QQ；缺失 self_id 时不判定为 At 唤醒。
             if self_id and str(qq) == self_id:
                 return True
         if self_id is None or self_id == "":
-            # 取不到自己 QQ：记一次，便于排查（不误判成唤醒 ✓）
+            # 无法读取自身 QQ 时记录诊断，不推断为唤醒。
             try:
                 logger.warning("[higan] 取不到 self_id，@ 判定降级为 False（消息=%s）"
                                % (str(getattr(event, "message_str", ""))[:60],))
@@ -1399,18 +1328,13 @@ class HiganPlugin(Star):
 
     async def _handle_one(self, event: AstrMessageEvent, group: str, text: str,
                           has_image: bool, woken: bool) -> None:
-        """处理单条消息：限流 → （被 @ 则直接回，否则让模型决定）→ 发送。
-
-        **被 @ 时空消息也要回**：群里很常见的用法就是"只 @ 一下"当戳猫，
-        之前 `if not text and not has_image: return` 会静默跳过，表现为"@ 了没反应"
-        （2026-09-19 用户反馈）。现在 woken=True 时即使没文字也回一句。
-        """
+        """按会话策略和限流处理消息，再交模型裁决并发送；唤醒消息可无正文。"""
         if not self._policy_allows(event, group):
             return
-        # [group-policy+at] 分群策略：muted 永不出声；mention_only 只在被 @ 时看 ✓
+        # 遵循分群策略：muted 不发送，mention_only 仅接收真实 At。
         try:
             _pol = self._group_policy(group)
-            # [poll-interval] 每 N 分钟看一次（@ 例外 ✓ 消息已落盘不会丢）
+            # 按配置间隔检查群消息；At 可绕过此检查。
             _mins = int((_pol.get("poll_minutes") or {}).get(str(group)) or 0)
             if _mins > 0 and not woken:
                 _seen = getattr(self, "_poll_seen", None)
@@ -1420,14 +1344,14 @@ class HiganPlugin(Star):
                 _last = float(_seen.get(str(group)) or 0)
                 if time.time() - _last < _mins * 60:
                     return
-                # [poll-seen-owner] 只跳过，不写时间戳（由定时器独占 ✓）
+                # 这里只跳过处理，观察时间戳由定时器维护。
                 logger.info("[higan] 群 %s 未到查看间隔，跳过（%d 分钟一次）" % (group, _mins))
             if str(group) in _pol["muted"]:
                 logger.info("[higan] 群 %s 在 muted 里 ⇒ 不说话（消息仍落盘 ✓）" % group)
                 return
             if str(group) in _pol["mention_only"] and not self._directly_mentioned(event):
                 return
-            # [pct+quote] 她自己设的回复概率（@ 不受限 ✓ 消息已落盘 ✓）
+            # 普通消息遵循配置的回复概率，At 不受该概率限制。
             _pct = float((_pol.get("reply_pct") or {}).get(str(group), 100))
             if not woken and _pct < 100:
                 if random.random() * 100 >= _pct:
@@ -1435,12 +1359,12 @@ class HiganPlugin(Star):
                     return
         except Exception:  # noqa: BLE001
             pass
-        # [at-self-fix] 2026-10-19: an @-mention bypasses the cooldown
+        # At 唤醒绕过普通冷却时间。
         if not woken and not self._rate_ok(group, woken):
             return
         if not text and not has_image and not woken:
             return
-        # [wire-loop-v2] 两条通路都走"工具优先"（失败自动回退原裁决 ✓）
+        # 两条入口均尝试共享工具回路；回退路径只读取上下文，不再派发工具。
         reply = await self._decide_tools_first(event, group, text, has_image)
         from .reply_selection import decode_reply
         turn_records = ((getattr(self, "_turn_context", {}) or {}).get(group, {}).get("messages") or [])
@@ -1466,27 +1390,20 @@ class HiganPlugin(Star):
 
     @staticmethod
     def _to_plain(reply: str) -> str:
-        """兜底：把任何**没被识别**的表情包标记整段去掉，绝不让它当文字发出去。
-
-        实测教训（2026-09-19）：模型可能写成 `【表情包：无语】`、`(表情包: 无语)` 等
-        变体；若正则没覆盖，标记就会原样出现在群里。这里再做一次宽松兜底。
-        """
+        """移除未识别的表情包控制标记，避免将控制语法发送为正文。"""
         return re.sub(r"[\[【（(［]?\s*表情包\s*[:：][^\]】）)］]{0,20}[\]】）)］]?", "", reply).strip()
 
     @staticmethod
     def _split_keywords(raw: str) -> list[str]:
-        """把 `[表情包:无语, 生无可恋]` 里的内容拆成多个关键词。
-
-        用户 2026-09-19 要求"可以给出多个关键词允许模型按关键词模糊搜索"。
-        """
+        """按多种分隔符拆分表情包关键词。"""
         return [k.strip() for k in KEYWORD_SPLIT.split(raw or "") if k.strip()]
 
     def _search_stickers(self, keywords: list[str]) -> list[dict]:
-        """按多个关键词**模糊搜索**表情包，命中越多排越前。
+        """按多个关键词模糊搜索表情包，命中越多排越前。
 
         匹配规则（从严到松）：
           1. 双向包含（关键词 ⊆ 描述，或描述 ⊆ 关键词）→ +2
-          2. 关键词的任意**两字片段**出现在描述里 → +1
+          2. 关键词的任意两字片段出现在描述里 → +1
         只要任一关键词有命中就入选；这样模型给几个近义词也能搜到。
         """
         scored: list[tuple[int, float, dict]] = []
@@ -1509,12 +1426,7 @@ class HiganPlugin(Star):
         return [item for _, _, item in scored]
 
     def _sticker_catalog(self, limit: int = 60) -> str:
-        """把**可用的表情包描述**列成一行，交给模型挑关键词。
-
-        用户 2026-09-19 要求"让模型看到自己有哪些图可以发"。
-        只给描述、不给图片：库里几十张图全塞进上下文会 token 爆炸，
-        而描述足够模型挑一个**真实存在**的关键词（之前它是盲猜，猜不中就发不出去）。
-        """
+        """仅列出有区分度的表情包描述，避免将整个图库放入上下文。"""
         descs: list[str] = []
         for item in self.manifest:
             desc = (item.get("desc") or "").strip()
@@ -1547,11 +1459,7 @@ class HiganPlugin(Star):
                 % (prompt, ability, len(self.manifest), catalog))
 
     async def _with_self(self, prompt: str, event: AstrMessageEvent) -> str:
-        """在提示词里补上"机器人对自己的认知"（当前是它的 QQ 头像是什么样）。
-
-        用户 2026-09-19 反馈"模型不知道自己的头像是什么样"。头像描述取自
-        `_self_knowledge()`（有缓存，不会每次都识图）。
-        """
+        """在提示词中附加缓存的机器人自身头像描述。"""
         info = await self._self_knowledge(event)
         clock = "\n\n" + json.dumps({"timing": self._clock_context()}, ensure_ascii=False)
         if not info:
@@ -1563,21 +1471,14 @@ class HiganPlugin(Star):
 
     async def _refs_for(self, event: AstrMessageEvent, group: str, text: str,
                         has_image: bool) -> tuple[list[str], str]:
-        """决定这次调用要带上哪些图，以及"这张图是谁的"。
-
-        优先级：本条消息的图 → 被引用的图 → **被问到的那个人的头像** →
-        （若在问图）群里最近那张图。
-
-        @returns `(图片引用列表, 图片归属说明)`；说明会写进提示词，避免模型张冠李戴
-            （2026-09-19 实测：不说明归属时，它会把机器人自己的头像当成提问者的）。
-        """
+        """收集图片及归属说明，依次考虑当前消息、引用消息、目标头像与最近图片。"""
         turn = (getattr(self, "_turn_context", {}) or {}).get(group, {})
         refs = list(turn.get("image_refs") or self._image_refs(event))
         if refs:
             return refs, "对方本条消息里发的图/引用的图"
         if has_image:
             return [], ""
-        # 被问头像 → 拉**正确那个人**的头像（这是"头像老出错"的根治点）
+        # 解析并获取被提问对象的头像。
         avatar, who_desc = await self._avatar_ref(event, text)
         if avatar:
             logger.info("[higan] 被问头像，带上「%s」给模型看" % who_desc)
@@ -1591,12 +1492,7 @@ class HiganPlugin(Star):
 
     async def _reply_direct(self, event: AstrMessageEvent, group: str, text: str,
                             has_image: bool) -> str:
-        """[at-via-decide] 被 @ 时**也走自主裁决**（2026-10-19）。
-
-        为什么改：原实现是"被 @ 就直接回一句"，绕过了记忆（L2/L3）、自主判断与工具调用 ✗，
-        表现就是"她能聊但记不住、也不会用虚拟机" ✓。现在统一走 `_decide`，
-        @ 在提示词里是"必回"信号，所以回复行为不变 ✓，但多了记忆与工具能力 ✓。
-        """
+        """将唤醒消息交给共享裁决入口，复用记忆与工具能力。"""
         return await self._decide(event, group, text, has_image)
 
     async def _llm_chat(self, messages: list, tools: bool = True) -> str:
@@ -1625,6 +1521,7 @@ class HiganPlugin(Star):
         body = json.dumps(payload).encode("utf-8")
 
         def _call() -> dict:
+            """同步提交模型请求并解析 JSON，由外层在线程执行。"""
             req = urllib.request.Request(base + "/chat/completions",
                                          data=body, method="POST")
             req.add_header("Content-Type", "application/json")
@@ -1661,12 +1558,7 @@ class HiganPlugin(Star):
 
     async def _call_llm(self, provider, prompt: str, extra_system: str,
                         refs: list[str]) -> str:
-        """统一调用 LLM：**人设在前**（人设为核心），附加任务规则在后。
-
-        @param refs - 要一起送给模型的图片引用（http URL 或本地路径）。
-            本地路径会转成 **data URL**：实测把 `file://` 直接交给 provider 拿不到图，
-            而 base64 内联一定能看到（2026-09-19 踩过）。
-        """
+        """在人设后附加任务规则并调用模型，将本地图片转为 data URL。"""
         image_urls: list[str] = []
         for ref in refs[:MAX_IMAGES_PER_CALL]:
             try:
@@ -1682,7 +1574,7 @@ class HiganPlugin(Star):
                 logger.warning("[higan] 处理图片引用失败（%s）：%r", str(ref)[:50], exc)
         system_prompt = ("%s\n\n---\n\n%s" % (self.persona, extra_system)
                          if self.persona else extra_system)
-        # [direct-plain] 先走直连（避开 provider 注入的思考参数 ⇒ 躲开 REASONING_CONFLICT ✓）
+        # 优先使用直连路径，避免 provider 隐式注入思考参数。
         _direct = await self._llm_plain(system_prompt, prompt, image_urls or [])
         if _direct:
             self._last_resp = None
@@ -1705,12 +1597,12 @@ class HiganPlugin(Star):
         except Exception as exc:
             logger.warning("[higan] 调用失败：%r", exc)
             return ""
-        # [native-tools] 保存完整响应，供上层取 tools_call（模型原生工具调用 ✓）
+        # 保存完整响应，供上层读取原生工具调用。
         self._last_resp = resp
         return (getattr(resp, "completion_text", "") or "").strip()
 
     def _her_llm_config(self) -> tuple:
-        """[direct-tools] 从 cmd_config 读她自己的上游（api_base / key / model）✓。"""
+        """从 cmd_config 读她自己的上游（api_base / key / model）。"""
         try:
             cfg_path = "/root/astrbot-src/data/cmd_config.json"
             with open(cfg_path, encoding="utf-8-sig") as fh:
@@ -1730,10 +1622,11 @@ class HiganPlugin(Star):
             logger.warning("[higan] 读上游配置失败：%r", exc)
             return "", "", ""
 
-    # [fix-static-self] 2026-10-19: 需要访问 self（合并任务工具），不能是 staticmethod
+    # 工具列表依赖实例状态，包括任务工具。
     def _tool_schemas(self) -> list:
-        """[direct-tools] 她可用的工具（OpenAI tools schema ✓）。"""
+        """她可用的工具（OpenAI tools schema ）。"""
         def _f(name, desc, props=None, required=None):
+            """构造函数工具 schema，统一参数与必填字段结构。"""
             return {"type": "function", "function": {
                 "name": name, "description": desc,
                 "parameters": {"type": "object", "properties": props or {},
@@ -1873,9 +1766,9 @@ class HiganPlugin(Star):
         ] + list(self._task_tool_schemas()) + social_schema() + workspace_schema() + discovery_schema() + delegation_schema() + planning_schema() + interim_schema() + image_schema())
 
     def _as_llm_url(self, ref) -> str:
-        """[img-url-fix] 把图片引用转成 LLM 能接受的 URL（data: / http(s)）✓。
+        """把图片引用转成 LLM 能接受的 URL（data: / http(s)）。
 
-        本地路径必须转 data URL，否则上游报 `Unsupported image_url format` ✗
+        本地路径必须转 data URL，否则上游报 `Unsupported image_url format`
         """
         try:
             text = str(ref or "").strip()
@@ -1884,7 +1777,7 @@ class HiganPlugin(Star):
             if text.startswith("data:"):
                 return text
             if text.startswith(("http://", "https://")):
-                # [drop-dead-images] 远程图先落成 data URL；死链就丢弃 ✓
+                #  远程图先落成 data URL；死链就丢弃
                 try:
                     import urllib.request as _ur
 
@@ -1910,7 +1803,7 @@ class HiganPlugin(Star):
         return ""
 
     def _hist(self):
-        """[history-persist] 懒加载历史记录器（按路径 ✓）。"""
+        """懒加载历史记录器（按路径 ）。"""
         if getattr(self, "_hist_obj", None) is not None:
             return self._hist_obj
         import importlib.util as _ilu
@@ -1939,7 +1832,7 @@ class HiganPlugin(Star):
                            "result": result}, ensure_ascii=False, allow_nan=False)
 
     def _onebot_http(self, action: str, params: dict) -> dict:
-        """[read-forward] 直连 NapCat HTTP 调一个 action（同步，放线程里用 ✓）。"""
+        """直连 NapCat HTTP 调一个 action（同步，放线程里用 ）。"""
         import json as _json
         import urllib.request
 
@@ -1967,12 +1860,13 @@ class HiganPlugin(Star):
         return GroupPolicyStore(Path(HIGAN_ROOT) / "groups.json").read()
 
     def _at_components(self, text: str):
-        """[group-policy+at] 把 `[at:QQ]` 转成 At 组件（返回 (净化文本, [At...])）。"""
+        """把 `[at:QQ]` 转成 At 组件（返回 (净化文本, [At...])）。"""
         comps: list = []
         try:
             import re as _re
 
             def _sub(match):
+                """将有效 QQ 标记转换为 At 组件，无法转换时保留原文。"""
                 qq = (match.group(1) or "").strip()
                 if not qq.isdigit():
                     return match.group(0)
@@ -2044,11 +1938,7 @@ class HiganPlugin(Star):
                 logger.warning("[higan] 主动观察失败 type=%s", type(exc).__name__)
 
     async def _llm_plain(self, system: str, prompt: str, image_urls: list) -> str:
-        """[direct-plain] 直连 relay 的纯文本对话（不带 tools / 不带思考参数 ✓）。
-
-        为什么需要它：AstrBot 的 provider 会自动加"深度思考"参数，与 relay/上游默认值冲突
-        时报 400 REASONING_CONFLICT ✗；直连同一 key 是 200 ✓。这里绕开注入，参数完全可控。
-        """
+        """直连模型的无工具对话，使用显式配置参数，避免 provider 隐式注入。"""
         import asyncio
         import urllib.request
 
@@ -2071,10 +1961,11 @@ class HiganPlugin(Star):
             "messages": [{"role": "system", "content": system},
                          {"role": "user", "content": content}],
         }
-        payload.update(self._llm_extra())   # [thinking-max] 思考拉满 ✓
+        payload.update(self._llm_extra())   # 合并显式配置的模型参数。
         body = json.dumps(payload).encode("utf-8")
 
         def _call() -> dict:
+            """同步提交模型请求并解析 JSON，由外层在线程执行。"""
             req = urllib.request.Request(base + "/chat/completions", data=body, method="POST")
             req.add_header("Content-Type", "application/json")
             req.add_header("Authorization", "Bearer " + key)
@@ -2094,9 +1985,9 @@ class HiganPlugin(Star):
     async def _llm_tools(self, system: str, prompt: str, image_urls: list,
                          messages: list | None = None, allow_tools: bool = True,
                          tool_schemas: list | None = None) -> tuple:
-        """[direct-tools] 带工具调用的一次 LLM 往返；返回 (文本, 工具调用列表)。
+        """执行一次带工具的模型请求，返回文本及工具调用；网络读取在线程执行。
 
-        只用标准库 + 线程，不阻塞事件循环 ✓；失败一律返回 ("", []) 由上层回退 ✓。
+        请求失败返回空文本与空调用列表，由上层处理。
         """
         import asyncio
         import urllib.request
@@ -2127,7 +2018,7 @@ class HiganPlugin(Star):
             # the parent catalog is never monkeypatched or changed mid-request.
             payload["tools"] = _dedupe_tool_schemas(self._tool_schemas() if tool_schemas is None else tool_schemas)
             payload["tool_choice"] = "auto"
-        payload.update(self._llm_extra())   # [thinking-max] 思考拉满 ✓
+        payload.update(self._llm_extra())   # 合并显式配置的模型参数。
         # Compare only process-keyed prefix digests; logs contain numeric/boolean
         # metrics, not prompts, image URLs, scope identifiers or API credentials.
         # Byte reuse is local evidence, not a claim about provider cache tokens.
@@ -2146,6 +2037,7 @@ class HiganPlugin(Star):
         body = json.dumps(payload).encode("utf-8")
 
         def _call() -> dict:
+            """同步提交模型请求并解析 JSON，由外层在线程执行。"""
             req = urllib.request.Request(base + "/chat/completions", data=body, method="POST")
             req.add_header("Content-Type", "application/json")
             req.add_header("Authorization", "Bearer " + key)
@@ -2155,7 +2047,7 @@ class HiganPlugin(Star):
         try:
             data = await asyncio.to_thread(_call)
         except Exception as exc:  # noqa: BLE001
-            # [log-400-body] 打印服务端返回体，才能看出哪个字段不合法 ✓
+            # 记录服务端错误响应以定位不合法字段。
             _detail = ""
             try:
                 import urllib.error as _ue
@@ -2180,7 +2072,7 @@ class HiganPlugin(Star):
             msg = ((data.get("choices") or [{}])[0].get("message") or {})
             _txt = (msg.get("content") or "").strip()
             _tcs = (msg.get("tool_calls") or [])
-            # [tool-debug] 每次都能看到模型给不给 tool_calls ✓
+            # 记录模型返回的工具调用。
             logger.info("[higan] 工具请求结果：text=%d字 ｜tool_calls=%d 个%s"
                         % (len(_txt), len(_tcs),
                            ("（%s）" % ((_tcs[0].get("function") or {}).get("name") or ""))
@@ -2189,9 +2081,9 @@ class HiganPlugin(Star):
         except Exception:  # noqa: BLE001
             return "", []
 
-    # ---------------------------------------------------------- 后台任务（[task-system]）
+    # 后台任务
     def _tasks_mod(self):
-        """懒加载 tasks 模块（按路径 ✓ 不依赖 sys.path）。"""
+        """懒加载 tasks 模块（按路径  不依赖 sys.path）。"""
         if getattr(self, "_tasks_module", None) is not None:
             return self._tasks_module
         import importlib.util as _ilu
@@ -2206,8 +2098,9 @@ class HiganPlugin(Star):
 
     @staticmethod
     def _task_tool_schemas() -> list:
-        """任务类工具（模型可以自己给自己排活 ✓）。"""
+        """任务类工具（模型可以自己给自己排活 ）。"""
         def _f(name, desc, props=None, required=None):
+            """构造函数工具 schema，统一参数与必填字段结构。"""
             return {"type": "function", "function": {
                 "name": name, "description": desc,
                 "parameters": {"type": "object", "properties": props or {},
@@ -2434,7 +2327,7 @@ class HiganPlugin(Star):
                 return {"ok": False, "error": type(exc).__name__}
             return {"ok": True, "count": len(hits), "hits": hits}
         if name == "self_status":
-            # [self-status] 她查看自己当前状态（不返回任何密钥 ✓）
+            # 返回可观察的自身状态，不包含密钥。
             _cfg_path = os.path.join(HIGAN_ROOT, "groups.json")
             _conf = {}
             try:
@@ -2505,7 +2398,7 @@ class HiganPlugin(Star):
                 logger.warning("[higan] 群策略未完成持久化：%s", type(exc).__name__)
                 return {"ok": False, "error": "group_policy_not_saved", "error_type": type(exc).__name__}
         if name == "send_sticker":
-            # [stickers-only] 从表情包 manifest 里挑一张发（走插件通道 ✓）
+            # 从表情包索引选择图片，通过插件通道发送。
             try:
                 # 从表情包 manifest 里挑
                 _kw = str(args.get("keyword") or "").strip()
@@ -2551,7 +2444,7 @@ class HiganPlugin(Star):
             except Exception as _exc:  # noqa: BLE001
                 return {"ok": False, "error": repr(_exc)[:200]}
         if name in ("__wake_v1_disabled__",):
-            # [wake] 她自己的唤醒词/唤醒人（命中就当作被叫到，绕过回复率）
+            #  她自己的唤醒词/唤醒人（命中就当作被叫到，绕过回复率）
             try:
                 _p = "/root/higan/groups.json"
                 with open(_p, encoding="utf-8") as _h:
@@ -2584,7 +2477,7 @@ class HiganPlugin(Star):
                 return {"ok": False, "error": str(_exc)[:120]}
 
         if name == "wake_person_info":
-            # [wake-person-info] 唤醒人全息视图（配置 + 事实 + 定点时间）
+            # 查看唤醒人的配置、事实和定点时间。
             try:
                 with open("/root/higan/groups.json", encoding="utf-8") as _h:
                     _c = json.load(_h)
@@ -2619,7 +2512,7 @@ class HiganPlugin(Star):
                 return {"ok": False, "error": str(_exc)[:150]}
 
         if name in ("wake_person_set", "wake_person_show"):
-            # [wake-person-conf] 单唤醒人配置：pct / words / hours
+            #  单唤醒人配置：pct / words / hours
             try:
                 _p = "/root/higan/groups.json"
                 with open(_p, encoding="utf-8") as _h:
@@ -2644,7 +2537,7 @@ class HiganPlugin(Star):
                 return {"ok": False, "error": str(_exc)[:150]}
 
         if name in ("wake_list", "wake_add", "wake_remove", "wake_search"):
-            # [wake-v2] 唤醒人/唤醒词：按群存、按群看、可删、可搜（不直接吐全量）
+            # 按群管理唤醒人和唤醒词，支持删除与搜索。
             try:
                 _p = "/root/higan/groups.json"
                 with open(_p, encoding="utf-8") as _h:
@@ -2718,7 +2611,7 @@ class HiganPlugin(Star):
                 return {"ok": False, "error": str(_exc)[:120]}
 
         if name == "wp_fact_move":
-            # [wp-move] 通用事实 → 某个唤醒人的记录（原子：先写成功再从通用里删）
+            #  通用事实 → 某个唤醒人的记录（原子：先写成功再从通用里删）
             try:
                 import importlib.util as _ilu5
                 from pathlib import Path as _P5
@@ -2747,7 +2640,7 @@ class HiganPlugin(Star):
                 return {"ok": False, "error": str(_exc)[:150]}
 
         if name in ("wp_fact_add", "wp_fact_list", "wp_fact_search", "wp_fact_delete"):
-            # [wake-person-facts] 关于某个唤醒人的记录（单独存，最多 200 条，不计入 facts）
+            #  关于某个唤醒人的记录（单独存，最多 200 条，不计入 facts）
             try:
                 import importlib.util as _ilu3
                 from pathlib import Path as _P3
@@ -2796,7 +2689,7 @@ class HiganPlugin(Star):
                 return {"ok": False, "error": str(_exc)[:120]}
 
         if name == "remember":
-            # [remember-tool] 她自己决定记什么 ✓（写入走 memory.add_fact，自动去重）
+            # 通过 memory.add_fact 记录事实并复用去重逻辑。
             _txt = str(args.get("text") or "").strip()
             if not _txt:
                 return {"ok": False, "error": "text 不能为空"}
@@ -2816,7 +2709,7 @@ class HiganPlugin(Star):
                 logger.warning("[higan] remember 失败：%r", str(_exc)[:120])
                 return {"ok": False, "error": str(_exc)[:120]}
         if name == "vm_fetch":
-            # [vm-fetch] 她自己决定把目标文件下载进虚拟机 ✓
+            # 将指定文件下载到机器人虚拟机。
             _msg_id = str(args.get("msg_id") or "").strip()
             _url = str(args.get("url") or "").strip()
             _name = str(args.get("name") or "").strip()
@@ -3085,22 +2978,17 @@ class HiganPlugin(Star):
             return {"ok": False, "delivered": False, "error": "invalid_send_arguments",
                     "error_type": type(exc).__name__}
 
-    # [proactive-social]
+    # 自主机会兼容入口
     async def _free_tick(self) -> None:
-        """Retired compatibility entry: the single poll controller owns autonomous opportunities."""
+        """兼容入口；自主机会由统一轮询控制器提供。"""
         return None
 
-    # [fix-tool-map] 2026-10-21 补齐 schema 与映射不一致的工具
-    # [map-mail-legacy] 2026-10-21 补 mail_list/mail_code
-    # [map-hold-frame] 2026-10-21 补 hold_drag/frame_eval
-    # [tool-map-audit] 2026-10-21 补齐 schema↔映射缺口
-    async def _vm_tool(self, name: str, args: dict) -> dict:
-        """[tool-loop] 调她自己的虚拟机（127.0.0.1:18003）✓。
+    # 虚拟机工具映射
 
-        为什么直接打 VM API 而不走 MCP：AstrBot 的 MCP 工具只在其 agent 管线里自动注入 ✗，
-        而 `_decide` 是自己调 LLM ⇒ 模型根本看不到工具清单 ✗。这里用最直接的方式补上回路，
-        同时把超时（30s）与失败降级都控制在我们手里 ✓。
-        """
+
+
+    async def _vm_tool(self, name: str, args: dict) -> dict:
+        """调用机器人虚拟机的工具 API，保持显式工具映射、超时和错误处理。"""
         import asyncio
         import urllib.request
 
@@ -3172,6 +3060,7 @@ class HiganPlugin(Star):
             return {"ok": False, "error": "unknown tool %s" % name}
 
         def _call() -> dict:
+            """执行一次虚拟机请求，保留结构化错误，不自动重试可能有副作用的操作。"""
             method, path, payload = mapping[name]
             url = "http://127.0.0.1:18003" + path
             try:
@@ -3303,7 +3192,8 @@ class HiganPlugin(Star):
             return await self._llm_tools(system, prompt, [], messages, allow_tools)
 
         async def _execute_tool(name, args):
-            # [group-files] 群文件走 AstrBot 的 OneBot 客户端（HTTP 口是空壳 ✗）
+            # 群文件通过 AstrBot 的 OneBot 客户端读取。
+            """执行共享工具入口，并将媒体与观察结果接入本轮模型上下文。"""
             if name in ("group_files", "group_file_download"):
                 try:
                     _api = event.bot.api
@@ -3349,13 +3239,13 @@ class HiganPlugin(Star):
                 image = res.get("image") or {}
                 if image.get("ref"):
                     live_refs.append(str(image["ref"]))
-            # [plugin-delivers-media] VM 说"交给你发" ⇒ 走插件通道（实测可用 ✓）
+            # VM 请求插件发送媒体时，通过插件媒体通道执行。
             try:
                 if isinstance(res, dict) and res.get("deliver") == "plugin":
                     _p = str(res.get("path") or "")
                     if _p:
                         _delivered = await self._deliver_media(event, group, _p, str(res.get("send_as") or "image"))
-                        # [no-double-media] 记下来，组装回复时不要再挂一次 ✓
+                        # 记录媒体发送状态，避免组装回复时重复附加。
                         res = dict(res)
                         res["delivered"] = bool(_delivered)
                         if _delivered:
@@ -3367,7 +3257,7 @@ class HiganPlugin(Star):
                 if name == "vm_shot" and isinstance(res, dict) and res.get("path"):
                     path = str(res["path"])
                     shots.append(path)
-                    live_refs.append(path)      # ← 关键：让她能看见这张图 ✓
+                    live_refs.append(path)      # 将图片加入模型的后续视觉输入。
                     logger.info("[higan] 截图已喂回模型：%s" % path)
             except Exception:  # noqa: BLE001
                 pass
@@ -3427,7 +3317,7 @@ class HiganPlugin(Star):
             logger.info("[higan] 本轮用过工具：%s ｜截图 %d 张" % (_used, len(shots)))
         # Native loop already produced a result-aware answer. Never ask a second independent
         # model to rephrase it without the transcript (that could duplicate actions or lose evidence).
-        # [focus-and-silence] 她可以选择不说 ✓
+        # 模型可选择静默。
         from .reply_selection import is_silence
         if is_silence(_out):
             logger.info("[higan] 她选择沉默（SILENT）✓")
@@ -3437,9 +3327,9 @@ class HiganPlugin(Star):
             task_context["last_tools"] = list(_used)
         if not _out:
             return ""
-        # [no-caption-fallback] 图已发就不要再硬凑文字 ✗（会凭空跑题）
-        # 她本来就会在工具回路里自己说话；没说就是不想说 ✓
-        # [model-decides-image] 其余情况仍由她自己写 [发图] 决定 ✓
+        # 媒体已发送时不补造文字说明。
+
+        # 其余图片由模型显式发图标记决定。
         if shots and "[发图]" in (_out or ""):
             _out = _out.replace("[发图]", "[发图:%s]" % shots[-1], 1).strip()
             logger.info("[higan] 她决定发图：%s" % shots[-1])
@@ -3472,10 +3362,10 @@ class HiganPlugin(Star):
         return (out or "").strip()
 
     def _parse_decision(self, raw: str, require_action: bool = True):
-        """[tolerant-parse] 从模型输出里取 JSON（三级容错 ✓）。
+        """从模型输出里取 JSON（三级容错 ）。
 
         ① 严格解析 ② 串内裸引号换成中文引号再解析 ③ 正则抽 action/segments
-        任何一级成功就返回；全失败才返回 None（调用方再决定是否静默）✓
+        任何一级成功就返回；全失败才返回 None（调用方再决定是否静默）
         """
         if not raw:
             return None
@@ -3490,7 +3380,7 @@ class HiganPlugin(Star):
         except Exception:  # noqa: BLE001
             pass
 
-        # ② 把字符串内部的裸双引号换成中文引号（最常见的坏法 ✓）
+        # 将字符串内部的裸双引号替换为中文引号，再尝试解析。
         try:
             fixed = re.sub(r'(?<=[^\s:,\[{])"(?=[^\s:,\]}])', "”", cand)
             data = json.loads(fixed)
@@ -3500,7 +3390,7 @@ class HiganPlugin(Star):
         except Exception:  # noqa: BLE001
             pass
 
-        # ③ 正则抽（救"要回但 JSON 断了"）
+        # 解析失败时按正则提取 action 与 segments。
         try:
             act = re.search(r'"action"\s*:\s*"(reply|silent)"', cand)
             if not act:
@@ -3510,7 +3400,7 @@ class HiganPlugin(Star):
             if m2:
                 segs = re.findall(r'"((?:[^"\\]|\\.)*)"', m2.group(1))
             if not segs:
-                # 没有 segments：取出所有看起来像中文句子的引号串 ✓
+                # 没有 segments 时提取引号内的中文文本。
                 for s in re.findall(r'"((?:[^"\\]|\\.){2,})"', cand):
                     if re.search(r"[\u4e00-\u9fff]", s) and s not in (
                             "reply", "silent", "reason", "tone", "segments"):
@@ -3546,15 +3436,10 @@ class HiganPlugin(Star):
 
     async def _send(self, event: AstrMessageEvent, group: str, reply: str,
                     quote_id=None, *, decoded: bool = False) -> str | None:
-        """发送回复：**引用被回复的消息** + 文字 + 可选表情包（**发前先看一眼**）。
+        """按共享协议发送文字、可选引用和媒体，并记录确认发送的结果。
 
-        引用（QQ 的"回复某条消息"）很关键：快速连发时，光看内容分不清在回哪一句，
-        引用后一目了然，顺序上的歧义也就消失了（用户 2026-09-19 要求）。
-        写法与 AstrBot 官方一致：`chain.insert(0, Reply(id=消息ID))`。
-
-        **用 `event.send()` 直接发**，而不是 `set_result()`：因为在 `on_message` 里调用了
-        `stop_event()`（用来拦掉默认 LLM），管线会中止、RespondStage 不会执行，
-        `set_result` 的结果就发不出去了。`event.send` 是官方命令插件同样在用的直接发送。
+        on_message 停止默认事件管线，因此这里使用 event.send 直接发送。
+        引用由模型输出的有效消息号决定，不默认引用触发消息。
         """
         from .reply_selection import decode_reply, is_silence
         if not decoded:
@@ -3571,7 +3456,7 @@ class HiganPlugin(Star):
         if is_silence(reply) or not self._policy_allows(event, group):
             return None
         # Accepted later chat is queued; it cannot cancel an active operation or delivery.
-        # [strip-at-send] 发送前统一清洗：工具调用语法/DSML 一律不发到群里
+        #  发送前统一清洗：工具调用语法/DSML 一律不发到群里
         try:
             _clean_reply = self._strip_tool_syntax(reply)
             if not _clean_reply.strip():
@@ -3591,14 +3476,14 @@ class HiganPlugin(Star):
         except Exception as _sexc:  # noqa: BLE001
             logger.warning("[higan] 发送前清洗失败：%r", str(_sexc)[:100])
 
-        # [recall] 2026-10-19: 她的回复里带 [撤回] ⇒ 先撤掉上一条再发新内容
+        # 识别撤回标记，在发送前撤回机器人上一条消息。
         if "[撤回]" in reply:
             reply = reply.replace("[撤回]", "")
             try:
                 await self._recall_last(event, group, count=1)
             except Exception as _exc:  # noqa: BLE001
                 logger.warning("[higan] 撤回异常（忽略）：%r", _exc)
-        # [tool-loop] 2026-10-19: 支持 [发图:/abs/path]，把工具产生的图片真的发出去
+        # 解析发图标记，将工具生成的图片交给媒体通道。
         _img_path = ""
         _img_hit = re.search(r"\[发图:([^\]]+)\]", reply or "")
         if _img_hit:
@@ -3608,14 +3493,14 @@ class HiganPlugin(Star):
         text = self._to_plain(STICKER_MARKER.sub("", reply))
         chain = MessageChain()
         has_image_output = False
-        # [group-policy+at] 回复里的 `[at:QQ]` ⇒ 真正的 @ ✓
+        #  回复里的 `[at:QQ]` ⇒ 真正的 @
         try:
             text, _ats = self._at_components(text)
             for _a in _ats:
                 chain.chain.append(_a)
         except Exception:  # noqa: BLE001
             pass
-        # [model-quote] 引用由模型决定：只有她给了 quote 才引 ✓（不再硬贴触发那条 ✗）
+        # 仅在模型提供有效 quote 时添加引用。
         msg_id = quote_id or None
         # One shared lexical boundary consumes leading transport controls only.
         # Invalid task/hash IDs are never displayed or guessed into QQ reply IDs.
@@ -3627,7 +3512,7 @@ class HiganPlugin(Star):
                 chain.chain.append(Reply(id=msg_id))
             except Exception as exc:
                 logger.warning("[higan] 构造引用失败：%r", exc)
-        # [send-my-avatar] `[头像:me]` → 换成自己的 QQ（走既有头像通道 ✓）
+        #  `[头像:me]` → 换成自己的 QQ（走既有头像通道 ）
         try:
             if "[头像:me]" in (text or ""):
                 _selfq = str(event.get_self_id() or "")
@@ -3635,7 +3520,7 @@ class HiganPlugin(Star):
                     text = text.replace("[头像:me]", "[头像:%s]" % _selfq)
         except Exception:  # noqa: BLE001
             pass
-        # `[头像:QQ]` → 把该成员的头像发出来（用户 2026-09-19 要求"能看到群成员头像"）
+        # 解析头像标记并发送对应成员头像。
         av = AVATAR_MARKER.search(text)
         if av:
             text = self._to_plain(AVATAR_MARKER.sub("", text))
@@ -3706,7 +3591,7 @@ class HiganPlugin(Star):
         if (text.strip() and is_silence(text)) or (not text and not has_image_output) or not self._policy_allows(event, group):
             return None
         try:
-            # [recall] 2026-10-19: 记录发出去的消息 id，供"自己撤回"使用
+            # 保存已发送消息 ID，供显式撤回使用。
             _sent = await event.send(chain)
         except Exception as exc:
             logger.error("[higan] 发送失败：%s", type(exc).__name__)
@@ -3725,7 +3610,7 @@ class HiganPlugin(Star):
                 self._last_sent.setdefault(group, []).extend(_ids)
                 del self._last_sent[group][:-5]
                 logger.info("[higan] 已发送，message_id=%s" % ",".join(map(str, _ids)))
-            try:  # [brevity] 记住她最近说过的话，防重复
+            try:  #  记住她最近说过的话，防重复
                 _mine = getattr(self, "_my_recent", None)
                 if _mine is None:
                     _mine = self._my_recent = {}
@@ -3740,11 +3625,7 @@ class HiganPlugin(Star):
 
     async def _recall_last(self, event: AstrMessageEvent, group: str,
                            count: int = 1) -> list:
-        """[recall] 撤回她自己最近发出的消息（走 AstrBot 的 bot 连接 ✓）。
-
-        为什么不用 OneBot HTTP 旁路：186 上实测 `get_group_msg_history` 返回 0 条 ✗，
-        而 AstrBot 自己的连接是活的 ⇒ 直接 `call_action("delete_msg")` 最稳 ✓。
-        """
+        """通过 AstrBot 的 bot 连接撤回机器人最近发出的消息。"""
         ids = list(getattr(self, "_last_sent", {}).get(group) or [])[-count:]
         done = []
         bot = getattr(event, "bot", None)
@@ -3768,11 +3649,7 @@ class HiganPlugin(Star):
         return done
 
     async def _archive_images(self, event: AstrMessageEvent, group: str) -> list:
-        """[vm-archive] 把收到的图片存进 /root/higan/images/inbox（她的虚拟机）✓。
-
-        为什么存进 VM：她现在跑在 186 上，这些图就是"她见过的东西"，
-        以后要回看/复述某张图时能直接读文件 ✓（不再依赖 211 的临时目录 ✗）。
-        """
+        """将收到的图片归档到机器人虚拟机的 images/inbox，供工具回看。"""
         import shutil as _shutil
         from pathlib import Path as _Path
         out_dir = _Path("/root/higan/images/inbox")
@@ -3875,11 +3752,7 @@ class HiganPlugin(Star):
 
     @staticmethod
     def _fetch_page(url: str, limit: int = PAGE_TEXT_LIMIT) -> str:
-        """**打开网页**并抽取正文文本（去脚本/样式/标签），供模型阅读。
-
-        用户 2026-09-19 反馈"搜到的都是网页标题，我哪知道几点" —— 只给摘要不够，
-        必须真的把页面打开读正文。百度百科/知乎等会反爬（403），故调用方要多试几个站。
-        """
+        """读取公开网页并剔除脚本、样式和标签，返回供模型阅读的正文。"""
         import html
         import ipaddress
         import socket
@@ -3945,11 +3818,7 @@ class HiganPlugin(Star):
         return [item["image_url"] for item in result.get("images", [])]
 
     async def _download_image(self, ref: str) -> Path | None:
-        """下载一张图到本地（支持 http 直链或关键词 → 先搜图再下第一张）。
-
-        用户 2026-09-19 要求"可以下载搜到的图也可以下载群成员头像"。
-        下载后放到 `data/downloads/`，便于直接发出去或复用。
-        """
+        """将图片直链或关键词搜索到的图片下载到 data/downloads，供发送和复用。"""
         target = (ref or "").strip()
         if not target:
             return None
@@ -3986,13 +3855,7 @@ class HiganPlugin(Star):
 
     async def _handle_search(self, provider, reply: str, refs: list[str],
                              event: AstrMessageEvent) -> str:
-        """处理回复里的 `[搜索:关键词]`：联网搜 → **打开网页读正文** → 喂回模型作答。
-
-        这是"工具调用"的轻量实现（用标记而不是 AstrBot 的 ToolSet）。
-        关键点：**不只给搜索摘要，还要真的打开前几个页面读正文** ——
-        否则遇到"现在几点/今天几号"这类问题，模型只能看到网页标题，答不出来
-        （2026-09-19 用户实测反馈）。
-        """
+        """处理搜索标记，读取搜索结果页面正文后交回模型生成回复。"""
         group = str(event.get_group_id() or "") or "private:" + str(event.get_sender_id())
         request_context = self._request_context(event, group, event.get_message_str() or "", bool(refs))
         m = SEARCH_MARKER.search(reply)
@@ -4017,7 +3880,7 @@ class HiganPlugin(Star):
             return await self._call_llm(provider, prompt, system_prompt(self.persona), refs)
         logger.info("[<BOT_ID>] 搜索得到相关结果：%d 条", len(results))
 
-        # **打开网页读正文**：多试几个站（百度百科/知乎等会 403），
+        # 打开网页读正文：多试几个站（百度百科/知乎等会 403），
         # 并发拉取，取前 PAGE_FETCH_TOP 个成功的。
         pages: list[dict] = []
         candidates = results[:PAGE_FETCH_TRY]
@@ -4107,7 +3970,7 @@ class HiganPlugin(Star):
     async def cmd_del_sticker(self, event: AstrMessageEvent) -> None:
         """把某张表情包移出索引（只有主人可用）。用法：`/表情删 <序号>`。
 
-        只移出索引、**不删文件**（避免误删，且随时可以再加回来）。
+        只移出索引、不删文件（避免误删，且随时可以再加回来）。
         """
         if not self._is_owner(event):
             return
@@ -4137,7 +4000,7 @@ class HiganPlugin(Star):
                               images: list) -> None:
         """把群友发的图存进表情包库，并用视觉模型打描述做索引。
 
-        **关键**：AstrBot 会把收到的图下载到 `data/temp/`，此时组件里是**本地路径**
+        关键：AstrBot 会把收到的图下载到 `data/temp/`，此时组件里是本地路径
         （`file://` 或绝对路径）而不是 http URL —— 两种都必须处理，否则一张都收不到。
         """
         for comp in images[:2]:                        # 一条消息最多收 2 张
@@ -4187,10 +4050,7 @@ class HiganPlugin(Star):
         return src if src.startswith("http") else str(saved)
 
     async def _member_avatar(self, qq: str) -> Path | None:
-        """取某个群成员的头像并缓存到本地（用户 2026-09-19 要求）。
-
-        用 QQ 官方头像接口，无需登录态；同一 QQ 只拉一次（缓存复用）。
-        """
+        """从 QQ 头像接口获取成员头像并缓存到本地，同一 QQ 复用缓存。"""
         qq = str(qq or "").strip()
         if not qq.isdigit():
             return None
@@ -4212,12 +4072,7 @@ class HiganPlugin(Star):
     # --------------------------------------------- 群成员变动（加群/退群）
 
     async def _watch_members(self) -> None:
-        """后台任务：定期比对群成员名单，把**加群/退群**写进群上下文。
-
-        用户 2026-09-19 要求"模型能看到加群退群"。AstrBot 不会把 OneBot 的
-        成员变动通知转给插件，所以这里自己轮询 `get_group_member_list` 做 diff
-        （只读、幂等；间隔 `MEMBER_WATCH_INTERVAL` 秒）。
-        """
+        """按 MEMBER_WATCH_INTERVAL 轮询成员名单，将加入和退出变化写入群上下文。"""
         while True:
             try:
                 await asyncio.sleep(MEMBER_WATCH_INTERVAL)
@@ -4267,6 +4122,7 @@ class HiganPlugin(Star):
         req.add_header("Content-Type", "application/json")
 
         def _call() -> dict:
+            """同步读取 OneBot JSON 响应，由外层在线程执行。"""
             with urllib.request.urlopen(req, timeout=20) as resp:
                 return json.loads(resp.read().decode("utf-8", "replace"))
 
@@ -4277,21 +4133,13 @@ class HiganPlugin(Star):
             return {}
 
     async def _describe(self, image_ref: str) -> str:
-        """用视觉模型给表情包打一句中文描述（用于关键词匹配）。
-
-        **本地文件也要传给模型**：实测只传 http 会让"手动放进目录 / 从 temp 导入"的
-        表情包只能拿到通用描述，导致按关键词挑图时匹配不到（2026-09-19 踩到）。
-        """
+        """用视觉模型为表情包生成中文关键词描述，支持 HTTP 与本地图片。"""
         text = await self._describe_image(
             image_ref, "用不超过 10 个字描述这张表情包表达的情绪或含义（只输出描述）。")
         return text or "表情包"
 
     async def _describe_image(self, image_ref: str, prompt: str) -> str:
-        """通用视觉描述：把一张图（http URL 或本地路径）交给视觉模型。
-
-        本地路径会转成 **data URL** 并压缩（实测 `file://` 交给 provider 拿不到图，
-        而原图 base64 会让请求大到 2.7MB、单次调用 100 秒以上）。
-        """
+        """为 HTTP 或本地图片生成视觉描述；本地图片压缩后转为 data URL。"""
         provider = self.context.get_using_provider()
         if provider is None:
             return ""
