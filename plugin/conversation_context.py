@@ -88,6 +88,10 @@ def system_prompt(persona: str) -> str:
             },
             "response": {
                 "options": ["text", "SILENT"],
+                "silence": (
+                    "An unquoted, unfenced standalone final line SILENT makes the entire completion silent; "
+                    "preceding narration is not delivered. Literal examples belong in quoted or fenced text."
+                ),
                 "selection": (
                     "For a current batch, the model may choose a positive subset with a JSON object "
                     "{\"reply_to\":[message_id,...],\"text\":\"...\"}; reply_to identifies "

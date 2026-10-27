@@ -114,7 +114,11 @@ def test_structured_sentinel_does_not_bypass_target_validation(targets):
     assert result["quote_id"] is None
 
 
-@pytest.mark.parametrize("text", ["I prefer silent mode", "`SILENT`", "SILENT?", '"SILENT" trailing'])
+@pytest.mark.parametrize("text", [
+    "I prefer silent mode", "`SILENT`", "SILENT?", '"SILENT" trailing',
+    "explain\n>SILENT", "explain\n`SILENT`", "```text\nSILENT",
+    "explain\nSILENT\nordinary reply", "~~~\nSILENT\n~~~",
+])
 def test_structured_silence_mentions_remain_replies(text):
     """Whole-token recognition must not suppress ordinary validated responses."""
     raw = json.dumps({"reply_to": ["101"], "text": text})
@@ -342,3 +346,65 @@ def test_unattributed_opt_in_is_keyword_only():
     """Callers must explicitly name the permission rather than pass an ambiguous bool."""
     with pytest.raises(TypeError):
         decode_reply('{"reply_to":[],"text":""}', [], True)
+
+
+@pytest.mark.parametrize("text", [
+    "explain\nSILENT", "(internal narration)\n\nSILENT",
+    '"quoted narration"\nSILENT', '"unfinished narration\nSILENT',
+    "arbitrary preceding paragraphs\n\nmore narration\nSiLeNt\n\n",
+    "internal\r\n\t silent \t\r\n", "[quote:101] internal\nSILENT",
+    "```python\nprint('example')\n```\nSILENT",
+    "~~~text\nSILENT\n~~~\nSILENT", "````\n```\n````\nSILENT",
+])
+def test_terminal_silence_suppresses_all_narration(text):
+    """Explicit final disposition suppresses arbitrary prefixes and quote effects."""
+    for raw in (text, json.dumps(text)):
+        assert is_silence(raw) is True
+        assert decode_reply(raw, [{"id": "101"}]) == {
+            "text": "", "reply_to": [], "quote_id": None,
+            "structured": False, "error": None,
+        }
+
+
+@pytest.mark.parametrize("text", [
+    "explain\nSILENT.", "explain\n(SILENT)", "explain\nnot SILENT",
+    "explain\n>SILENT", "explain\n> SILENT", "explain\n`SILENT`",
+    'explain\n"SILENT"', "explain\n'SILENT'", "explain\nSILENT SILENT",
+    "explain\nSILENT\nordinary reply", "SILENT\nnormal reply",
+    "```\nSILENT", "~~~\nSILENT", "prefix\n```python\nSILENT\n\n",
+    "````\n```\nSILENT", "~~~\n```\nSILENT",
+    "```\n``` not a closing fence\nSILENT",
+    "   ```python\nSILENT", "\t~~~example\nSILENT",
+    '```json\n"explain\\nSILENT"\n```',
+    '{"text":"explain\\nSILENT"}', '"explain\\\\nSILENT"',
+])
+def test_terminal_silence_preserves_literal_examples_and_near_matches(text):
+    """Final-line control is literal, unfenced, and not recursively JSON-decoded."""
+    for raw in (text, json.dumps(text)):
+        assert is_silence(raw) is False
+        assert decode_reply(raw, [{"id": "101"}])["text"] == raw
+
+
+@pytest.mark.parametrize("targets, error", [
+    (["101"], None), ([], "invalid_reply_targets"),
+    (["999"], "invalid_reply_targets"), (["101", "999"], "invalid_reply_targets"),
+])
+def test_terminal_silence_validates_structured_targets_first(targets, error):
+    """Terminal disposition never grants a missing or fabricated target permission."""
+    raw = json.dumps({"reply_to": targets, "text": "internal narration\nSILENT"})
+    result = decode_reply(raw, [{"id": "101"}, {"id": "102"}])
+    assert result == {
+        "text": "", "reply_to": ["101"] if error is None else [],
+        "quote_id": None, "structured": True, "error": error,
+    }
+
+
+@pytest.mark.parametrize("records", [None, []])
+def test_terminal_silence_keeps_no_batch_envelopes_opt_in(records):
+    """Only authorized no-batch envelopes interpret their validated text as control."""
+    raw = json.dumps({"reply_to": [], "text": "internal narration\nSILENT"})
+    assert decode_reply(raw, records)["text"] == raw
+    assert decode_reply(raw, records, allow_unattributed=True) == {
+        "text": "", "reply_to": [], "quote_id": None,
+        "structured": True, "error": None,
+    }

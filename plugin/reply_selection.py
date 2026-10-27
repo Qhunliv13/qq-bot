@@ -13,15 +13,47 @@ from typing import Any
 _LEGACY_QUOTE = re.compile(r"\[quote:(\d{2,20})\]")
 
 
+def _has_terminal_silence(text: str) -> bool:
+    """Reserve a literal final SILENT line outside backtick/tilde code fences.
+
+    Earlier narration is internal when this explicit disposition is supplied.
+    Literal examples must be quoted or fenced; an unclosed fence conservatively
+    keeps its contents literal. This does not normalize punctuation or wrappers.
+    """
+    lines = text.splitlines()
+    # Whole-token normalization belongs to is_silence; multiline control is a
+    # deliberately narrower protocol, never a substring or prose-suffix match.
+    if len(lines) < 2 or lines[-1].strip().upper() != "SILENT":
+        return False
+    fence_char = None
+    fence_length = 0
+    for line in lines[:-1]:
+        marker = re.match(r"^[ \t]*(`{3,}|~{3,})(.*)$", line)
+        if marker is None:
+            continue
+        run, suffix = marker.groups()
+        if fence_char is None:
+            # Remember the delimiter and length: another fence kind, a shorter
+            # run, or a would-be closer with text cannot end this literal block.
+            fence_char, fence_length = run[0], len(run)
+        elif run[0] == fence_char and len(run) >= fence_length and not suffix.strip():
+            fence_char = None
+            fence_length = 0
+    return fence_char is None
+
+
 def is_silence(value: Any) -> bool:
-    """Recognize only empty output or a whole SILENT protocol token.
+    """Recognize empty output, a whole token, or a terminal SILENT disposition.
 
     Preserve the established case/whitespace and ``。.!！`` edge-punctuation
-    normalization. Accept exactly one balanced ASCII/fullwidth parenthesis pair
-    around the token, matching observed model output, and one valid JSON-string
-    layer. Never unwrap objects, arrays, code fences, nested parentheses, or
-    arbitrary quotes. Structured replies must validate their targets separately
-    before passing their text here, so this predicate cannot bypass attribution.
+    normalization for whole output, including one balanced ASCII/fullwidth
+    parenthesis pair and one valid JSON-string layer. After that single decode,
+    a final unquoted, unfenced standalone literal SILENT line (case-insensitive)
+    suppresses the entire completion, including any preceding narration. Use
+    quoted/fenced text for literal examples. Multiline control does not inherit
+    whole-token punctuation or parenthesis normalization. Never unwrap objects,
+    arrays, nested parentheses, or arbitrary quotes. Structured replies must
+    validate targets first so silence cannot bypass attribution.
     """
     # Missing output already ends a turn; other nonstrings are not protocol text.
     if value is None:
@@ -34,11 +66,13 @@ def is_silence(value: Any) -> bool:
         try:
             decoded = json.loads(text)
         except json.JSONDecodeError:
-            # Malformed or trailing content must remain ordinary user-facing text.
-            return False
-        # Successful JSON beginning with a quote is necessarily a string; decode
-        # once only so nested serialization never expands the control protocol.
-        text = decoded.strip()
+            # Do not unwrap malformed/trailing JSON; a literal final disposition
+            # can still follow arbitrary narration that begins with a quote.
+            pass
+        else:
+            # Successful JSON beginning with a quote is necessarily a string;
+            # decode once only, never recursively expanding nested serialization.
+            text = decoded.strip()
     # Keep empty-output behavior separate: empty parentheses are not a sentinel.
     if not text:
         return True
@@ -48,8 +82,9 @@ def is_silence(value: Any) -> bool:
     if ((token.startswith("(") and token.endswith(")"))
             or (token.startswith("（") and token.endswith("）"))):
         token = token[1:-1].strip().strip("。.!！")
-    # Equality, not substring matching, preserves prose and literal code mentions.
-    return token == "SILENT"
+    # Equality and an explicit final-line disposition preserve ordinary mentions;
+    # scan the original normalized text, not punctuation-stripped example code.
+    return token == "SILENT" or _has_terminal_silence(text)
 
 
 def _message_id(value: Any) -> str | None:
@@ -77,7 +112,7 @@ def decode_reply(raw: str | None, records: Any, *, allow_unattributed: bool = Fa
     text = "" if raw is None else raw
     result = {"text": text, "reply_to": [], "quote_id": None,
               "structured": False, "error": None}
-    # Use the shared whole-output boundary without guessing intent from prose.
+    # Use the shared explicit-disposition boundary, never inferred prose intent.
     if is_silence(text):
         result["text"] = ""
         return result
