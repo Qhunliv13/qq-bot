@@ -1,0 +1,28 @@
+{
+  "date": "2026-10-27",
+  "timezone": "Asia/Shanghai",
+  "candidate_commit": "0986675f4827e9e2372bc693451859392b5ffbfc",
+  "experiment": "two_lossless_layouts_each_with_two_current_message_variants",
+  "parsed_data_equal": true,
+  "tool_observations": 100,
+  "observations_utf8_bytes": 127401,
+  "user_utf8_bytes": 159215,
+  "exact_common_prefix_bytes": {"prior": 31522, "evidence_first": 158939},
+  "provider_requests": [
+    {"layout": "prior", "step": 1, "prompt_tokens": 66932, "cached_tokens": 8192, "hit_percent": 12.239287635211857},
+    {"layout": "prior", "step": 2, "prompt_tokens": 66932, "cached_tokens": 20480, "hit_percent": 30.59821908802964},
+    {"layout": "evidence_first", "step": 1, "prompt_tokens": 66932, "cached_tokens": 8192, "hit_percent": 12.239287635211857},
+    {"layout": "evidence_first", "step": 2, "prompt_tokens": 66932, "cached_tokens": 66816, "hit_percent": 99.8266897746967}
+  ],
+  "diagnostic_max_tokens": 128,
+  "production_parameters_modified": false,
+  "qq_messages_sent": 0,
+  "tool_actions_executed": 0,
+  "whole_population_improvement_asserted": false,
+  "limits": [
+    "Sequential four-request demonstration, not a randomized long-term population estimate.",
+    "Evidence-first also changes cache behavior when the capped observation window evicts its oldest record; that negative case is explicitly tested.",
+    "No padding, persona change, context trimming, missing evidence or frozen time was used.",
+    "Local byte-prefix lengths and provider cached-token counts are separate measurements."
+  ]
+}

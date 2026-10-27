@@ -1,0 +1,51 @@
+{
+  "date": "2026-10-27",
+  "timezone": "Asia/Shanghai",
+  "deployed_commit": "0986675f4827e9e2372bc693451859392b5ffbfc",
+  "baseline_commit": "cacc781b35a5a0bb72e5671df5bc17e469f47209",
+  "status": "active",
+  "baseline_weighted_cache_hit_percent": {"last12h": 43.698, "last3h": 50.622, "last1h": 45.318, "last30min": 39.157},
+  "lossless_optimization": {
+    "observations_before_current_message": true,
+    "parsed_json_values_unchanged": true,
+    "history_window_unchanged": true,
+    "persona_tools_clock_and_provenance_preserved": true,
+    "production_model_parameters_unchanged": true,
+    "context_deleted_or_padding_added": false,
+    "complete_multimodal_prefix_diagnostics": true,
+    "numeric_request_index_correlates_usage": true
+  },
+  "actual_provider_ab": {
+    "prompt_tokens_each": 66932,
+    "prior_first_cached_tokens": 8192,
+    "new_first_cached_tokens": 8192,
+    "prior_changed_message_cached_tokens": 20480,
+    "new_changed_message_cached_tokens": 66816,
+    "prior_changed_message_hit_percent": 30.59821908802964,
+    "new_changed_message_hit_percent": 99.8266897746967,
+    "parsed_data_equal": true,
+    "observations_utf8_bytes": 127401,
+    "population_improvement_not_asserted": true
+  },
+  "verification": {
+    "pytest_passed": 1483,
+    "platform_skips": 24,
+    "subtests_passed": 25,
+    "deployed_hashes_verified": 26,
+    "astrbot_pid_before_after": 714988,
+    "astrbot_restart_count": 0,
+    "napcat_started_before_after": "2026-10-25T02:31:45.216352424Z",
+    "group_policies_unchanged": true,
+    "postrelease_tracebacks": 0,
+    "postrelease_batch_failures": 0,
+    "postrelease_reload_errors": 0,
+    "qq_test_messages_sent": 0,
+    "temporary_plugin_access_revoked": true
+  },
+  "limits": [
+    "Four sequential diagnostic requests demonstrate one evidence-heavy case; not a randomized long-term global cache estimate.",
+    "A capped evidence window evicting its oldest entry loses the history prefix behind it; this negative case is tested.",
+    "Provider routing, cache retention and backend affinity can affect realized cache hit rate independently.",
+    "First immediate postdeployment natural-traffic audit contained zero completed requests; no overall new percentage is claimed."
+  ]
+}
