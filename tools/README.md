@@ -35,6 +35,7 @@ python tools/validate_release.py
 |---|---|
 | 模型与工具回路 | [production_probe.py](production_probe.py)、[batch_model_probe.py](batch_model_probe.py)、[model_simulation_audit.py](model_simulation_audit.py) |
 | 回复与群策略 | [interim_reply_probe.py](interim_reply_probe.py)、[reply_finish_probe.py](reply_finish_probe.py)、[structured_silence_probe.py](structured_silence_probe.py)、[mention_policy_probe.py](mention_policy_probe.py) |
+| 发布与草稿 | [explicit_publication_probe.py](explicit_publication_probe.py)：原生工具回路与自主适配器的显式发布边界；模型和平台均替换为本地记录器，不向 QQ 发消息 |
 | 转发与复制粘贴 | [message_transfer_probe.py](message_transfer_probe.py)：真实分发、剪贴板与防重流程，平台接口替换为本地记录器，不执行真实转发 |
 | 事实与队列 | [fact_queue_probe.py](fact_queue_probe.py)：临时事实库、只读 worker 目录、任务认领边界和锁等待合批；不改真实记忆，不验证真实入口耗时 |
 | 指令来源与条件 | [instruction_provenance_probe.py](instruction_provenance_probe.py)：真实模型、小型合成上下文验证历史条件与当前触发分离；工具副作用禁用，不代替真实大上下文行为验证 |

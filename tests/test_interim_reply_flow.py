@@ -31,9 +31,12 @@ def _texts(chains):
     return [part.text for chain in chains for part in chain.chain if hasattr(part, "text")]
 
 
-def _final(text, targets=None):
-    """Build one outer reply protocol without changing the model-authored text."""
-    return json.dumps({"reply_to": [1234] if targets is None else targets, "text": text})
+def _final(text, targets=None, delivery=None):
+    """Build a model-authored reply with an optional explicit publication disposition."""
+    value = {"reply_to": [1234] if targets is None else targets, "text": text}
+    if delivery is not None:
+        value["delivery"] = delivery
+    return json.dumps(value)
 
 
 @pytest.fixture
@@ -87,7 +90,7 @@ def test_model_chosen_ack_progress_finish_share_one_native_transcript(interim, m
         ("private planning alpha", [calls[0]]),
         ("private planning beta", [calls[1]]),
         ("private planning gamma", [calls[2]]),
-        (_final(final), []),
+        (_final(final, delivery="new"), []),
     ])
     observed = []
 
@@ -129,9 +132,9 @@ def test_model_chosen_ack_progress_finish_share_one_native_transcript(interim, m
     plugin._pick_sticker_reviewed.assert_not_awaited()
 
 
-@pytest.mark.parametrize("suffix,expected_count", [("", 1), ("  ", 1), (" Additional detail.", 2)])
-def test_final_suppresses_only_exact_trimmed_successful_body(interim, monkeypatch, suffix, expected_count):
-    """Only exact same-turn delivery suppresses final; similar or extended text remains."""
+@pytest.mark.parametrize("suffix,expected_count", [("", 1), ("  ", 1), (" Additional detail.", 1)])
+def test_untyped_final_stays_internal_after_public_reply(interim, monkeypatch, suffix, expected_count):
+    """Omitted publication intent stays internal regardless of textual similarity."""
     plugin, event = interim, Event()
     body = "The local report contains seventeen entries."
     requests = _provider(monkeypatch, [
@@ -278,7 +281,7 @@ def test_interim_quote_targets_real_earlier_batch_message_without_changing_final
     requests = _provider(monkeypatch, [
         ("private", [_call("reply_now", {"text": "The earlier question is being checked.",
                                          "reply_to": ["1111"]})]),
-        (_final("The current question now has a distinct result."), []),
+        (_final("The current question now has a distinct result.", delivery="new"), []),
     ])
     asyncio.run(plugin._handle_one(event, "42", event.text, False, True))
     assert len(requests) == 2 and len(event.sent) == 2

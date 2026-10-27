@@ -28,6 +28,8 @@ def build_context(
     attachment_origins: Any = None,
     anchor_message_id: Any = None,
     history_context: Any = None,
+    conversation_state: Any = None,
+    deliveries: Any = None,
 ) -> str:
     """Serialize caller-provided JSON data with distinct origins and no I/O.
 
@@ -71,6 +73,11 @@ def build_context(
         # Optional provenance remains source data; absent callers keep their exact
         # established envelope and no publisher is inferred from an image subject.
         envelope["attachments"]["origins"] = attachment_origins
+    # Volatile routing evidence follows the stable shared-history prefix.
+    if conversation_state is not None:
+        envelope["conversation_state"] = conversation_state
+    if deliveries is not None:
+        envelope["deliveries"] = deliveries
     return json.dumps(envelope, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
 
 
@@ -122,7 +129,9 @@ def system_prompt(persona: str) -> str:
                     "Omitting it preserves ordinary reply behavior. new selects a public reply; already_delivered "
                     "retains an internal draft with no public body or quote and permits empty reply_to. "
                     "This disposition is not evidence that delivery succeeded; that evidence is a matching "
-                    "observed public receipt."
+                    "observed public receipt. In autonomous opportunities, and after a public reply in "
+                    "the same turn, an unmarked final completion is an internal draft; delivery=new "
+                    "explicitly publishes another final message. Tool sends remain independent public actions."
                 ),
             },
             "transport": {

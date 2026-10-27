@@ -3,6 +3,7 @@
 import asyncio
 import copy
 import importlib.util
+import json
 from pathlib import Path
 
 import pytest
@@ -47,6 +48,9 @@ def test_provider_all_calls_have_paired_ids_and_retained_observations(report):
         assert batch["exception"] is None, batch
         assert batch["provider_requests"] == 2, batch
         assert batch["final_answer"] == "Audit complete.", batch
+        final = json.loads(batch["final_raw"])
+        assert final["delivery"] == "new" and final["text"] == batch["final_answer"], batch
+        assert final["reply_to"], batch
         assert batch["exact_id_pairing"], batch
         assert batch["all_observations_retained"], batch
         assert batch["paired_results_match_archive"], batch

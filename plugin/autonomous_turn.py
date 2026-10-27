@@ -7,7 +7,8 @@ import asyncio
 from copy import deepcopy
 
 from .task_event import TaskEvent
-from .reply_selection import decode_reply, is_silence
+from .reply_selection import is_silence
+from .final_publication import select as select_publication
 from .history_window import history_snapshot
 
 
@@ -103,10 +104,12 @@ async def run_turn(plugin, scope, triggers, controller):
             contexts[scope]["trigger"]["events"] = deepcopy(started)
             event = AutonomyEvent(plugin, scope, origin, started)
             raw = await plugin._decide_tools_first(event, scope, "", False)
-            selection = decode_reply(raw, [], allow_unattributed=True)
+            publication = select_publication(raw, [], explicit=True, allow_unattributed=True)
+            selection = publication["selection"]
+            contexts[scope]["_final_publication"] = publication
             if selection["error"]:
                 return {"status": "failed", "reason": "reply_protocol_invalid", "scope": scope}
-            text = selection["text"]
+            text = selection["text"] if publication["publish"] else ""
             if is_silence(text):
                 return {"status": "completed", "scope": scope, "delivered": False}
             # Normal delivery rechecks the current policy and records actual visibility.

@@ -46,6 +46,7 @@ from plugin.qq_social import schema as social_schema  # noqa: E402
 from plugin import fact_tools  # noqa: E402
 from plugin.tool_context import redact  # noqa: E402
 from plugin.message_batch import message_record  # noqa: E402
+from plugin.reply_selection import decode_reply  # noqa: E402
 
 # Every distinct advertised name must be reviewed here; schema additions cannot
 # silently acquire a generic mocked success. Strings resembling code are inert
@@ -968,7 +969,10 @@ async def _audit(root, monkeypatch, batch_size):
         # Native entry normally freezes this event's current-batch records before
         # the provider loop; exercise reply attribution with that same local input.
         plugin._turn_context[scope] = {"messages": [message_record(event, event.text)]}
-        harness.provider_replies = [("discard tool draft", calls), ("Audit complete.", [])]
+        # A post-tool public completion declares its intent and actual current-batch target.
+        audit_final = json.dumps({"reply_to": [str(event.message_obj.message_id)],
+                                  "text": "Audit complete.", "delivery": "new"})
+        harness.provider_replies = [("discard tool draft", calls), (audit_final, [])]
         request_start = len(harness.requests)
         exception = None
         try:
@@ -980,7 +984,8 @@ async def _audit(root, monkeypatch, batch_size):
         observations = plugin._tool_evidence().recent(scope, 100)
         expected = [call["id"] for call in calls]
         report["provider_batches"].append({"names": batch, "call_count": len(calls), "exception": exception,
-            "final_answer": answer, "provider_requests": len(requests),
+            "final_answer": decode_reply(answer, plugin._turn_context[scope]["messages"])["text"],
+            "final_raw": answer, "provider_requests": len(requests),
             "paired_result_ids": [message["tool_call_id"] for message in paired],
             "exact_id_pairing": [message["tool_call_id"] for message in paired] == expected,
             "retained_observation_names": [row["tool_name"] for row in observations],

@@ -1,6 +1,7 @@
 """Native provider terminal-reply regressions; no language heuristics or live sends."""
 
 import asyncio
+import json
 
 import pytest
 
@@ -39,9 +40,12 @@ def test_default_or_false_finish_preserves_normal_multi_round(production, monkey
     args = {"text": "All done; final answer; completed."}
     if explicit_finish is not None:
         args["finish"] = explicit_finish
+    final = {"reply_to": [str(event.message_obj.message_id)],
+             "text": "Normal later answer.", "delivery": "new"}
+    plugin._turn_context["42"] = {"messages": [message_record(event, event.text)]}
     requests = _provider(monkeypatch, [("", [_call("reply_now", args)]),
-                                      ("Normal later answer.", [])])
-    assert asyncio.run(plugin._decide_tools_first(event, "42", event.text, False)) == "Normal later answer."
+                                      (json.dumps(final), [])])
+    assert json.loads(asyncio.run(plugin._decide_tools_first(event, "42", event.text, False))) == final
     assert len(requests) == 2
     assert len(event.sent) == 1
     assert plugin._tool_evidence().recent("42")[0]["result"].get("finish") is not True

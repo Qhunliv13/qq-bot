@@ -156,8 +156,8 @@ def test_visible_output_uses_existing_sender_once(modules, setup_turn):
     plugin, controller, triggers, calls, _, _ = setup_turn
 
     async def decide(*args):
-        """Represent a native loop's result-aware final text."""
-        return "model-chosen result"
+        """Select public delivery explicitly without forcing the tool loop to finish."""
+        return '{"reply_to":[],"text":"model-chosen result","delivery":"new"}'
 
     plugin._decide_tools_first = decide
     result = asyncio.run(modules["autonomous_turn"].run_turn(plugin, "42", triggers, controller))
@@ -170,8 +170,8 @@ def test_failed_delivery_not_reported_as_success(modules, setup_turn):
     plugin, controller, triggers, _, _, _ = setup_turn
 
     async def decide(*args):
-        """Produce text that still requires normal confirmed delivery."""
-        return "result"
+        """Choose publication while leaving transport success to the existing sender."""
+        return '{"reply_to":[],"text":"result","delivery":"new"}'
 
     async def blocked(*args, decoded=False):
         """Represent failed transport after exactly one reply protocol decoding."""
@@ -181,6 +181,48 @@ def test_failed_delivery_not_reported_as_success(modules, setup_turn):
     plugin._decide_tools_first, plugin._send = decide, blocked
     result = asyncio.run(modules["autonomous_turn"].run_turn(plugin, "42", triggers, controller))
     assert result["status"] == "failed" and result["reason"] == "delivery_not_confirmed"
+
+
+def test_unmarked_autonomous_thought_is_not_published(modules, setup_turn):
+    """Ordinary final thought is internal without suppressing the native deliberation."""
+    plugin, controller, triggers, calls, _, _ = setup_turn
+
+    async def deliberate(*args):
+        """Record real turn execution before returning an unmarked internal result."""
+        calls.append(("deliberated",))
+        return "An internal thought about earlier conversation."
+
+    plugin._decide_tools_first = deliberate
+    result = asyncio.run(modules["autonomous_turn"].run_turn(plugin, "42", triggers, controller))
+    assert result == {"status": "completed", "scope": "42", "delivered": False}
+    assert calls == [("deliberated",)]
+    assert controller.opportunities({}) == []
+    assert plugin._turn_context == {} and not plugin._execution_lock.locked()
+
+
+def test_explicit_publication_preserves_multiple_native_updates(modules, setup_turn):
+    """Optional final publication adds new content after model-selected tool updates."""
+    plugin, controller, triggers, calls, _, _ = setup_turn
+
+    async def deliberate(event, scope, text, has_image):
+        """Represent continuing work and two public tool updates before a final choice."""
+        assert plugin._execution_lock.locked()
+        assert text == "" and has_image is False
+        calls.append(("tool_work", scope))
+        await plugin._send(event, scope, "first model-selected update", decoded=True)
+        calls.append(("continued_work", scope))
+        await plugin._send(event, scope, "second model-selected update", decoded=True)
+        return '{"reply_to":[],"text":"new final information","delivery":"new"}'
+
+    plugin._decide_tools_first = deliberate
+    result = asyncio.run(modules["autonomous_turn"].run_turn(plugin, "42", triggers, controller))
+    assert result == {"status": "completed", "scope": "42", "delivered": True}
+    assert calls == [("tool_work", "42"),
+                     ("send", "42", "first model-selected update"),
+                     ("continued_work", "42"),
+                     ("send", "42", "second model-selected update"),
+                     ("send", "42", "new final information")]
+    assert plugin._turn_context == {} and not plugin._execution_lock.locked()
 
 
 def test_rescheduled_opportunity_is_not_started(modules, setup_turn):

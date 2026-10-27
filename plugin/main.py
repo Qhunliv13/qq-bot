@@ -766,6 +766,15 @@ class HiganPlugin(Star):
             observations = self._tool_evidence().recent(group)
         except Exception as exc:
             logger.warning("[higan] 工具观察读取失败：%s", type(exc).__name__)
+        from .conversation_state import snapshot as conversation_snapshot
+        try:
+            scope_history = self._hist().load_records(str(group), limit=1)
+        except Exception as exc:
+            scope_history = []
+            logger.warning("[higan] 会话活动时间读取失败：%s", type(exc).__name__)
+        state = conversation_snapshot(str(group), history, records, turn.get("clock"),
+            trigger=turn.get("trigger"), deliveries=turn.get("_deliveries"),
+            scope_history=scope_history, now=time.time(), task=turn.get("task"))
         return build_context(scope=str(group), messages=records, history=history,
             clock=turn.get("clock", self._clock_context()), observations=observations,
             other_scopes=turn.get("other_scopes"), task=turn.get("task"),
@@ -773,18 +782,28 @@ class HiganPlugin(Star):
             image_refs=turn.get("image_refs", self._image_refs(event)),
             attachment_origins=origins if origins else None,
             anchor_message_id=str(getattr(getattr(event, "message_obj", None), "message_id", "") or ""),
-            history_context=turn.get("history_context"))
+            history_context=turn.get("history_context"), conversation_state=state,
+            deliveries=turn.get("_deliveries", []))
 
-    def _record_visible_reply(self, group: str, text: str) -> None:
-        """Commit a delivered visible utterance to in-memory and existing disk chat history."""
+    def _record_visible_reply(self, group: str, text: str, record: dict | None = None) -> None:
+        """Retain legacy text history plus optional actual send provenance, never inferred receipts."""
         if not text.strip():
             return
         line = "彼岸酱：" + text.strip()
         from .history_window import append_history
         self._history_origins = getattr(self, "_history_origins", {})
         append_history(self._recent, self._history_origins, group, line)
+        if record is not None:
+            from copy import deepcopy
+            turn = getattr(self, "_turn_context", {}).get(group)
+            if isinstance(turn, dict):
+                # Freeze each actual send independently; an input batch is not an answered set.
+                turn.setdefault("_deliveries", []).append(deepcopy(record))
         try:
-            self._hist().append(group, line)
+            if record is None:
+                self._hist().append(group, line)
+            else:
+                self._hist().append(group, line, record=record)
         except Exception as exc:
             logger.warning("[higan] 已发送回复落盘失败：%s", type(exc).__name__)
         self._last_reply_text = getattr(self, "_last_reply_text", {})
@@ -2259,12 +2278,20 @@ class HiganPlugin(Star):
                 return {"ok": False, "delivered": False, "error": "current_event_required"}
             from .interim_reply import deliver
             turn = getattr(self, "_turn_context", {}).get(scope, {})
+            delivery_count = len(turn.get("_deliveries") or [])
             async def send_interim(body, quote_id):
                 """Share the normal policy/history/media boundary without reparsing validated text."""
                 return await self._send(event, scope, body, quote_id, decoded=True)
             result = await deliver(args, turn.get("messages") or [], send_interim)
             if result.get("delivered") is True:
                 turn.setdefault("_interim_replies", []).append(result["text"])
+                deliveries = turn.get("_deliveries") or []
+                # Only this awaited send's native evidence may enrich the tool result.
+                if len(deliveries) > delivery_count:
+                    delivery = deliveries[-1]["delivery"]
+                    if delivery["status"] == "native_confirmed":
+                        from copy import deepcopy
+                        result["delivery"] = deepcopy(delivery)
             return result
         from .workspace_tools import dispatch as workspace_dispatch, schema as workspace_schema
         from .tool_discovery import dispatch as discovery_dispatch, schema as discovery_schema
@@ -3262,6 +3289,7 @@ class HiganPlugin(Star):
         turn["task"] = task_context
         # Delivery receipts belong only to this native turn, never a later chat.
         turn["_interim_replies"] = []
+        turn["_deliveries"] = []
         from .task_delivery import fresh
         turn["_delivery_outcome"] = fresh()
         if task_context is not None:
@@ -3472,13 +3500,14 @@ class HiganPlugin(Star):
         if not _out:
             return ""
         if turn.get("_interim_replies"):
-            from .reply_selection import decode_reply
-            from .interim_reply import already_delivered
+            from .final_publication import select as select_publication
             records = turn.get("messages") or []
-            selection = decode_reply(_out, records, allow_unattributed=not records)
-            # Compare only a validated final body, not raw JSON or a substring.
-            # Distinct final content is returned untouched for its normal decoder.
-            if not selection["error"] and already_delivered(selection["text"], turn["_interim_replies"]):
+            publication = select_publication(_out, records, explicit=True,
+                                             allow_unattributed=not records)
+            turn["_final_publication"] = publication
+            # A public action and a subsequent completion are separate channels.
+            # No text comparison, forced loop completion, or inferred intent is used.
+            if not publication["publish"]:
                 return ""
         logger.info("[higan] 工具优先通路产出回复（%d 字）" % len(_out))
         return _out
@@ -3731,19 +3760,61 @@ class HiganPlugin(Star):
             logger.error("[higan] 发送失败：%s", type(exc).__name__)
             return None
         visible = text + (" [图片]" if has_image_output else "")
-        self._record_visible_reply(group, visible)
+        from .qq_delivery import _mention
+        from .autonomous_turn import AutonomyEvent
+        from .task_event import TaskEvent
+        _ids, native_ids = [], []
         try:
-            _ids = []
+            # Extract once from the actual send return, before committing its source record.
             for _item in (_sent or []):
                 _mid = getattr(_item, "message_id", None)
                 if _mid is None and isinstance(_item, dict):
                     _mid = _item.get("message_id")
                 if _mid:
                     _ids.append(_mid)
+                try:
+                    native_ids.append(_mention(_mid))
+                except ValueError:
+                    # Legacy adapter identifiers remain recall-compatible, not native proof.
+                    pass
             if _ids:
                 self._last_sent.setdefault(group, []).extend(_ids)
                 del self._last_sent[group][:-5]
                 logger.info("[higan] 已发送，message_id=%s" % ",".join(map(str, _ids)))
+        except Exception as exc:
+            logger.warning("[higan] 发送成功但回执记录失败：%s", type(exc).__name__)
+        turn = getattr(self, "_turn_context", {}).get(group, {})
+        # Quote and mention provenance comes only from components actually sent.
+        quote_ids = [str(part.id) for part in chain.chain
+                     if isinstance(part, Reply) and getattr(part, "id", None)]
+        mentions = [{"id": str(part.qq), "display_name": ""} for part in chain.chain
+                    if isinstance(part, At) and getattr(part, "qq", None)]
+        sender_id, sender_name = "", ""
+        try:
+            getter = getattr(event, "get_self_id", None)
+            sender_id = str(getter() or "") if callable(getter) else ""
+            getter = getattr(event, "get_self_name", None)
+            sender_name = str(getter() or "") if callable(getter) else ""
+        except Exception as exc:
+            logger.warning("[higan] 已发送回复身份读取失败：%s", type(exc).__name__)
+        source = {"kind": "autonomous" if isinstance(event, AutonomyEvent)
+                  else "task" if isinstance(event, TaskEvent) else "foreground"}
+        delivery = {"status": "native_confirmed" if native_ids else "observed_send_return",
+                    "message_ids": native_ids, "destination_scope": str(group),
+                    "source": dict(source), "reply_to": quote_ids,
+                    "input_message_ids": [item["id"] for item in turn.get("messages", [])
+                                          if isinstance(item, dict) and "id" in item],
+                    "sent_at": datetime.now(timezone.utc).isoformat()}
+        source_record = {"kind": "assistant_delivery",
+                         "id": native_ids[0] if len(native_ids) == 1 else "",
+                         "sender": {"id": sender_id, "display_name": sender_name},
+                         "body": visible.strip(), "mentions": mentions,
+                         "quote": {"id": quote_ids[0]} if quote_ids else None,
+                         "source": source, "delivery": delivery}
+        if len(native_ids) > 1:
+            source_record["message_ids"] = list(native_ids)
+        self._record_visible_reply(group, visible, record=source_record)
+        try:
             try:  #  记住她最近说过的话，防重复
                 _mine = getattr(self, "_my_recent", None)
                 if _mine is None:

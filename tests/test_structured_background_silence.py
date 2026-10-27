@@ -172,7 +172,7 @@ def test_real_autonomous_turn_unattributed_text_delivers_only_body(background):
     native = background
     answer = "A local autonomous observation."
     native.plugin._decide_tools_first = AsyncMock(
-        return_value=json.dumps({"reply_to": [], "text": answer}))
+        return_value=json.dumps({"reply_to": [], "text": answer, "delivery": "new"}))
     result = asyncio.run(run_turn(native.plugin, "42", native.triggers, native.controller))
     assert result == {"status": "completed", "scope": "42", "delivered": True}
     assert len(native.deliveries) == 1
@@ -203,7 +203,7 @@ def test_real_autonomous_turn_preserves_nested_json_literal(background):
     native = background
     literal = json.dumps({"reply_to": [], "text": ""})
     native.plugin._decide_tools_first = AsyncMock(
-        return_value=json.dumps({"reply_to": [], "text": literal}))
+        return_value=json.dumps({"reply_to": [], "text": literal, "delivery": "new"}))
     result = asyncio.run(run_turn(native.plugin, "42", native.triggers, native.controller))
     assert result == {"status": "completed", "scope": "42", "delivered": True}
     assert len(native.deliveries) == 1
