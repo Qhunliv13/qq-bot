@@ -41,6 +41,10 @@ python -m compileall -q plugin
 
 密钥、密码和令牌仅从私有运行配置或相应环境变量提供。不要提交运行数据库、聊天档案、图片附件、工具观察文件、会话资料或 Dashboard / 上游凭据；非秘密路径与账号标识也应在部署前复核。
 
+## 独立 QQ 接入重写（未完成）
+
+目标是保留现有个人 QQ、全部功能与数据，完全移除 NapCat 运行依赖；当前仅完成依赖盘点与离线覆盖检查，**尚无可替换的独立原生 QQ 后端**。详见 [实施边界与验收计划](docs/QQ_TRANSPORT_REWRITE.md) 和 [最小已观察契约](docs/qq-transport-required.json)。运行 `python tools/qq_transport_parity_audit.py` 可审查声明覆盖，结果不授权生产切换；现有接入保持不变。
+
 ## 版本与档案
 
 当前源码以所检出的 Git 提交及其 tag 为准。历史发布记录、现场报告、本机整理资料与旧补丁脚本集中保存在 [`trash/`](trash/README.md)，原始内容保留以便追溯。档案不代表当前版本、部署事实或操作授权，不据旧记录直接执行补丁。
