@@ -42,6 +42,7 @@ from plugin.autonomy import AutonomousController  # noqa: E402
 from plugin.tool_catalog import NATIVE_TOOL_COUNT  # noqa: E402
 from plugin.qq_social import schema as social_schema  # noqa: E402
 from plugin.tool_context import redact  # noqa: E402
+from plugin.message_batch import message_record  # noqa: E402
 
 # Every distinct advertised name must be reviewed here; schema additions cannot
 # silently acquire a generic mocked success. Strings resembling code are inert
@@ -68,6 +69,8 @@ CASES = {
     "task_plan_update": {"task_id": "SEEDED", "expected_revision": 0,
                          "steps": [{"id": "step1", "content": "Contract work", "status": "in_progress"}]},
     "vm_job_list": {},
+    # Plain ASCII avoids marker/media side paths while exercising the real sender.
+    "reply_now": {"text": "Contract interim reply.", "reply_to": ["1234"]},
     "autonomy_status": {},
     "autonomy_schedule": {"scope": "42", "interval_seconds": 600, "enabled": True},
     "qq_account_info": {},
@@ -503,6 +506,10 @@ class AuditHarness:
                 tasks.set_status(task["id"], "", "paused", "audit fixture")
             args["id"] = task["id"]
         event = integration.Event("contract audit")
+        if name == "reply_now":
+            # Attribution belongs to the actual current turn, not the tool payload.
+            # Event.send is the fixture's recording transport; _send stays native.
+            self.plugin._turn_context["42"] = {"messages": [message_record(event, event.text)]}
         # Identity is supplied only by the trusted fixture event, never tool arguments.
         # This source owner ID remains independent of the production OWNER_QQS set.
         if name in {"qq_set_signature", "qq_publish_post", "qq_set_profile", "autonomy_schedule", "skill_save"}:
@@ -576,7 +583,7 @@ async def _audit(root, monkeypatch, batch_size):
 
         def trace(frame, action, arg):
             """Record only real dispatcher/VM source lines for this one invocation."""
-            if action == "line" and frame.f_code.co_name in {"_dispatch_tool", "_vm_tool", "_execute_tool"}:
+            if action == "line" and frame.f_code.co_name in {"_dispatch_tool", "_vm_tool", "_execute_tool", "_send"}:
                 executed_lines.add((frame.f_code.co_name, frame.f_lineno))
             return trace
 
@@ -601,7 +608,19 @@ async def _audit(root, monkeypatch, batch_size):
         entry["executed_source_lines"] = [{"function": function, "line": line} for function, line in sorted(executed_lines)]
         entry["stubbed_edges"] = harness.edges[start:]
         entry["onebot_actions"] = [action for action, _ in event.actions]
-        if name in EXPECTED_SOCIAL_ACTIONS:
+        if name == "reply_now":
+            # A generic success stub cannot pass: the real sender must execute and
+            # the fixture event must receive the same body as the native receipt.
+            sent_text = ["".join(getattr(part, "text", "") for part in chain.chain)
+                         for chain in event.sent]
+            entry["actual_send_executed"] = any(function == "_send" for function, _ in executed_lines)
+            entry["event_delivery_simulated"] = True
+            entry["sent_text"] = sent_text
+            entry["boundary_contract_matches"] = (
+                entry["actual_send_executed"] and sent_text == [args["text"]]
+                and isinstance(result, dict) and result.get("delivered") is True
+                and result.get("text") == args["text"] and result.get("quote_id") is None)
+        elif name in EXPECTED_SOCIAL_ACTIONS:
             native_edges = [edge for edge in entry["stubbed_edges"] if edge["edge"] == "onebot_http"]
             entry["boundary_contract_matches"] = [edge["action"] for edge in native_edges] == EXPECTED_SOCIAL_ACTIONS[name]
             if name == "qq_set_signature":
@@ -677,6 +696,9 @@ async def _audit(root, monkeypatch, batch_size):
         # The mixed batch contains owner-only mutations; use a genuine event identity.
         event.get_sender_id = lambda: "2084526117"
         event.group = scope
+        # Native entry normally freezes this event's current-batch records before
+        # the provider loop; exercise reply attribution with that same local input.
+        plugin._turn_context[scope] = {"messages": [message_record(event, event.text)]}
         harness.provider_replies = [("discard tool draft", calls), ("Audit complete.", [])]
         request_start = len(harness.requests)
         exception = None

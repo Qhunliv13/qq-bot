@@ -81,7 +81,7 @@ def test_new_native_contracts_use_reviewed_receipts_and_actions(report):
 def test_imported_workspace_discovery_and_workers_execute_real_contracts(report):
     """All additive classes require native receipts and locally exercised helpers."""
     rows = {row["name"]: row for row in report["tools"]}
-    assert report["effective_schema_count"] == report["canonical_schema_count"] == 92
+    assert report["effective_schema_count"] == report["canonical_schema_count"] == 93
     assert report["workspace_helpers_executed"] >= 20
     assert report["native_worker_calls"]
     assert {row["status"] for row in report["native_worker_receipts"]} == {"completed", "cancelled"}
@@ -94,6 +94,20 @@ def test_imported_workspace_discovery_and_workers_execute_real_contracts(report)
             assert row["result_quality"]["ok"] is True, row
     assert rows["vm_job_list"]["boundary_contract_matches"]
     assert rows["skill_save"]["result"]["name"] == "contract-save"
+
+
+def test_reply_now_runs_native_send_with_only_event_transport_simulated(report):
+    """The optional public reply uses real delivery policy and a recorded fixture edge."""
+    row = next(row for row in report["tools"] if row["name"] == "reply_now")
+    assert row["handler_body_executed"]
+    assert row["actual_send_executed"]
+    assert row["event_delivery_simulated"] is True
+    assert row["boundary_contract_matches"], row
+    assert row["sent_text"] == ["Contract interim reply."]
+    assert row["result"] == {"ok": True, "delivered": True,
+                             "text": "Contract interim reply.", "quote_id": None}
+    assert not row["onebot_actions"]
+    assert not row["stubbed_edges"]
 
 
 def test_schema_validator_detects_required_drift_and_type_errors():
@@ -182,7 +196,7 @@ def test_native_provider_honors_explicit_worker_schema_snapshot(tmp_path, monkey
     assert requests[0]["tools"] == snapshot
     assert requests[1]["tools"] == parent
     assert len(requests[0]["tools"]) == 1
-    assert len(requests[1]["tools"]) == 92
+    assert len(requests[1]["tools"]) == 93
     assert explicit == snapshot
     assert plugin._tool_schemas() == parent
 

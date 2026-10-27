@@ -91,6 +91,12 @@ def system_prompt(persona: str) -> str:
             },
             "response": {
                 "options": ["text", "SILENT"],
+                "intermediate_delivery": (
+                    "reply_now optionally publishes user-facing text to this conversation and then returns "
+                    "control to the same tool loop. Its delivery receipt is an observation. "
+                    "Neither the timing nor number of updates is prescribed; tool-call commentary is not "
+                    "automatically published. A final reply may contain new information or choose silence."
+                ),
                 "silence": (
                     "An unquoted, unfenced standalone final line SILENT makes the entire completion silent; "
                     "preceding narration is not delivered. Literal examples belong in quoted or fenced text."

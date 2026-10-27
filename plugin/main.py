@@ -1742,6 +1742,7 @@ class HiganPlugin(Star):
         from .tool_discovery import schema as discovery_schema
         from .delegation import schema as delegation_schema
         from .task_planning import schema as planning_schema
+        from .interim_reply import schema as interim_schema
         return neutralize_schemas([
             _f("web_search", "搜索公开网页，返回来源标题、URL和摘要；按需要调用而非固定触发。",
                {"query": {"type": "string"}}, ["query"]),
@@ -1865,7 +1866,7 @@ class HiganPlugin(Star):
                 "reason": {"type": "string"}, "scopes": {"type": "array", "items": {"type": "string"}}}),
             _f("vm_job_list", "列出机器人虚拟机内受管后台脚本的状态摘要，不读取输出日志。",
                {"offset": {"type": "integer"}, "limit": {"type": "integer"}}),
-        ] + list(self._task_tool_schemas()) + social_schema() + workspace_schema() + discovery_schema() + delegation_schema() + planning_schema())
+        ] + list(self._task_tool_schemas()) + social_schema() + workspace_schema() + discovery_schema() + delegation_schema() + planning_schema() + interim_schema())
 
     def _as_llm_url(self, ref) -> str:
         """[img-url-fix] 把图片引用转成 LLM 能接受的 URL（data: / http(s)）✓。
@@ -2274,6 +2275,18 @@ class HiganPlugin(Star):
                     return {"ok": False, "error": "autonomy_destination_not_observed"}
                 if not self._policy_allows(event, destination):
                     return {"ok": False, "error": "destination_policy_denied"}
+        if name == "reply_now":
+            if event is None:
+                return {"ok": False, "delivered": False, "error": "current_event_required"}
+            from .interim_reply import deliver
+            turn = getattr(self, "_turn_context", {}).get(scope, {})
+            async def send_interim(body, quote_id):
+                """Share the normal policy/history/media boundary without reparsing validated text."""
+                return await self._send(event, scope, body, quote_id, decoded=True)
+            result = await deliver(args, turn.get("messages") or [], send_interim)
+            if result.get("delivered") is True:
+                turn.setdefault("_interim_replies", []).append(result["text"])
+            return result
         from .workspace_tools import dispatch as workspace_dispatch, schema as workspace_schema
         from .tool_discovery import dispatch as discovery_dispatch, schema as discovery_schema
         from .delegation import Manager, schema as delegation_schema
@@ -3176,6 +3189,8 @@ class HiganPlugin(Star):
                     by_group.setdefault(source, []).append(body.strip())
         turn["other_scopes"] = by_group
         turn["task"] = task_context
+        # Delivery receipts belong only to this native turn, never a later chat.
+        turn["_interim_replies"] = []
         if turn.get("trigger") is not None:
             # Supply neutral unfinished-work/capability/error state instead of
             # inventing a human wake message or requiring a tool every turn.
@@ -3346,6 +3361,15 @@ class HiganPlugin(Star):
             logger.info("[higan] 本轮截图 %d 张，她选择不发（内部保留 ✓）" % len(shots))
         if not _out:
             return ""
+        if turn.get("_interim_replies"):
+            from .reply_selection import decode_reply
+            from .interim_reply import already_delivered
+            records = turn.get("messages") or []
+            selection = decode_reply(_out, records, allow_unattributed=not records)
+            # Compare only a validated final body, not raw JSON or a substring.
+            # Distinct final content is returned untouched for its normal decoder.
+            if not selection["error"] and already_delivered(selection["text"], turn["_interim_replies"]):
+                return ""
         logger.info("[higan] 工具优先通路产出回复（%d 字）" % len(_out))
         return _out
 
