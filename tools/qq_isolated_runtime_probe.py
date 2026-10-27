@@ -4,6 +4,9 @@ The caller must supply a pristine extracted software-only QQ directory. System
 library directories are exposed read-only; no host account directories are bound.
 Default mode validates the candidate but executes nothing. Real execution needs
 Linux root, util-linux unshare/mount, and explicit --execute consent.
+Optional --private-diagnostics creates a new owner-only file outside this repository
+with at most 16 KiB of exact stderr. Treat this raw diagnostic as sensitive: do not
+share it. It never enters public JSON, even for this account-free runtime probe.
 """
 
 import argparse
@@ -14,6 +17,7 @@ from pathlib import Path
 import re
 import secrets
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -21,6 +25,9 @@ import tempfile
 # Only runtime version strings, never arbitrary process properties, enter reports.
 VERSION_KEYS = ("node", "electron", "chrome", "v8", "modules", "napi", "openssl", "uv")
 OUTPUT_LIMIT = 1024 * 1024
+# Raw diagnostics use a separate inherited descriptor, never helper JSON/PIPE.
+PRIVATE_STDERR_LIMIT = 16 * 1024
+HELPER_OUTPUT_LIMIT = 128 * 1024
 SYSTEM_DIRS = ("/usr", "/lib", "/lib64", "/bin")
 NAMESPACES = ("net", "mnt", "pid")
 
@@ -33,7 +40,7 @@ def base_report():
     """Keep runtime evidence distinct from native compatibility or release consent."""
     return {"mode": "isolated_runtime_versions", "status": "not_executed",
             "runtime_executed": False, "runtime_versions_verified": False,
-            "versions": {}, "errors": [],
+            "versions": {}, "errors": [], "private_diagnostics_written": False,
             "production_cutover": False, "production_cutover_authorized": False,
             "native_binding_verified": False, "independent_backend_ready": False,
             "safe_to_login": False, "abi_compatibility": "unverified"}
@@ -117,6 +124,9 @@ def classify_runtime_stderr(data):
     if missing:
         return {"runtime_failure_category": "missing_shared_library",
                 "missing_library": missing.group(1)}
+    # Exact observed Chromium fatal, not an inferred explanation for other traps.
+    if "The SUID sandbox helper binary was found, but is not configured correctly." in text:
+        return {"runtime_failure_category": "suid_sandbox_helper_configuration_failed"}
     if "No usable sandbox!" in text or "Failed to move to new namespace" in text:
         return {"runtime_failure_category": "sandbox_initialization_failed"}
     return {"runtime_failure_category": "unclassified_nonzero_exit"}
@@ -161,13 +171,57 @@ def drop_runtime_privileges():
         raise ProbeError("privilege_verification_failed")
 
 
-def child_probe(root, jail, nonce, parent_ids, mount):
+def validate_diagnostic_fd(fd):
+    """Accept only an owner-only regular output file, never standard streams."""
+    if fd < 3:
+        raise ProbeError("invalid_private_diagnostic_fd")
+    info = os.fstat(fd)
+    if not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o600:
+        raise ProbeError("invalid_private_diagnostic_fd")
+
+
+def open_private_diagnostics(destination):
+    """Create once outside the repository; never follow or overwrite a final link."""
+    path = Path(destination)
+    repository = Path(__file__).resolve().parents[1]
+    resolved = path.resolve()
+    if not path.is_absolute() or resolved == repository or repository in resolved.parents:
+        raise ProbeError("private_diagnostics_outside_repository_required")
+    fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
+    try:
+        # A restrictive umask must not turn a valid private file into mode 000.
+        os.fchmod(fd, 0o600)
+        validate_diagnostic_fd(fd)
+    except Exception:
+        os.close(fd)
+        raise
+    return fd
+
+
+def copy_private_stderr(errors, fd):
+    """Copy an exact bounded prefix via the pinned fd, without logging any bytes."""
+    validate_diagnostic_fd(fd)
+    errors.seek(0)
+    data = errors.read(PRIVATE_STDERR_LIMIT)
+    remaining = memoryview(data)
+    while remaining:
+        # os.write may complete partially; never silently claim a full copy.
+        written = os.write(fd, remaining)
+        if written <= 0:
+            raise ProbeError("private_diagnostic_write_failed")
+        remaining = remaining[written:]
+    return bool(data)
+
+
+def child_probe(root, jail, nonce, parent_ids, mount, diagnostic_fd=None):
     """Build an empty chroot in private namespaces, drop privilege, then probe QQ.
 
     This helper is PID 1 in its new namespace. On exit the kernel kills remaining
     descendants. No QQ process starts unless all isolation setup has succeeded.
     """
     report = base_report()
+    if diagnostic_fd is not None:
+        validate_diagnostic_fd(diagnostic_fd)
     observed = namespace_ids()
     if set(parent_ids) != set(NAMESPACES) or any(observed[k] == parent_ids[k] for k in NAMESPACES):
         raise ProbeError("namespace_isolation_failed")
@@ -218,13 +272,20 @@ def child_probe(root, jail, nonce, parent_ids, mount):
             result = subprocess.run(["/opt/QQ/qq", "/probe.js"], env=minimal_environment(),
                                     stdin=subprocess.DEVNULL, stdout=output,
                                     stderr=errors, timeout=10, check=False,
-                                    preexec_fn=drop_runtime_privileges)
+                                    preexec_fn=drop_runtime_privileges, close_fds=True)
         except subprocess.TimeoutExpired:
             report.update(status="failed", runtime_executed=True, errors=["runtime_timeout"])
             return report
         except (OSError, subprocess.SubprocessError):
             report.update(status="failed", errors=["runtime_launch_failed"])
             return report
+        finally:
+            if diagnostic_fd is not None:
+                try:
+                    report["private_diagnostics_written"] = copy_private_stderr(errors, diagnostic_fd)
+                except (OSError, ProbeError):
+                    # Preserve the original runtime failure; disclose no raw data.
+                    report["errors"].append("private_diagnostic_write_failed")
         report["runtime_executed"] = True
         report["isolation"].update(unprivileged=True, no_new_privileges=True,
                                    effective_capabilities_zero=True)
@@ -244,9 +305,10 @@ def child_probe(root, jail, nonce, parent_ids, mount):
     return report
 
 
-def probe(qq_root, execute=False):
-    """Validate without execution by default; explicit consent starts only isolation."""
+def probe(qq_root, execute=False, private_diagnostics=None):
+    """Validate by default; only consented Linux-root execution creates diagnostics."""
     report = base_report()
+    diagnostic_fd = None
     if sys.platform != "linux":
         report.update(status="refused", errors=["linux_required"])
         return report
@@ -259,6 +321,8 @@ def probe(qq_root, execute=False):
         unshare, mount = shutil.which("unshare"), shutil.which("mount")
         if not unshare or not mount:
             raise ProbeError("isolation_tools_missing")
+        if private_diagnostics is not None:
+            diagnostic_fd = open_private_diagnostics(private_diagnostics)
         parent_ids = namespace_ids()
         nonce = secrets.token_hex(16)
         with tempfile.TemporaryDirectory(prefix="qq-isolated-probe-") as temporary:
@@ -271,24 +335,35 @@ def probe(qq_root, execute=False):
                     "--mount-proc", sys.executable, str(helper), "--child",
                     "--qq-root", str(root), "--jail", str(jail), "--nonce", nonce,
                     "--parent-ns", json.dumps(parent_ids), "--mount-tool", mount]
+            private_kwargs = {}
+            if diagnostic_fd is not None:
+                args.extend(["--private-diagnostic-fd", str(diagnostic_fd)])
+                private_kwargs["pass_fds"] = (diagnostic_fd,)
             result = subprocess.run(args, env=minimal_environment(), timeout=15,
                                     stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                    stderr=subprocess.DEVNULL, check=False, start_new_session=True)
+                                    stderr=subprocess.DEVNULL, check=False, start_new_session=True,
+                                    close_fds=True, **private_kwargs)
             if result.returncode not in (0, 1):
                 raise ProbeError("isolation_helper_failed")
-            if len(result.stdout) > OUTPUT_LIMIT:
+            if len(result.stdout) > HELPER_OUTPUT_LIMIT:
                 raise ProbeError("helper_output_limit")
             child = json.loads(result.stdout)
             # Only allow fixed helper fields; never surface unparsed process output.
             for key in ("status", "runtime_executed", "runtime_launch_attempted", "runtime_versions_verified", "versions", "errors", "platform", "arch", "isolation", "runtime_exit_code", "runtime_failure_category", "missing_library"):
                 if key in child:
                     report[key] = child[key]
+            # A helper cannot invent consent or publish the descriptor/path/bytes.
+            report["private_diagnostics_written"] = (
+                diagnostic_fd is not None and child.get("private_diagnostics_written") is True)
     except subprocess.TimeoutExpired:
         report.update(status="failed", errors=["isolation_timeout"])
     except ProbeError as exc:
         report.update(status="refused", errors=[str(exc)])
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
         report.update(status="failed", errors=["probe_failed"])
+    finally:
+        if diagnostic_fd is not None:
+            os.close(diagnostic_fd)
     return report
 
 
@@ -298,6 +373,9 @@ def main(argv=None):
     parser.add_argument("--qq-root", required=True)
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--report", type=Path)
+    parser.add_argument("--private-diagnostics", type=Path,
+                        help="New outside-repository owner-only raw stderr file (16 KiB max); sensitive, do not share")
+    parser.add_argument("--private-diagnostic-fd", type=int, help=argparse.SUPPRESS)
     parser.add_argument("--child", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--jail", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--nonce", help=argparse.SUPPRESS)
@@ -308,12 +386,16 @@ def main(argv=None):
         report = base_report()
         try:
             report = child_probe(validate_root(args.qq_root), args.jail, args.nonce,
-                                 json.loads(args.parent_ns), args.mount_tool)
+                                 json.loads(args.parent_ns), args.mount_tool,
+                                 diagnostic_fd=args.private_diagnostic_fd)
         except Exception:
             # Child errors are intentionally fixed and redacted; no host traceback.
             report.update(status="failed", errors=["isolation_setup_or_probe_failed"])
     else:
-        report = probe(args.qq_root, execute=args.execute)
+        kwargs = {"execute": args.execute}
+        if args.private_diagnostics is not None:
+            kwargs["private_diagnostics"] = args.private_diagnostics
+        report = probe(args.qq_root, **kwargs)
     text = json.dumps(report, sort_keys=True) + "\n"
     if args.report:
         args.report.write_text(text, encoding="utf-8")

@@ -1,6 +1,9 @@
 """Mock-only regression checks: never execute QQ or create real namespaces."""
 
+import io
 import json
+import os
+import stat
 from pathlib import Path
 import subprocess
 from unittest.mock import Mock
@@ -206,6 +209,16 @@ def test_stderr_classification_redacts_paths_and_tokens():
         "runtime_failure_category": "sandbox_initialization_failed"}
 
 
+def test_observed_suid_sandbox_fatal_is_classified_without_raw_details():
+    """Match the observed fatal only; neither paths nor arbitrary traps become evidence."""
+    data = (b"FATAL:setuid_sandbox_host.cc(166) The SUID sandbox helper binary was found, "
+            b"but is not configured correctly. /private/secret/chrome-sandbox mode 4755")
+    assert probe.classify_runtime_stderr(data) == {
+        "runtime_failure_category": "suid_sandbox_helper_configuration_failed"}
+    assert probe.classify_runtime_stderr(b"SIGTRAP setuid_sandbox_host.cc /private") == {
+        "runtime_failure_category": "unclassified_nonzero_exit"}
+
+
 def test_drop_privileges_requires_live_pid_one(monkeypatch):
     """Mock every privilege setter; a missing PID1 supervisor must prevent exec."""
     libc = Mock()
@@ -219,3 +232,99 @@ def test_drop_privileges_requires_live_pid_one(monkeypatch):
     probe.os.setgroups.assert_called_once_with([])
     probe.os.setgid.assert_called_once_with(65534)
     probe.os.setuid.assert_called_once_with(65534)
+
+
+def test_private_diagnostics_default_creates_nothing(monkeypatch, software, tmp_path):
+    """Supplying a destination is not execution consent and cannot create a file."""
+    linux(monkeypatch)
+    opener = Mock(side_effect=AssertionError("must not open"))
+    monkeypatch.setattr(probe, "open_private_diagnostics", opener)
+    report = probe.probe(software, private_diagnostics=tmp_path / "private")
+    assert report["private_diagnostics_written"] is False
+    opener.assert_not_called()
+
+
+def test_private_descriptor_is_only_forwarded_to_helper(monkeypatch, software, tmp_path):
+    """Mock execution validates fd transport and drops all child raw/private fields."""
+    linux(monkeypatch)
+    monkeypatch.setattr(probe.os, "geteuid", lambda: 0, raising=False)
+    monkeypatch.setattr(probe.shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(probe, "namespace_ids", lambda: {k: k for k in probe.NAMESPACES})
+    monkeypatch.setattr(probe, "open_private_diagnostics", Mock(return_value=91))
+    closer = Mock()
+    monkeypatch.setattr(probe.os, "close", closer)
+    child = probe.base_report()
+    child.update(status="failed", private_diagnostics_written=True,
+                 _private_stderr_b64="secret", private_path="secret")
+    runner = Mock(return_value=subprocess.CompletedProcess([], 1, json.dumps(child).encode()))
+    monkeypatch.setattr(probe.subprocess, "run", runner)
+    destination = tmp_path / "private-sensitive-name"
+    report = probe.probe(software, True, destination)
+    args = runner.call_args.args[0]
+    assert args[-2:] == ["--private-diagnostic-fd", "91"]
+    assert runner.call_args.kwargs["pass_fds"] == (91,)
+    assert runner.call_args.kwargs["close_fds"] is True
+    assert str(destination) not in args
+    assert report["private_diagnostics_written"] is True
+    assert "secret" not in json.dumps(report)
+    assert "private-sensitive-name" not in json.dumps(report)
+    closer.assert_called_once_with(91)
+
+
+def test_private_descriptor_closed_on_helper_timeout(monkeypatch, software):
+    """An outer helper timeout still closes the one parent-owned descriptor."""
+    linux(monkeypatch)
+    monkeypatch.setattr(probe.os, "geteuid", lambda: 0, raising=False)
+    monkeypatch.setattr(probe.shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(probe, "namespace_ids", lambda: {k: k for k in probe.NAMESPACES})
+    monkeypatch.setattr(probe, "open_private_diagnostics", Mock(return_value=91))
+    closer = Mock()
+    monkeypatch.setattr(probe.os, "close", closer)
+    monkeypatch.setattr(probe.subprocess, "run", Mock(side_effect=subprocess.TimeoutExpired([], 15)))
+    assert probe.probe(software, True, "/tmp/private")["errors"] == ["isolation_timeout"]
+    closer.assert_called_once_with(91)
+
+
+def test_private_copy_is_exact_bounded_and_handles_partial_writes(monkeypatch):
+    """Synthetic stderr never runs QQ; only its exact 16-KiB prefix is copied."""
+    monkeypatch.setattr(probe, "validate_diagnostic_fd", Mock())
+    captured = bytearray()
+
+    def partial_write(fd, data):
+        """Model legal short writes without touching any real file descriptor."""
+        assert fd == 91
+        captured.extend(data[:13])
+        return min(13, len(data))
+
+    monkeypatch.setattr(probe.os, "write", partial_write)
+    data = b"\xff\x00raw stderr\n" * 2000
+    assert probe.copy_private_stderr(io.BytesIO(data), 91) is True
+    assert bytes(captured) == data[:probe.PRIVATE_STDERR_LIMIT]
+
+
+@pytest.mark.parametrize("fd,mode", [(0, stat.S_IFREG | 0o600),
+                                      (91, stat.S_IFIFO | 0o600),
+                                      (91, stat.S_IFREG | 0o644)])
+def test_private_descriptor_rejects_standard_special_or_public(monkeypatch, fd, mode):
+    """Even internal fd input cannot select a pipe, stdio, or public-mode file."""
+    monkeypatch.setattr(probe.os, "fstat", Mock(return_value=Mock(st_mode=mode)))
+    with pytest.raises(probe.ProbeError, match="invalid_private_diagnostic_fd"):
+        probe.validate_diagnostic_fd(fd)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Unix exclusive flags/mode semantics")
+def test_private_open_exclusive_mode_and_symlink(tmp_path):
+    """Use only empty temporary files, never QQ, accounts, logs, or namespaces."""
+    destination = tmp_path / "private"
+    fd = probe.open_private_diagnostics(destination)
+    try:
+        assert stat.S_IMODE(os.fstat(fd).st_mode) == 0o600
+    finally:
+        os.close(fd)
+    with pytest.raises(FileExistsError):
+        probe.open_private_diagnostics(destination)
+    link = tmp_path / "link"
+    link.symlink_to(destination)
+    with pytest.raises(FileExistsError):
+        probe.open_private_diagnostics(link)
+    assert destination.read_bytes() == b""

@@ -259,6 +259,21 @@ classified `unclassified_nonzero_exit`; the cause is not established. See
 native bindings, login or a working transport. A failed run must not lead to disabling
 isolation or falling back to a production account or NapCat loader.
 
+## Runtime failure diagnosis under unchanged isolation
+
+A third run added an opt-in, exclusive `0600` diagnostic file outside the repository,
+with a 16 KiB capture limit; no raw log enters public JSON or git. The exact fatal
+reports a SUID sandbox helper configuration error. The extracted helper is root-owned
+0755 and the archive has that same mode; the unexecuted package postinst mentions
+4755. This is a specific observed prerequisite, not a conclusion inferred from SIGTRAP.
+
+Static binary inspection found one V1 fuse wire with RunAsNode enabled. Thus a disabled
+fuse is not supported as the explanation; why this build still enters the Chromium
+SUID-sandbox path remains unknown. The experiment deliberately preserves nosuid mounts
+and NO_NEW_PRIVS. No setuid installation, sandbox-disabling flag, binary patch or login
+was attempted. See `qq-runtime-sandbox-diagnostic.json`. The safe independent host
+initialization path remains an open validation gate, not a completed QQ backend.
+
 ## Next validation gates
 
 1. Complete the installed backend API/event inventory and preserve configuration mappings.

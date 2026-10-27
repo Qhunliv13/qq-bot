@@ -63,6 +63,22 @@ fuse, sandbox or ABI diagnosis. Those causes are not established by a signal num
 No isolation check was bypassed and no account/login test was performed. See
 `qq-isolated-runtime-evidence.json`. This experiment has **not** passed its runtime gate.
 
+## Follow-up diagnostic (same protection boundary)
+
+A third, explicit private-diagnostic run writes only a bounded stderr prefix to a
+new `0600` file outside the repository. The descriptor is passed to the trusted
+supervisor, not QQ; raw stderr is never printed in public JSON or committed.
+The observed fatal identifies the **SUID sandbox helper configuration** requirement.
+The extracted helper is root-owned mode 0755, matching the archive, while the package's
+unexecuted postinst references 4755. No setup script or permission change was applied.
+
+The binary's static RunAsNode fuse is enabled. That does not establish why this build
+still enters a Chromium sandbox path with the environment variable set. Changing only
+file mode is not a demonstrated solution, since nosuid and NO_NEW_PRIVS intentionally
+remain active. Do not disable them, patch fuses or use `--no-sandbox` to manufacture
+success. See `qq-runtime-sandbox-diagnostic.json`; native initialization and login
+remain unverified.
+
 If this step succeeds, the next separate gate is an independently authored, narrowly
 scoped native-binding experiment in the same account-free and network-isolated lab.
 If it fails, record the exact redacted failure and investigate prerequisites without

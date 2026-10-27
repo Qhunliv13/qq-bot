@@ -127,3 +127,28 @@ def test_actual_isolated_runtime_failure_is_not_promoted_to_success():
     for field in ('native_binding_verified', 'login_verified', 'all_feature_parity_verified',
                   'production_cutover_authorized'):
         assert evidence[field] is False
+
+
+def test_private_diagnostic_confirms_helper_configuration_not_native_success():
+    """Package setup and a specific fatal do not justify weakening isolation to log in."""
+    evidence = read_document('qq-runtime-sandbox-diagnostic.json')
+    runtime = evidence['runtime']
+    metadata = evidence['package_metadata']
+    assert runtime['isolation_unchanged'] is True
+    assert runtime['exit_code'] == -5
+    assert runtime['fatal_diagnostic_category'] == 'suid_sandbox_helper_configuration_failed'
+    assert runtime['actual_extracted_helper_uid'] == metadata['helper_archive_uid'] == 0
+    assert runtime['actual_extracted_helper_mode'] == metadata['helper_archive_mode'] == '0755'
+    assert runtime['diagnostic_required_helper_mode'] == '4755'
+    assert metadata['postinst_mentions_mode_4755'] is True
+    assert metadata['postinst_executed'] is False
+    assert runtime['raw_log_committed'] is False
+    assert runtime['versions_verified'] is False
+    wire = evidence['static_fuse_observation']
+    assert wire['sentinel_count'] == 1 and wire['wire_version'] == 1
+    assert len(bytes.fromhex(wire['wire_hex'])) == wire['wire_length']
+    assert bytes.fromhex(wire['wire_hex'])[wire['run_as_node_index']] == 0x31
+    assert wire['run_as_node_enabled'] is True and wire['binary_modified'] is False
+    for field in ('production_modified', 'native_binding_verified', 'login_verified',
+                  'all_feature_parity_verified', 'production_cutover_authorized'):
+        assert evidence[field] is False

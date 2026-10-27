@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "sample_date": "2026-10-27",
+  "scope": "One additional account-free isolated run with bounded private stderr; static package and binary checks; no production access.",
+  "runtime": {
+    "isolation_unchanged": true,
+    "exit_code": -5,
+    "versions_verified": false,
+    "private_diagnostics_written": true,
+    "private_capture_limit_bytes": 16384,
+    "fatal_diagnostic_category": "suid_sandbox_helper_configuration_failed",
+    "diagnostic_required_helper_owner_uid": 0,
+    "diagnostic_required_helper_mode": "4755",
+    "actual_extracted_helper_uid": 0,
+    "actual_extracted_helper_mode": "0755",
+    "raw_log_committed": false
+  },
+  "package_metadata": {
+    "version": "3.2.34-53644",
+    "helper_archive_uid": 0,
+    "helper_archive_mode": "0755",
+    "postinst_references_chrome_sandbox": true,
+    "postinst_mentions_mode_4755": true,
+    "postinst_executed": false
+  },
+  "static_fuse_observation": {
+    "binary_bytes_scanned": 204344328,
+    "sentinel_count": 1,
+    "sentinel_offset": 30983072,
+    "wire_version": 1,
+    "wire_length": 8,
+    "wire_hex": "3130313130303031",
+    "run_as_node_index": 0,
+    "run_as_node_state_byte": "0x31",
+    "run_as_node_enabled": true,
+    "binary_modified": false,
+    "source_mapping_urls": [
+      "https://raw.githubusercontent.com/electron/fuses/main/src/constants.ts",
+      "https://raw.githubusercontent.com/electron/fuses/main/src/config.ts"
+    ],
+    "source_mapping_note": "Parent independently fetched primary sources; earlier unsupported child claims of its own fetch success were retracted. Only actual binary scan and parent source mapping are used.",
+    "fuse_state_is_runtime_version": false
+  },
+  "conclusions": [
+    "The additional run's fatal message reports the SUID helper configuration requirement; this is more specific than inferring a cause from SIGTRAP alone.",
+    "The archive supplies mode 0755 and its unexecuted postinst mentions 4755. Software-only extraction deliberately did not apply installation setup.",
+    "A disabled RunAsNode fuse is not supported by the observed binary bytes. Why this QQ build still enters a Chromium SUID-sandbox path with ELECTRON_RUN_AS_NODE is not established.",
+    "Changing mode alone does not demonstrate that this protected lab can use the helper: read-only nosuid software mounts and NO_NEW_PRIVS remain intentional safeguards.",
+    "No sandbox disabling flag, setuid installation, binary patch or account login was attempted. A safe independent native/bootstrap path remains unproven."
+  ],
+  "production_modified": false,
+  "native_binding_verified": false,
+  "login_verified": false,
+  "all_feature_parity_verified": false,
+  "production_cutover_authorized": false
+}
