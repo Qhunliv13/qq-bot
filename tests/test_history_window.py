@@ -125,10 +125,22 @@ def test_serialized_history_prefix_survives_fresh_clock_and_current_input():
     history.append("彼岸酱：answer")
     second = build_context(scope="42", history=history_snapshot(history, 0),
                            messages=[{"body": "second"}], clock={"now": "second"})
-    stable = first.split('],"messages":', 1)[0]
-    assert second.startswith(stable)
-    assert json.loads(second)["timing"] == {"now": "second"}
-    assert json.loads(second)["conversation"]["history"][-2:] == ["member：first", "彼岸酱：answer"]
+    before, after = json.loads(first), json.loads(second)
+    # Remove known structural list/object closings, not text markers that can
+    # occur inside raw history. Appended chronological rows follow these bytes.
+    stable = {"version": before["version"], "source": before["source"],
+              "conversation": {"history": before["conversation"]["history"]}}
+    prefix = json.dumps(stable, ensure_ascii=False, separators=(",", ":"))[:-3].encode("utf-8")
+    assert first.encode("utf-8").startswith(prefix)
+    assert second.encode("utf-8").startswith(prefix)
+    assert before["source"] == after["source"]
+    assert before["conversation"]["scope"] == after["conversation"]["scope"] == "42"
+    assert before["timing"] == {"now": "first"} and after["timing"] == {"now": "second"}
+    assert before["conversation"]["messages"] == [{"body": "first"}]
+    assert after["conversation"]["messages"] == [{"body": "second"}]
+    assert after["conversation"]["history"] == before["conversation"]["history"] + [
+        "member：first", "彼岸酱：answer",
+    ]
 
 
 @pytest.mark.parametrize("minimum", [0, -1])

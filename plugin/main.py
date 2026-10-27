@@ -3429,7 +3429,7 @@ class HiganPlugin(Star):
             _out, _used = await asyncio.wait_for(
                 _loop.run(system, prompt, _llm, _tool, max_rounds=TOOL_ROUNDS,
                           llm_messages=_llm_messages, observation_callback=_observe,
-                          completion_check=completion_check),
+                          observation_question=text, completion_check=completion_check),
                 timeout=TOOL_TURN_TIMEOUT)
         except _loop.ModelCompletionUnavailable as exc:
             # The same transcript has already made its one no-tools finalization

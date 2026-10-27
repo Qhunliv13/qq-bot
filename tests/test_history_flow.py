@@ -53,8 +53,12 @@ def test_capped_incoming_and_confirmed_replies_keep_serialized_prefix(production
         assert envelopes[index]["conversation"]["messages"][0]["body"] == f"current-{index}"
         assert not any(f"current-{index}" in entry for entry in history)
         assert prompts[index].count(f"current-{index}") == 1
-    stable_prefix = prompts[0].split('],"messages":', 1)[0]
-    assert all(prompt.startswith(stable_prefix) for prompt in prompts)
+    # Encode the known structure and remove only its closing delimiters: raw
+    # history may itself contain JSON-looking text, and later lists append rows.
+    stable = {"version": envelopes[0]["version"], "source": envelopes[0]["source"],
+              "conversation": {"history": histories[0]}}
+    stable_prefix = json.dumps(stable, ensure_ascii=False, separators=(",", ":"))[:-3].encode("utf-8")
+    assert all(prompt.encode("utf-8").startswith(stable_prefix) for prompt in prompts)
     assert plugin._history_origins == {"42": 1006}
     assert len(plugin._recent["42"]) == 2000
     assert plugin._recent["42"][-1] == "彼岸酱：reply-2"

@@ -92,7 +92,8 @@ async def run(system: str, prompt: str,
               llm_messages: Callable | None = None,
               transcript: list[dict] | None = None,
               observation_callback: Callable | None = None,
-              completion_check: Callable | None = None) -> tuple:
+              completion_check: Callable | None = None,
+              observation_question: str | None = None) -> tuple:
     """Run until model completion or an optional positive limit; return text, names.
 
     None and nonpositive max_rounds leave completion to the model. A positive
@@ -103,6 +104,9 @@ async def run(system: str, prompt: str,
     outcome, including argument/runner failures. Archive failures are logged but
     cannot undo successful tools or lose the in-memory evidence. Callers own scope
     selection and archive paths; no observations are promoted into durable facts.
+    observation_question explicitly supplies the original input for tool evidence;
+    None preserves legacy prompt attribution, while an empty string is meaningful.
+    The complete prompt remains unchanged in the initial native user message.
     Failed forced finalization raises ModelCompletionUnavailable, preserving the
     transcript and exception cause instead of appending a fabricated final reply.
     completion_check(name, args, result) is an opt-in trusted host predicate,
@@ -186,8 +190,12 @@ async def run(system: str, prompt: str,
                     result = {"ok": False, "error": "tool_execution_failed", "message": str(exc)}
                 else:
                     invoked_successfully = True
-            observation = make_observation(prompt, name or "invalid_tool", args, result,
-                                           observation_id=call["id"])
+            # Hosts know the actual initiating input; do not duplicate a serialized
+            # context snapshot in every tool result when that input is supplied.
+            # None, not truthiness, keeps legacy attribution and explicit empty input.
+            observation = make_observation(
+                prompt if observation_question is None else observation_question,
+                name or "invalid_tool", args, result, observation_id=call["id"])
             messages.append({"role": "tool", "tool_call_id": call["id"],
                              "content": _json(observation)})
             if observation_callback is not None:

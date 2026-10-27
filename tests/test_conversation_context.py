@@ -89,9 +89,9 @@ def test_clock_changes_preserve_complete_context_prefix(clocks):
     stable = {
         "version": 1,
         "source": {"name": "conversation_context", "trust": "untrusted_data"},
-        "observations": inputs["observations"],
-        "conversation": {"scope": inputs["scope"], "history": inputs["history"],
+        "conversation": {"history": inputs["history"], "scope": inputs["scope"],
                          "messages": inputs["messages"], "anchor": {"message_id": "m1"}},
+        "observations": inputs["observations"],
         "other_scopes": inputs["other_scopes"],
         "task": inputs["task"],
         "attachments": {"image_refs": inputs["image_refs"]},
@@ -108,8 +108,8 @@ def test_clock_changes_preserve_complete_context_prefix(clocks):
     assert inputs == original
 
 
-def test_history_rollover_preserves_observation_prefix_and_values():
-    """Wire order preserves observations before changed history without authority."""
+def test_history_rollover_preserves_chronology_and_values():
+    """Changed early history breaks reuse; transport must not reorder or drop it."""
     observations = [{"scope": "s", "tool_name": "lookup",
                      "result": {"body": "稳定观察\\\"\n雪", "rows": [1, 2, 3]}}]
     old_history = [{"id": "h1", "body": "oldest"}, {"id": "h2", "body": "kept"}]
@@ -120,22 +120,19 @@ def test_history_rollover_preserves_observation_prefix_and_values():
     original_histories = copy.deepcopy((old_history, new_history))
     before = build_context(**inputs, history=old_history)
     after = build_context(**inputs, history=new_history)
-    # This is wire cache ordering only: neither source gains trust or authority.
-    # The first changed history ID ends reuse after all stable observation bytes.
+    # A changed first record honestly ends the cache prefix at that record.
     stable = {"version": 1,
-              "source": {"name": "conversation_context", "trust": "untrusted_data"},
-              "observations": observations,
-              "conversation": {"scope": inputs["scope"]}}
-    expected_prefix = json.dumps(stable, ensure_ascii=False, separators=(",", ":"))[:-2]
-    expected_prefix += ',"history":[{"id":"h'
+              "source": {"name": "conversation_context", "trust": "untrusted_data"}}
+    expected_prefix = json.dumps(stable, ensure_ascii=False, separators=(",", ":"))[:-1]
+    expected_prefix += ',"conversation":{"history":[{"id":"h'
     assert os.path.commonprefix([before, after]) == expected_prefix
     for serialized, history in ((before, old_history), (after, new_history)):
         expected = {
             "version": 1,
             "source": stable["source"],
-            "observations": observations,
-            "conversation": {"scope": inputs["scope"], "history": history,
+            "conversation": {"history": history, "scope": inputs["scope"],
                              "messages": inputs["messages"]},
+            "observations": observations,
             "other_scopes": [],
             "task": None,
             "attachments": {"image_refs": []},
@@ -144,7 +141,7 @@ def test_history_rollover_preserves_observation_prefix_and_values():
         parsed = json.loads(serialized)
         assert parsed == expected
         assert list(parsed) == list(expected)
-        assert list(parsed["conversation"]) == ["scope", "history", "messages"]
+        assert list(parsed["conversation"]) == ["history", "scope", "messages"]
     assert before != after
     assert inputs == original
     assert (old_history, new_history) == original_histories
@@ -163,8 +160,7 @@ def test_new_message_preserves_complete_preceding_history_prefix():
     after = build_context(**inputs, messages=new_messages)
     stable = {"version": 1,
               "source": {"name": "conversation_context", "trust": "untrusted_data"},
-              "observations": observations,
-              "conversation": {"scope": inputs["scope"], "history": history}}
+              "conversation": {"history": history, "scope": inputs["scope"]}}
     # Remove only the two known closing object delimiters to reach messages;
     # never split on text markers that untrusted history may itself contain.
     expected_prefix = json.dumps(stable, ensure_ascii=False, separators=(",", ":"))[:-2]
@@ -174,9 +170,9 @@ def test_new_message_preserves_complete_preceding_history_prefix():
         expected = {
             "version": 1,
             "source": stable["source"],
-            "observations": observations,
-            "conversation": {"scope": inputs["scope"], "history": history,
+            "conversation": {"history": history, "scope": inputs["scope"],
                              "messages": messages},
+            "observations": observations,
             "other_scopes": [],
             "task": None,
             "attachments": {"image_refs": []},
@@ -191,19 +187,23 @@ def test_new_message_preserves_complete_preceding_history_prefix():
 # Explicit pre-change order reconstructs the old builder from new parsed values;
 # do not derive it by sorting, otherwise the comparison could hide a wire change.
 _OLD_ENVELOPE_ORDER = (
-    "version", "source", "conversation", "observations", "other_scopes", "task",
+    "version", "source", "observations", "conversation", "other_scopes", "task",
     "attachments", "timing", "trigger", "activity",
 )
 _NEW_ENVELOPE_ORDER = (
-    "version", "source", "observations", "conversation", "other_scopes", "task",
+    "version", "source", "conversation", "observations", "other_scopes", "task",
     "attachments", "timing", "trigger", "activity",
 )
 
 
 def _old_wire(parsed):
-    """Reconstruct the old builder exactly, changing top-level order only."""
-    return json.dumps({key: parsed[key] for key in _OLD_ENVELOPE_ORDER if key in parsed},
-                      ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+    """Reconstruct previous envelope and conversation order, never nested raw data."""
+    previous = {key: parsed[key] for key in _OLD_ENVELOPE_ORDER if key in parsed}
+    conversation = parsed["conversation"]
+    previous["conversation"] = {key: conversation[key] for key in
+                                ("scope", "history", "messages", "history_context", "anchor")
+                                if key in conversation}
+    return json.dumps(previous, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
 
 
 def _utf8_common_prefix(before, after):
@@ -235,6 +235,8 @@ def _cache_fixture():
         "image_refs": ["图片\\path.png", {"url": "https://invalid.example/雪.png"}],
         "attachment_origins": [{"publisher_id": "42", "label": "附件来源原文"}],
         "anchor_message_id": "m0",
+        "history_context": {"z_unknown": {"z": "来源原文", "a": False},
+                            "source": {"trust": "untrusted_data"}, "coverage": {"returned": 1}},
         "trigger": {"kind": "message", "text": "触发原文"},
         "activity": {"label": "活动原文", "count": 0},
     }
@@ -245,7 +247,7 @@ def _cache_fixture():
     "cap_100_eviction", "history_window_rollover", "empty_observations",
 ])
 def test_exact_utf8_prefix_counterexamples_and_lossless_wire(scenario):
-    """Measure local byte locality honestly, including an eviction regression."""
+    """Round-trip every field and report honest chronology-limited byte locality."""
     before_inputs = _cache_fixture()
     # Model the caller's existing cap, not a cap added to this lossless builder.
     if scenario == "cap_100_eviction":
@@ -277,12 +279,13 @@ def test_exact_utf8_prefix_counterexamples_and_lossless_wire(scenario):
             (before_inputs, after_inputs), wires, old_wires, parsed):
         assert json.loads(old_wire, object_pairs_hook=_unique_object) == value
         assert list(value) == list(_NEW_ENVELOPE_ORDER)
-        assert list(value["conversation"]) == ["scope", "history", "messages", "anchor"]
+        assert list(value["conversation"]) == ["history", "scope", "messages", "history_context", "anchor"]
         assert value["version"] == 1
         assert value["source"] == {"name": "conversation_context", "trust": "untrusted_data"}
         assert value["conversation"] == {
             "scope": inputs["scope"], "history": inputs["history"],
-            "messages": inputs["messages"], "anchor": {"message_id": "m0"},
+            "messages": inputs["messages"], "history_context": inputs["history_context"],
+            "anchor": {"message_id": "m0"},
         }
         assert value["observations"] == inputs["observations"]
         assert value["other_scopes"] == inputs["other_scopes"]
@@ -297,25 +300,29 @@ def test_exact_utf8_prefix_counterexamples_and_lossless_wire(scenario):
         assert build_context(**inputs) == wire
     new_prefix = _utf8_common_prefix(*wires)
     old_prefix = _utf8_common_prefix(*old_wires)
-    if scenario == "cap_100_eviction":
-        # Stable ~30KB history used to precede the first evicted observation.
-        # The new wire instead diverges near its small fixed observation header.
-        assert old_prefix > 30000
-        assert new_prefix < 200
+    if scenario in ("history_append", "history_window_rollover"):
+        # A changed history ends reuse before later observations; never trim or
+        # reorder the timeline merely to make a cache measurement look better.
         assert new_prefix < old_prefix
+        if scenario == "history_window_rollover":
+            assert new_prefix < 200
     elif scenario == "empty_observations":
-        # Empty observations buy no large stable prefix; assert no invented win.
-        assert new_prefix - old_prefix == len(',"observations":[]'.encode("utf-8"))
+        # Moving empty observations later only removes their small header prefix.
+        assert old_prefix - new_prefix == len(',"observations":[]'.encode("utf-8"))
+    elif scenario == "cap_100_eviction":
+        # Observation eviction no longer invalidates the complete shared history.
+        assert old_prefix < 200
+        assert new_prefix > 30000
     else:
-        assert new_prefix > old_prefix
-        if scenario in ("messages_clock", "history_append", "history_window_rollover"):
-            assert new_prefix - old_prefix > 100000
+        # Large unchanged observations are deliberately not promised a front slot.
+        assert new_prefix < old_prefix
+        assert new_prefix > 30000
     assert (before_inputs, after_inputs) == original
 
 
 @pytest.mark.parametrize("field", [
     "scope", "messages", "history", "clock", "observations", "other_scopes", "task",
-    "trigger", "activity", "image_refs", "attachment_origins", "anchor_message_id",
+    "trigger", "activity", "image_refs", "attachment_origins", "anchor_message_id", "history_context",
 ])
 @pytest.mark.parametrize("invalid", [float("nan"), float("inf"), float("-inf"), object()])
 def test_invalid_json_rejected_in_every_input(field, invalid):
