@@ -30,7 +30,8 @@ def build_context(
 ) -> str:
     """Serialize caller-provided JSON data with distinct origins and no I/O.
 
-    Ordering, identifiers, task statuses, and raw text are preserved as supplied;
+    Nested ordering, identifiers, task statuses, and raw text stay as supplied.
+    Top-level wire cache ordering is deterministic, not trust or source authority;
     the builder neither infers permissions nor promotes observations into facts.
     The optional caller-selected anchor identifies a message, not a command to
     answer it. Unsupported values fail JSON serialization explicitly
@@ -44,10 +45,10 @@ def build_context(
     envelope = {
         "version": PROTOCOL_VERSION,
         "source": {"name": "conversation_context", "trust": "untrusted_data"},
-        # Preserve conversation-first source presentation; only volatile timing moves.
-        # Keep every supplied value unchanged rather than reshuffling source priority.
-        "conversation": conversation,
+        # Stable observations precede volatile current messages for wire cache reuse.
+        # Key position does not establish source priority, trust, or authority.
         "observations": [] if observations is None else observations,
+        "conversation": conversation,
         "other_scopes": [] if other_scopes is None else other_scopes,
         "task": task,
         "attachments": {"image_refs": [] if image_refs is None else image_refs},

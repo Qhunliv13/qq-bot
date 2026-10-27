@@ -2128,11 +2128,13 @@ class HiganPlugin(Star):
         # Compare only process-keyed prefix digests; logs contain numeric/boolean
         # metrics, not prompts, image URLs, scope identifiers or API credentials.
         # Byte reuse is local evidence, not a claim about provider cache tokens.
+        request_index = None
         try:
             from .prefix_metrics import PrefixTracker
             if not hasattr(self, "_prefix_tracker"):
                 self._prefix_tracker = PrefixTracker()
             prefix_metrics = self._prefix_tracker.observe(payload)
+            request_index = prefix_metrics.get("request_index")
             logger.info("[higan] prefix_metrics metrics=%s",
                         json.dumps(prefix_metrics, separators=(",", ":")))
         except Exception as exc:
@@ -2171,7 +2173,7 @@ class HiganPlugin(Star):
             return "", []
         try:
             from .model_usage import log_usage
-            log_usage(logger, data, transport="tools")
+            log_usage(logger, data, transport="tools", request_index=request_index)
             msg = ((data.get("choices") or [{}])[0].get("message") or {})
             _txt = (msg.get("content") or "").strip()
             _tcs = (msg.get("tool_calls") or [])

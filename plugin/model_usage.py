@@ -34,10 +34,14 @@ def usage_metrics(response):
             "cache_hit_percent": 100 * cached / prompt if valid_cache and prompt else None}
 
 
-def log_usage(logger, response, *, transport):
+def log_usage(logger, response, *, transport, request_index=None):
     """Log a fixed allowlist of numeric metrics; raw responses and IDs stay private."""
     import json
     metrics = usage_metrics(response)
+    # The index is caller-owned numeric telemetry, not a provider/user identifier.
+    # Keep malformed or absent indexes out rather than guessing correlation.
+    if type(request_index) is int and request_index > 0:
+        metrics["request_index"] = request_index
     logger.info("[higan] model_usage transport=%s metrics=%s", transport,
                 json.dumps(metrics, ensure_ascii=False, separators=(",", ":")))
     return metrics
