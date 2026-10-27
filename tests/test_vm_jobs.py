@@ -4,7 +4,9 @@ Run with pytest, or ``python tests/test_vm_jobs.py`` on a Linux /proc host.
 All managed jobs live in TemporaryDirectory and are cancelled during teardown.
 """
 
+import contextlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -36,7 +38,8 @@ class BuilderTests(unittest.TestCase):
         job_id = str(uuid.uuid4())
         for script in (vm_jobs.build_start("print('hello')", "python"),
                        vm_jobs.build_start("printf hello", "bash"),
-                       vm_jobs.build_status(job_id), vm_jobs.build_cancel(job_id)):
+                       vm_jobs.build_status(job_id), vm_jobs.build_cancel(job_id),
+                       vm_jobs.build_list(), vm_jobs.build_list(offset=10, limit=100)):
             compile(script, "<vm-bootstrap>", "exec")
 
     def test_invalid_job_ids(self):
@@ -47,6 +50,54 @@ class BuilderTests(unittest.TestCase):
                 with self.subTest(bad=bad, builder=builder.__name__):
                     with self.assertRaises(ValueError):
                         builder(bad)
+
+    def test_invalid_list_inputs(self):
+        """Reject invalid pagination before building or dispatching VM source."""
+        for offset, limit in ((-1, 20), (True, 20), (0, 0), (0, 101),
+                              (0, True), (0, 1.5), ("0", 20)):
+            with self.subTest(offset=offset, limit=limit):
+                with self.assertRaises(ValueError):
+                    vm_jobs.build_list(offset=offset, limit=limit)
+
+    def test_listing_shares_status_and_never_requests_output(self):
+        """Keep one live identity validator and explicitly disable bulk log reads."""
+        script = vm_jobs.build_list()
+        self.assertEqual(script.count("def status(job, job_id):"), 1)
+        self.assertIn("data = status(job, job_id)", script)
+        self.assertIn("include_output=False", script)
+        self.assertIn("data = status(job, JOB_ID)", vm_jobs.build_status(str(uuid.uuid4())))
+
+    def test_listing_metadata_only_with_portable_owned_directory_stub(self):
+        """Exercise generated pagination on Windows without claiming Linux PID coverage."""
+        with tempfile.TemporaryDirectory(prefix="vm-list-contract-") as directory:
+            root = Path(directory) / "jobs"
+            root.mkdir()
+            for unused in range(100):
+                job_id = str(uuid.uuid4())
+                job = root / job_id
+                job.mkdir()
+                (job / "status.json").write_text(json.dumps({
+                    "job_id": job_id, "status": "completed", "exit_code": 0,
+                    "created_at": 1234567890.123456, "started_at": 1234567890.123456,
+                    "finished_at": 1234567890.123456}), encoding="utf-8")
+                # A directory in place of a log proves listing never opens output.
+                (job / "output.log").mkdir()
+            script = vm_jobs.build_list(limit=100, _root=root)
+            prefix, tail = script.rsplit("\ntry:\n    emit(listing())", 1)
+            namespace = {}
+            exec(compile(prefix, "<vm-list-contract>", "exec"), namespace)
+            # POSIX ownership/permission enforcement is covered only by Linux tests.
+            namespace["private_dir"] = lambda path: None
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                exec(compile("try:\n    emit(listing())" + tail,
+                             "<vm-list-contract>", "exec"), namespace)
+            result = json.loads(output.getvalue())
+            self.assertEqual(result["total"], 100)
+            self.assertGreater(len(result["jobs"]), 0)
+            self.assertEqual(result["next_offset"], len(result["jobs"]))
+            self.assertLessEqual(len(output.getvalue().strip()), 7800)
+            self.assertNotIn("output", output.getvalue())
 
     def test_invalid_start_inputs(self):
         """Reject unsupported interpreters and missing scripts before VM access."""
@@ -107,6 +158,66 @@ class LinuxJobTests(unittest.TestCase):
                 return result
             time.sleep(0.03)
         self.fail("job did not finish within local test deadline")
+
+    def test_listing_empty_root_is_read_only(self):
+        """A first listing returns an empty page without creating the jobs root."""
+        result = self.execute(vm_jobs.build_list(_root=self.root))
+        self.assertEqual(result, {"ok": True, "jobs": [], "total": 0, "next_offset": None})
+        self.assertFalse(self.root.exists())
+
+    def test_listing_two_jobs_pagination_and_cancel(self):
+        """List real jobs, preserve pagination, omit logs and reflect owned cancellation."""
+        first = self.start("print('SECRET_LOG')")['job_id']
+        second = self.start("import time\ntime.sleep(60)")['job_id']
+        self.wait_done(first)
+        page = self.execute(vm_jobs.build_list(limit=1, _root=self.root))
+        self.assertEqual(page["total"], 2)
+        self.assertEqual(page["next_offset"], 1)
+        following = self.execute(vm_jobs.build_list(offset=1, limit=1, _root=self.root))
+        self.assertIsNone(following["next_offset"])
+        self.assertEqual([item["job_id"] for item in page["jobs"] + following["jobs"]],
+                         sorted([first, second]))
+        self.execute(vm_jobs.build_cancel(second, _root=self.root))
+        rows = self.execute(vm_jobs.build_list(_root=self.root))
+        self.assertEqual({item["job_id"]: item["status"] for item in rows["jobs"]},
+                         {first: "completed", second: "cancelled"})
+        encoded = json.dumps(rows)
+        for secret in ("SECRET_LOG", "output", "owner", "pid", str(self.root)):
+            self.assertNotIn(secret, encoded)
+
+    def test_listing_skips_unsafe_and_corrupt_entries(self):
+        """Do not enumerate foreign paths, symlinks, invalid UUIDs or malformed metadata."""
+        good = self.start("print('done')")['job_id']
+        self.wait_done(good)
+        (self.root / str(uuid.uuid4())).symlink_to(self.temporary.name, target_is_directory=True)
+        bad = self.root / str(uuid.uuid4())
+        bad.mkdir(mode=0o700)
+        (bad / "status.json").write_text("not-json", encoding="utf-8")
+        (self.root / "private-secret-name").mkdir(mode=0o700)
+        rows = self.execute(vm_jobs.build_list(_root=self.root))
+        self.assertEqual(rows["total"], 1)
+        self.assertEqual([item["job_id"] for item in rows["jobs"]], [good])
+        self.assertNotIn("private-secret-name", json.dumps(rows))
+
+    def test_listing_transport_cap_and_continuation(self):
+        """One hundred summaries remain valid under the existing 8000-character transport."""
+        self.root.mkdir(mode=0o700)
+        for unused in range(100):
+            job_id = str(uuid.uuid4())
+            job = self.root / job_id
+            job.mkdir(mode=0o700)
+            data = {"job_id": job_id, "status": "completed", "exit_code": 0,
+                    "created_at": 1234567890.123456, "started_at": 1234567890.123456,
+                    "finished_at": 1234567890.123456}
+            (job / "status.json").write_text(json.dumps(data), encoding="utf-8")
+        page = self.execute(vm_jobs.build_list(limit=100, _root=self.root))
+        self.assertEqual(page["total"], 100)
+        self.assertGreater(len(page["jobs"]), 0)
+        self.assertEqual(page["next_offset"], len(page["jobs"]))
+        self.assertLessEqual(len(json.dumps(page, ensure_ascii=False)), 7800)
+        following = self.execute(vm_jobs.build_list(offset=page["next_offset"], limit=100, _root=self.root))
+        self.assertFalse({item["job_id"] for item in page["jobs"]} &
+                         {item["job_id"] for item in following["jobs"]})
 
     def test_python_completion_permissions_and_private_response(self):
         """Persist success/timestamps without publishing source, PIDs or host paths."""

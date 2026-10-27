@@ -1,5 +1,6 @@
 """Exhaustive isolated advertised-tool contracts; no production side-effect claims."""
 
+import asyncio
 import copy
 import importlib.util
 from pathlib import Path
@@ -49,6 +50,7 @@ def test_provider_all_calls_have_paired_ids_and_retained_observations(report):
         assert batch["exact_id_pairing"], batch
         assert batch["all_observations_retained"], batch
         assert batch["paired_results_match_archive"], batch
+        assert batch["all_results_successful"], batch["failed_results"]
         names.extend(batch["names"])
     assert names == [tool["name"] for tool in report["tools"]]
 
@@ -74,6 +76,24 @@ def test_new_native_contracts_use_reviewed_receipts_and_actions(report):
     assert rows["qq_publish_post"]["result"]["verification"]["published"] is None
     assert rows["qq_social_status"]["result"]["runtime_verified"] is False
     assert rows["autonomy_schedule"]["result"]["settings"]["interval_seconds"] == 600
+
+
+def test_imported_workspace_discovery_and_workers_execute_real_contracts(report):
+    """All additive classes require native receipts and locally exercised helpers."""
+    rows = {row["name"]: row for row in report["tools"]}
+    assert report["effective_schema_count"] == report["canonical_schema_count"] == 92
+    assert report["workspace_helpers_executed"] >= 20
+    assert report["native_worker_calls"]
+    assert {row["status"] for row in report["native_worker_receipts"]} == {"completed", "cancelled"}
+    assert all(row["result"] == "Offline worker complete." for row in report["native_worker_receipts"] if row["status"] == "completed")
+    for builder in (AUDIT.workspace_tools.schema, AUDIT.tool_discovery.schema, AUDIT.delegation.schema, AUDIT.task_planning.schema):
+        for schema in builder():
+            row = rows[schema["function"]["name"]]
+            assert row["boundary_contract_matches"], row
+            assert row["handler_body_executed"], row
+            assert row["result_quality"]["ok"] is True, row
+    assert rows["vm_job_list"]["boundary_contract_matches"]
+    assert rows["skill_save"]["result"]["name"] == "contract-save"
 
 
 def test_schema_validator_detects_required_drift_and_type_errors():
@@ -142,6 +162,29 @@ def test_result_failure_and_handler_exception_are_not_hidden(tmp_path, monkeypat
     assert rows["vm_click"]["exception"]["type"] == "ValueError"
     assert {"web_fetch", "vm_click"} <= {gap["name"] for gap in result["gaps"]}
     assert result["route_contracts_pass"] is False
+
+
+def test_native_provider_honors_explicit_worker_schema_snapshot(tmp_path, monkeypatch):
+    """Actual HTTP payloads isolate worker tools without mutating the parent catalog."""
+    make_plugin = AUDIT.integration.production.__wrapped__(tmp_path, monkeypatch)
+    plugin = make_plugin()
+    parent = plugin._tool_schemas()
+    explicit = [copy.deepcopy(next(item for item in parent if item["function"]["name"] == "web_search"))]
+    snapshot = copy.deepcopy(explicit)
+    requests = AUDIT.integration._provider(monkeypatch, [("child complete", []), ("parent complete", [])])
+
+    async def exercise():
+        """Use the production provider serializer for explicit and default catalogs."""
+        await plugin._llm_tools("system", "prompt", [], messages=[], allow_tools=True, tool_schemas=explicit)
+        await plugin._llm_tools("system", "prompt", [], messages=[], allow_tools=True)
+
+    asyncio.run(exercise())
+    assert requests[0]["tools"] == snapshot
+    assert requests[1]["tools"] == parent
+    assert len(requests[0]["tools"]) == 1
+    assert len(requests[1]["tools"]) == 92
+    assert explicit == snapshot
+    assert plugin._tool_schemas() == parent
 
 
 def test_audit_batch_limit_prevents_retention_overflow(tmp_path, monkeypatch):

@@ -8,6 +8,7 @@ from copy import deepcopy
 
 from .task_event import TaskEvent
 from .reply_selection import decode_reply, is_silence
+from .history_window import history_snapshot
 
 
 class AutonomyEvent(TaskEvent):
@@ -86,7 +87,11 @@ async def run_turn(plugin, scope, triggers, controller):
             plugin._turn_context = contexts
         sentinel = object()
         previous = contexts.get(scope, sentinel)
-        contexts[scope] = {"history": list(getattr(plugin, "_recent", {}).get(scope, [])),
+        # Use the exact shared chronological window rather than sending the whole
+        # 2000-entry live buffer on every autonomous opportunity.
+        history = history_snapshot(getattr(plugin, "_recent", {}).get(scope, []),
+                                   getattr(plugin, "_history_origins", {}).get(scope, 0))
+        contexts[scope] = {"history": list(history),
                            "clock": plugin._clock_context(), "messages": [],
                            "image_refs": [], "image_sources": [],
                            "trigger": {"kind": "autonomous_opportunity", "events": deepcopy(candidates)}}

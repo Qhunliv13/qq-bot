@@ -7,6 +7,10 @@ removes duplicate names; it does not implement tools or infer argument contracts
 from copy import deepcopy
 
 from .qq_social import schema as social_schema
+from .workspace_tools import schema as workspace_schema
+from .tool_discovery import schema as discovery_schema
+from .delegation import schema as delegation_schema
+from .task_planning import schema as planning_schema
 
 
 # Keys follow the distinct names declared by the native schema builders. Values
@@ -26,6 +30,7 @@ TOOL_DESCRIPTIONS = {
     "vm_type": "向虚拟机输入指定文本。",
     "vm_key": "向虚拟机发送指定按键。",
     "vm_job_start": "启动后台 Python 或 Bash 脚本，返回任务标识。",
+    "vm_job_list": "列出后台脚本任务的标识、运行状态和输出摘要。",
     "vm_job_status": "查询后台脚本的状态、退出码和有限长度输出。",
     "vm_job_cancel": "停止指定后台脚本对应的任务进程组。",
     "vm_exec": "在虚拟机中执行 Python 或 Shell 脚本并返回结果。",
@@ -81,9 +86,11 @@ TOOL_DESCRIPTIONS = {
 }
 
 
-# Social schema ownership includes its neutral descriptions; do not duplicate them.
-TOOL_DESCRIPTIONS.update({item["function"]["name"]: item["function"]["description"]
-                          for item in social_schema()})
+# Import-owned schemas own their descriptions as well as their argument contracts.
+# This snapshot shares metadata without duplicating tool implementations or prose.
+for schema_builder in (social_schema, workspace_schema, discovery_schema, delegation_schema, planning_schema):
+    TOOL_DESCRIPTIONS.update({item["function"]["name"]: item["function"]["description"]
+                              for item in schema_builder()})
 NATIVE_TOOL_COUNT = len(TOOL_DESCRIPTIONS)
 
 

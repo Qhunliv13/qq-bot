@@ -16,6 +16,7 @@ from __future__ import annotations
 from functools import wraps
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -166,6 +167,85 @@ def run_trigger_script(code: str) -> tuple:
         return False, "timeout"
     except Exception as exc:                                 # noqa: BLE001
         return False, repr(exc)[:160]
+
+
+class PlanError(ValueError):
+    """Carry a stable tool error code without exposing another scope's records."""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+
+
+def _plan_task(items: list, task_id: str, scope: str) -> dict:
+    """Resolve exact task/scope identity; blank scopes must never mean all tasks."""
+    if not isinstance(task_id, str) or not task_id or not isinstance(scope, str) or not scope:
+        raise PlanError("invalid_arguments", "task_id and scope must be nonempty strings")
+    for task in items:
+        if task.get("id") == task_id and task.get("scope") == scope:
+            return task
+    # Foreign and missing records are deliberately indistinguishable.
+    raise PlanError("not_found", "task not found in current scope")
+
+
+def _plan_steps(steps: list) -> list:
+    """Validate and copy data-only steps once for both persistence and reads."""
+    if not isinstance(steps, list):
+        raise PlanError("invalid_arguments", "steps must be a list")
+    result, identifiers = [], set()
+    for step in steps:
+        if not isinstance(step, dict) or set(step) != {"id", "content", "status"}:
+            raise PlanError("invalid_arguments", "each step requires only id, content, status")
+        identifier, content, status = step["id"], step["content"], step["status"]
+        if not isinstance(identifier, str) or not re.fullmatch(r"[A-Za-z0-9_]{1,64}", identifier):
+            raise PlanError("invalid_arguments", "step id must be 1..64 letters, digits or underscores")
+        if identifier in identifiers:
+            raise PlanError("invalid_arguments", "step ids must be unique")
+        if not isinstance(content, str) or not content.strip() or len(content) > 1000:
+            raise PlanError("invalid_arguments", "step content must be nonempty and at most 1000 characters")
+        if not isinstance(status, str) or status not in ("pending", "in_progress", "completed"):
+            raise PlanError("invalid_arguments", "invalid step status")
+        identifiers.add(identifier)
+        result.append({"id": identifier, "content": content, "status": status})
+    return result
+
+
+def _plan_snapshot(task: dict) -> dict:
+    """Return a detached snapshot; legacy records start at revision zero."""
+    plan = task.get("plan", {"revision": 0, "steps": []})
+    if not isinstance(plan, dict) or type(plan.get("revision")) is not int or plan["revision"] < 0:
+        raise PlanError("invalid_plan", "stored plan revision is invalid")
+    return {"task_id": task["id"], "revision": plan["revision"],
+            "steps": _plan_steps(plan.get("steps"))}
+
+
+@_locked
+def read_plan(task_id: str, scope: str) -> dict:
+    """Read the existing task's plan without creating a record or changing state."""
+    return _plan_snapshot(_plan_task(_load(), task_id, scope))
+
+
+@_locked
+def update_plan(task_id: str, scope: str, steps: list, expected_revision: int) -> dict:
+    """Replace a scoped plan with CAS under the existing store transaction lock.
+
+    Completed steps remain completed when supplied; parallel in-progress steps
+    are permitted. Plan completion never changes scheduler or goal state.
+    """
+    if type(expected_revision) is not int or expected_revision < 0:
+        raise PlanError("invalid_arguments", "expected_revision must be an integer >= 0")
+    items = _load()
+    task = _plan_task(items, task_id, scope)
+    current = _plan_snapshot(task)
+    if expected_revision != current["revision"]:
+        raise PlanError("revision_conflict", "plan revision changed; read the current plan before updating")
+    replacement = _plan_steps(steps)
+    if replacement == current["steps"]:
+        # Exact-revision retries do not generate redundant writes or revisions.
+        return current
+    task["plan"] = {"revision": current["revision"] + 1, "steps": replacement}
+    _save(items)
+    return _plan_snapshot(task)
 
 
 @_locked

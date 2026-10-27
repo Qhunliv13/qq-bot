@@ -267,3 +267,105 @@ def test_task_limit_preserves_paused_and_claimed_work(tasks, monkeypatch):
     with pytest.raises(ValueError):
         tasks.add("third", "goal", "group")
     assert set(by_id(tasks)) == {first["id"], second["id"]}
+
+
+def test_plan_legacy_read_and_scope_isolation(tasks):
+    """Legacy tasks read empty; foreign ids reveal no record or write side effect."""
+    task = tasks.add("plan", "goal", "one")
+    before = Path(tasks.STORE).read_bytes()
+    assert tasks.read_plan(task["id"], "one") == {"task_id": task["id"], "revision": 0, "steps": []}
+    for identifier, scope in ((task["id"], "two"), ("missing", "one")):
+        with pytest.raises(tasks.PlanError) as error:
+            tasks.read_plan(identifier, scope)
+        assert error.value.code == "not_found"
+        with pytest.raises(tasks.PlanError) as error:
+            tasks.update_plan(identifier, scope, [], 0)
+        assert error.value.code == "not_found"
+    with pytest.raises(tasks.PlanError):
+        tasks.read_plan(task["id"], "")
+    assert Path(tasks.STORE).read_bytes() == before
+
+
+def test_plan_replace_cas_and_noop_preserve_task_execution(tasks, monkeypatch):
+    """Plans survive normal updates without altering claimed task lifecycle fields."""
+    task = tasks.add("plan", "goal", "one", repeat="once")
+    tasks.claim(task["id"])
+    before = by_id(tasks)[task["id"]]
+    steps = [{"id": "done", "content": "already checked", "status": "completed"},
+             {"id": "a", "content": "parallel A", "status": "in_progress"},
+             {"id": "b", "content": "parallel B", "status": "in_progress"}]
+    result = tasks.update_plan(task["id"], "one", steps, 0)
+    assert result["revision"] == 1
+    assert result["steps"] == steps
+    after = by_id(tasks)[task["id"]]
+    assert {key: value for key, value in after.items() if key != "plan"} == before
+    steps[0]["content"] = "caller mutation"
+    assert tasks.read_plan(task["id"], "one")["steps"][0]["content"] == "already checked"
+    tasks.update(task_id=task["id"], brief="new context")
+    assert tasks.listing("one")[0]["plan"]["revision"] == 1
+    with pytest.raises(tasks.PlanError) as error:
+        tasks.update_plan(task["id"], "one", [], 0)
+    assert error.value.code == "revision_conflict"
+
+    def unexpected_save(items):
+        """Make a same-content no-op prove it never touches the store."""
+        raise AssertionError("no-op must not write")
+
+    monkeypatch.setattr(tasks, "_save", unexpected_save)
+    assert tasks.update_plan(task["id"], "one", result["steps"], 1) == result
+
+
+@pytest.mark.parametrize("steps", [None, {}, [None], [{"id": "a", "content": "x", "status": "bad"}],
+    [{"id": "a-b", "content": "x", "status": "pending"}],
+    [{"id": "a" * 65, "content": "x", "status": "pending"}],
+    [{"id": "a", "content": "  ", "status": "pending"}],
+    [{"id": "a", "content": "x" * 1001, "status": "pending"}],
+    [{"id": "a", "content": "x", "status": "pending", "extra": "x"}],
+    [{"id": "a", "content": "x", "status": "pending"}] * 2])
+def test_plan_invalid_steps_are_atomic(tasks, steps):
+    """Reject malformed replacement lists in full before mutating persisted state."""
+    task = tasks.add("plan", "goal", "one")
+    before = Path(tasks.STORE).read_bytes()
+    with pytest.raises(tasks.PlanError) as error:
+        tasks.update_plan(task["id"], "one", steps, 0)
+    assert error.value.code == "invalid_arguments"
+    assert Path(tasks.STORE).read_bytes() == before
+
+
+@pytest.mark.parametrize("revision", [None, True, False, -1, "0", 0.0])
+def test_plan_requires_integer_revision(tasks, revision):
+    """Reject implicit integer coercions including JSON booleans before writing."""
+    task = tasks.add("plan", "goal", "one")
+    with pytest.raises(tasks.PlanError):
+        tasks.update_plan(task["id"], "one", [], revision)
+    assert "plan" not in by_id(tasks)[task["id"]]
+
+
+def test_concurrent_plan_writers_have_one_cas_winner(tasks):
+    """Serialize CAS with existing scheduler transactions, avoiding lost updates."""
+    task = tasks.add("plan", "goal", "one")
+    barrier = threading.Barrier(4)
+
+    def compete(index):
+        """Race four distinct complete replacement lists on revision zero."""
+        barrier.wait()
+        try:
+            return tasks.update_plan(task["id"], "one", [
+                {"id": str(index), "content": "check", "status": "pending"}], 0)
+        except tasks.PlanError as error:
+            return error.code
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(compete, range(4)))
+    assert sum(isinstance(result, dict) for result in results) == 1
+    assert results.count("revision_conflict") == 3
+    assert tasks.read_plan(task["id"], "one")["revision"] == 1
+
+
+def test_completed_plan_does_not_complete_task_and_can_be_cleared(tasks):
+    """Step completion is planning data, never implicit authorization to finish."""
+    task = tasks.add("plan", "goal", "one", repeat="once")
+    tasks.update_plan(task["id"], "one", [
+        {"id": "all_done", "content": "checked", "status": "completed"}], 0)
+    assert by_id(tasks)[task["id"]]["status"] == "active"
+    assert tasks.update_plan(task["id"], "one", [], 1)["revision"] == 2

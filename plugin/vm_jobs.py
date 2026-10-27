@@ -81,11 +81,13 @@ def owned(job, owner):
         return False
 
 
-def report(job, data):
-    """Whitelist public metadata and decode at most the final 6000 output bytes."""
+def report(job, data, include_output=True):
+    """Whitelist public metadata; bulk listings never open a job's output log."""
     result = {key: data.get(key) for key in (
         "job_id", "status", "exit_code", "created_at", "started_at", "finished_at")}
     result["ok"] = True
+    if not include_output:
+        return result
     try:
         with (job / "output.log").open("rb") as handle:
             handle.seek(0, os.SEEK_END)
@@ -125,6 +127,19 @@ def resolve(root, job_id):
     job = root / job_id
     private_dir(job)
     return job
+
+
+def status(job, job_id):
+    """Share read-only identity and live-process checks across status and listing."""
+    data = load(job / "status.json")
+    if data["job_id"] != job_id or data["status"] not in TERMINAL | {"starting", "running"}:
+        raise ValueError("job metadata mismatch")
+    if data["status"] not in TERMINAL:
+        owner = load(job / "owner.json")
+        if not owned(job, owner):
+            # A stale or forged registration never licenses a process signal.
+            data = dict(data, status="lost", error="job_process_not_owned")
+    return data
 '''
 
 # A detached supervisor owns the session throughout execution, including bash
@@ -280,16 +295,13 @@ def manage():
     job = resolve(ROOT, JOB_ID)
     # Match the absolute runner path used during bootstrap, including test roots.
     job = job.resolve()
-    data = load(job / "status.json")
-    if data["job_id"] != JOB_ID:
-        raise ValueError("job metadata mismatch")
+    data = status(job, JOB_ID)
+    if data.get("error"):
+        result = report(job, data)
+        result["error"] = data["error"]
+        return result
     if data["status"] not in TERMINAL:
         owner = load(job / "owner.json")
-        if not owned(job, owner):
-            # A missing runner is not permission to signal another process.
-            result = report(job, data)
-            result.update(status="lost", error="job_process_not_owned")
-            return result
         if CANCEL:
             (job / "cancel.request").touch(mode=0o600, exist_ok=True)
             # Recheck immediately before each group signal, including escalation.
@@ -331,3 +343,60 @@ def build_status(job_id, *, _root=_ROOT):
 def build_cancel(job_id, *, _root=_ROOT):
     """Return an idempotent Python cancellation script; never accept a raw PID."""
     return _manage(job_id, _root, True)
+
+
+def build_list(offset=0, limit=20, *, _root=_ROOT):
+    """List private managed job metadata, with bounded pagination and no log reads.
+
+    Missing roots are empty without creating directories. Unsafe or corrupt entries
+    are omitted rather than disclosing their names, paths or registration data.
+    """
+    if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 100:
+        raise ValueError("offset must be nonnegative and limit must be 1..100")
+    return (_COMMON + "\nROOT = Path(" + repr(str(_root)) + ")\nOFFSET = "
+            + repr(offset) + "\nLIMIT = " + repr(limit) + r'''
+import math
+import uuid
+
+
+def listing():
+    """Use the status handler's exact live identity checks without reading output."""
+    if not ROOT.exists() and not ROOT.is_symlink():
+        return {"ok": True, "jobs": [], "total": 0, "next_offset": None}
+    private_dir(ROOT)
+    rows = []
+    for entry in sorted(ROOT.iterdir(), key=lambda item: item.name):
+        try:
+            # Canonical UUIDs are the only enumerable job identities.
+            job_id = str(uuid.UUID(entry.name))
+            if job_id != entry.name:
+                continue
+            job = resolve(ROOT, job_id).resolve()
+            data = status(job, job_id)
+            # Reject corrupt metadata before serialization or pagination sizing.
+            for key in ("created_at", "started_at", "finished_at", "exit_code"):
+                value = data.get(key)
+                if value is not None and (type(value) not in (int, float) or not math.isfinite(value)):
+                    raise ValueError("invalid job numeric metadata")
+            rows.append(report(job, data, include_output=False))
+        except (OSError, ValueError, KeyError, TypeError):
+            # Neither counts nor responses disclose unsafe/foreign directory names.
+            continue
+    total = len(rows)
+    page = []
+    result = {"ok": True, "jobs": page, "total": total, "next_offset": None}
+    for row in rows[OFFSET:OFFSET + LIMIT]:
+        page.append(row)
+        result["next_offset"] = OFFSET + len(page) if OFFSET + len(page) < total else None
+        if len(json.dumps(result, ensure_ascii=False)) > 7800:
+            page.pop()
+            break
+    result["next_offset"] = OFFSET + len(page) if OFFSET + len(page) < total else None
+    return result
+
+
+try:
+    emit(listing())
+except Exception:
+    print(json.dumps({"ok": False, "error": "job_metadata_invalid"}))
+''')

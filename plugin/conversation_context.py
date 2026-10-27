@@ -23,6 +23,7 @@ def build_context(
     other_scopes: Any = None,
     task: Any = None,
     trigger: Any = None,
+    activity: Any = None,
     image_refs: Any = None,
     attachment_origins: Any = None,
     anchor_message_id: Any = None,
@@ -56,6 +57,8 @@ def build_context(
     }
     if trigger is not None:
         envelope["trigger"] = trigger
+    if activity is not None:
+        envelope["activity"] = activity
     if attachment_origins is not None:
         # Optional provenance remains source data; absent callers keep their exact
         # established envelope and no publisher is inferred from an image subject.

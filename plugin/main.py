@@ -816,7 +816,7 @@ class HiganPlugin(Star):
         return build_context(scope=str(group), messages=records, history=history,
             clock=turn.get("clock", self._clock_context()), observations=observations,
             other_scopes=turn.get("other_scopes"), task=turn.get("task"),
-            trigger=turn.get("trigger"),
+            trigger=turn.get("trigger"), activity=turn.get("activity"),
             image_refs=turn.get("image_refs", self._image_refs(event)),
             attachment_origins=origins if origins else None,
             anchor_message_id=str(getattr(getattr(event, "message_obj", None), "message_id", "") or ""))
@@ -1738,6 +1738,10 @@ class HiganPlugin(Star):
                                "required": required or []}}}
         from .tool_catalog import neutralize_schemas
         from .qq_social import schema as social_schema
+        from .workspace_tools import schema as workspace_schema
+        from .tool_discovery import schema as discovery_schema
+        from .delegation import schema as delegation_schema
+        from .task_planning import schema as planning_schema
         return neutralize_schemas([
             _f("web_search", "搜索公开网页，返回来源标题、URL和摘要；按需要调用而非固定触发。",
                {"query": {"type": "string"}}, ["query"]),
@@ -1859,7 +1863,9 @@ class HiganPlugin(Star):
                {"scope": {"type": "string"}, "next_at": {"type": "number"},
                 "interval_seconds": {"type": "number"}, "enabled": {"type": "boolean"},
                 "reason": {"type": "string"}, "scopes": {"type": "array", "items": {"type": "string"}}}),
-        ] + list(self._task_tool_schemas()) + social_schema())
+            _f("vm_job_list", "列出机器人虚拟机内受管后台脚本的状态摘要，不读取输出日志。",
+               {"offset": {"type": "integer"}, "limit": {"type": "integer"}}),
+        ] + list(self._task_tool_schemas()) + social_schema() + workspace_schema() + discovery_schema() + delegation_schema() + planning_schema())
 
     def _as_llm_url(self, ref) -> str:
         """[img-url-fix] 把图片引用转成 LLM 能接受的 URL（data: / http(s)）✓。
@@ -2081,7 +2087,8 @@ class HiganPlugin(Star):
             return ""
 
     async def _llm_tools(self, system: str, prompt: str, image_urls: list,
-                         messages: list | None = None, allow_tools: bool = True) -> tuple:
+                         messages: list | None = None, allow_tools: bool = True,
+                         tool_schemas: list | None = None) -> tuple:
         """[direct-tools] 带工具调用的一次 LLM 往返；返回 (文本, 工具调用列表)。
 
         只用标准库 + 线程，不阻塞事件循环 ✓；失败一律返回 ("", []) 由上层回退 ✓。
@@ -2111,7 +2118,9 @@ class HiganPlugin(Star):
             "messages": request_messages,
         }
         if allow_tools:
-            payload["tools"] = _dedupe_tool_schemas(self._tool_schemas())
+            # A delegated worker gets its own explicit read-only schema snapshot;
+            # the parent catalog is never monkeypatched or changed mid-request.
+            payload["tools"] = _dedupe_tool_schemas(self._tool_schemas() if tool_schemas is None else tool_schemas)
             payload["tool_choice"] = "auto"
         payload.update(self._llm_extra())   # [thinking-max] 思考拉满 ✓
         # Compare only process-keyed prefix digests; logs contain numeric/boolean
@@ -2265,10 +2274,57 @@ class HiganPlugin(Star):
                     return {"ok": False, "error": "autonomy_destination_not_observed"}
                 if not self._policy_allows(event, destination):
                     return {"ok": False, "error": "destination_policy_denied"}
+        from .workspace_tools import dispatch as workspace_dispatch, schema as workspace_schema
+        from .tool_discovery import dispatch as discovery_dispatch, schema as discovery_schema
+        from .delegation import Manager, schema as delegation_schema
+        if name in {item["function"]["name"] for item in workspace_schema()}:
+            async def execute_workspace(code):
+                """Execute only on the bot's own existing VM service, not the DSH/production host."""
+                return await self._vm_tool("vm_exec", {"code": code, "lang": "python"})
+            return await workspace_dispatch(name, args, execute_workspace)
+        if name in {item["function"]["name"] for item in discovery_schema()}:
+            return await discovery_dispatch(name, args, self._tool_schemas(),
+                                            skills_root=Path(HIGAN_ROOT) / "skills", can_write=can_manage)
+        if name in {item["function"]["name"] for item in delegation_schema()}:
+            if not hasattr(self, "_delegation_manager"):
+                self._delegation_manager = Manager(Path(HIGAN_ROOT) / "delegation")
+            manager = self._delegation_manager
+            try:
+                if name == "agent_start":
+                    from .delegated_runner import run_worker
+                    ticket = {}
+                    async def run_delegated(task, worker_scope, inbox):
+                        """Run privately, then expose a typed result opportunity, never a forced send."""
+                        try:
+                            return await run_worker(self, task, worker_scope, inbox)
+                        finally:
+                            # Manager.start records/returns the ID before its new
+                            # coroutine can run. Persisting the final receipt has
+                            # no intervening await after this notification.
+                            if ticket.get("id"):
+                                try:
+                                    self._autonomy_controller().notify(worker_scope, ticket["id"])
+                                except Exception as exc:
+                                    logger.warning("[higan] 委派结果机会记录失败：%s", type(exc).__name__)
+                    receipt = await manager.start(args.get("task"), args.get("label"),
+                                                  run_delegated, scope=scope)
+                    ticket["id"] = receipt["id"]
+                    return {"ok": True, **receipt}
+                if name == "agent_list":
+                    return {"ok": True, **manager.list(scope=scope)}
+                if name == "agent_status":
+                    result = manager.status(args.get("id"), scope=scope)
+                elif name == "agent_message":
+                    result = manager.message(args.get("id"), args.get("message"), scope=scope)
+                else:
+                    result = manager.interrupt(args.get("id"), scope=scope)
+                return {"ok": not bool(result.get("error")), **result}
+            except (ValueError, TypeError) as exc:
+                return {"ok": False, "error": type(exc).__name__}
         if name in {item["function"]["name"] for item in social_schema()}:
             async def native_action(action, parameters):
                 """Use the existing native event bridge; never expose QQ session credentials."""
-                if event is None:
+                if event is None and name not in ("qq_account_info", "qq_social_status"):
                     raise RuntimeError("native_event_required")
                 # AstrBot strips the OneBot envelope. The existing local native
                 # HTTP bridge retains business status/retcode for write receipts;
@@ -2317,6 +2373,12 @@ class HiganPlugin(Star):
         except Exception as exc:  # noqa: BLE001
             logger.warning("[higan] tasks 模块不可用：%r", exc)
             tasks = None
+        from .task_planning import dispatch as planning_dispatch, schema as planning_schema
+        if name in {item["function"]["name"] for item in planning_schema()}:
+            if tasks is None:
+                return {"ok": False, "error": "tasks_unavailable"}
+            result = planning_dispatch(name, args, tasks, scope)
+            return {"ok": not bool(result.get("error")), **result}
         if name in ("read_forward", "forward_expand"):
             # All entry points share the native event API and the same typed source parser.
             from .forward_context import resolve
@@ -2736,13 +2798,15 @@ class HiganPlugin(Star):
             _res = await self._vm_tool("vm_fetch", {"url": _url, "name": _name})
             logger.info("[higan] vm_fetch %s → %s" % (_url[:60], str(_res)[:120]))
             return _res
-        if name in ("vm_job_start", "vm_job_status", "vm_job_cancel"):
-            from .vm_jobs import build_start, build_status, build_cancel
+        if name in ("vm_job_start", "vm_job_status", "vm_job_cancel", "vm_job_list"):
+            from .vm_jobs import build_start, build_status, build_cancel, build_list
             try:
                 if name == "vm_job_start":
                     bootstrap = build_start(str(args.get("code") or ""), str(args.get("lang") or "python"))
                 elif name == "vm_job_status":
                     bootstrap = build_status(str(args.get("job_id") or ""))
+                elif name == "vm_job_list":
+                    bootstrap = build_list(args.get("offset", 0), args.get("limit", 20))
                 else:
                     bootstrap = build_cancel(str(args.get("job_id") or ""))
             except (ValueError, TypeError):
@@ -3112,6 +3176,16 @@ class HiganPlugin(Star):
                     by_group.setdefault(source, []).append(body.strip())
         turn["other_scopes"] = by_group
         turn["task"] = task_context
+        if turn.get("trigger") is not None:
+            # Supply neutral unfinished-work/capability/error state instead of
+            # inventing a human wake message or requiring a tool every turn.
+            try:
+                from .activity_context import snapshot
+                turn["activity"] = snapshot(self, group, self._tool_schemas(),
+                                            skills_root=Path(HIGAN_ROOT) / "skills")
+            except Exception as exc:
+                turn["activity"] = {"source": "activity_state", "available": False,
+                                    "error": type(exc).__name__}
         prompt = self._request_context(event, group, text, has_image)
 
         async def _llm(_sys, _prompt):
@@ -3177,6 +3251,12 @@ class HiganPlugin(Star):
                             ref = str(media.get("url") or media.get("file") or "")
                             if ref:
                                 live_refs.append(ref)
+            if name == "workspace_read_image" and isinstance(res, dict) and res.get("ok"):
+                # An explicit file-image observation uses the existing append-only
+                # visual transport, not a URL-only claim of pixel understanding.
+                image = res.get("image") or {}
+                if image.get("ref"):
+                    live_refs.append(str(image["ref"]))
             # [plugin-delivers-media] VM 说"交给你发" ⇒ 走插件通道（实测可用 ✓）
             try:
                 if isinstance(res, dict) and res.get("deliver") == "plugin":

@@ -20,6 +20,15 @@ DEFAULT_INTERVAL_SECONDS = 600
 LOCAL_TIMEZONE = timezone(timedelta(hours=8))
 _LOCKS = {}
 _LOCKS_GUARD = threading.Lock()
+# Only actual delegated-worker completion currently produces activity notifications.
+_ACTIVITY_KINDS = frozenset({"delegated_result"})
+
+
+def _event_id(value):
+    """Validate opaque receipt identities without interpreting content or truncating ids."""
+    if not isinstance(value, str) or not value.strip() or len(value) > 200:
+        raise ValueError("event_id must be a nonempty string of at most 200 characters")
+    return value
 
 
 def _finite(value, positive=False):
@@ -54,7 +63,8 @@ class AutonomousController:
         """Merge explicit settings with defaults; corrupted state must fail closed."""
         state = {"enabled": True, "interval_seconds": DEFAULT_INTERVAL_SECONDS,
                  "scopes": [], "last_run": 0, "origins": {}, "poll_last": {},
-                 "wake_slots": {}, "next_checks": {}, "last_scope": ""}
+                 "wake_slots": {}, "next_checks": {}, "last_scope": "",
+                 "pending_events": {}, "notifications_seen": []}
         try:
             with self.path.open(encoding="utf-8") as handle:
                 saved = json.load(handle)
@@ -67,9 +77,32 @@ class AutonomousController:
             raise ValueError("invalid autonomy settings")
         state["interval_seconds"] = _finite(state["interval_seconds"], positive=True)
         state["last_run"] = _finite(state["last_run"])
-        for field in ("origins", "poll_last", "wake_slots", "next_checks"):
+        for field in ("origins", "poll_last", "wake_slots", "next_checks", "pending_events"):
             if not isinstance(state[field], dict):
                 raise ValueError("invalid autonomy state: " + field)
+        if not isinstance(state["notifications_seen"], list):
+            raise ValueError("invalid autonomy state: notifications_seen")
+        # Keep consumed receipt identities durable so repeated completion callbacks
+        # cannot resurrect an opportunity after acknowledgement or a hot reload.
+        seen = {_event_id(item) for item in state["notifications_seen"]}
+        if len(seen) != len(state["notifications_seen"]):
+            raise ValueError("duplicate autonomy notification identity")
+        for identity, event in state["pending_events"].items():
+            _event_id(identity)
+            if not isinstance(event, dict):
+                raise ValueError("invalid pending activity event")
+            scope = _scope(event.get("scope"))
+            kind = event.get("kind")
+            origin = state["origins"].get(scope)
+            if (event.get("scope") != scope or not isinstance(kind, str)
+                    or kind not in _ACTIVITY_KINDS or not isinstance(origin, str)
+                    or not origin.strip()):
+                raise ValueError("invalid pending activity provenance")
+            event["observed_at"] = _finite(event.get("observed_at"))
+            # Accept pending data from an earlier writer without losing deduplication.
+            if identity not in seen:
+                state["notifications_seen"].append(identity)
+                seen.add(identity)
         state["scopes"] = list(dict.fromkeys(_scope(item) for item in state["scopes"]))
         return state
 
@@ -112,6 +145,31 @@ class AutonomousController:
             if not state["origins"] and not state["last_run"]:
                 state["last_run"] = _finite(self._now())
             state["origins"][scope] = origin
+            self._save(state)
+            return True
+
+    def notify(self, scope, event_id, *, kind="delegated_result", now=None):
+        """Queue typed completion metadata for a known origin, never run or send anything.
+
+        Receipt identities remain seen after consumption, including across reloads.
+        Disabled or restricted scopes retain their pending events until eligible.
+        """
+        scope = _scope(scope)
+        event_id = _event_id(event_id)
+        if not isinstance(kind, str) or kind not in _ACTIVITY_KINDS:
+            raise ValueError("unsupported activity notification kind")
+        observed_at = _finite(self._now() if now is None else now)
+        with self._lock:
+            state = self._load()
+            origin = state["origins"].get(scope)
+            # Completion data cannot bootstrap a destination or impersonate a human.
+            if not isinstance(origin, str) or not origin.strip():
+                return False
+            if event_id in state["notifications_seen"]:
+                return False
+            state["pending_events"][event_id] = {
+                "scope": scope, "kind": kind, "observed_at": observed_at}
+            state["notifications_seen"].append(event_id)
             self._save(state)
             return True
 
@@ -166,6 +224,15 @@ class AutonomousController:
                         "wake:" + key + ":" + day)
         if not state["enabled"]:
             return events
+        # Actual result arrivals bypass heartbeat latency, not eligibility or model
+        # policy. Reading them never acknowledges a receipt or moves any timer.
+        for identity, event in state["pending_events"].items():
+            scope = event["scope"]
+            if self._allowed(scope, conf) and now >= event["observed_at"]:
+                events.append({"kind": "activity_result", "scope": scope,
+                               "source_type": event["kind"], "event_id": "activity:" + identity,
+                               "observed_at": event["observed_at"], "due_at": event["observed_at"],
+                               "origin": state["origins"][scope]})
         for scope, check in state["next_checks"].items():
             scope = _scope(scope)
             if self._allowed(scope, conf) and now >= _finite(check["next_at"]):
@@ -192,7 +259,19 @@ class AutonomousController:
         with self._lock:
             state = self._load()
             key = str(trigger["event_id"])
-            if kind == "poll_interval":
+            if kind == "activity_result":
+                # Match the exact pending receipt before touching other trigger types;
+                # stale, repeated or mismatched acknowledgements consume nothing.
+                if not key.startswith("activity:"):
+                    return False
+                identity = key[len("activity:"):]
+                event = state["pending_events"].get(identity)
+                if (not event or event["scope"] != scope
+                        or event["kind"] != trigger.get("source_type")
+                        or event["observed_at"] != trigger.get("observed_at")):
+                    return False
+                del state["pending_events"][identity]
+            elif kind == "poll_interval":
                 last = _finite(state["poll_last"].get(scope, 0))
                 if key != "poll:" + scope + ":" + str(last):
                     return False

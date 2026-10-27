@@ -9,6 +9,13 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from plugin.qq_social import schema as social_schema  # noqa: E402
+from plugin.workspace_tools import schema as workspace_schema  # noqa: E402
+from plugin.tool_discovery import schema as discovery_schema  # noqa: E402
+from plugin.delegation import schema as delegation_schema  # noqa: E402
+
+from plugin.task_planning import schema as planning_schema  # noqa: E402
+
+IMPORTED_BUILDERS = (social_schema, workspace_schema, discovery_schema, delegation_schema, planning_schema)
 from plugin.tool_catalog import NATIVE_TOOL_COUNT, TOOL_DESCRIPTIONS, neutralize_schemas  # noqa: E402
 
 
@@ -42,17 +49,29 @@ def native_schemas():
                                "required": args[3] if len(args) > 3 else []},
             }})
     # The native builder explicitly appends this import-owned schema list.
-    schemas.extend(social_schema())
+    for builder in IMPORTED_BUILDERS:
+        schemas.extend(builder())
     return schemas
 
 
 def test_exact_coverage_of_all_native_tool_names(native_schemas):
     """A new or removed native tool requires an explicit metadata review."""
     names = {schema["function"]["name"] for schema in native_schemas}
-    assert len(names) == NATIVE_TOOL_COUNT
+    assert len(names) == NATIVE_TOOL_COUNT == 92
     assert len(TOOL_DESCRIPTIONS) == NATIVE_TOOL_COUNT
     assert set(TOOL_DESCRIPTIONS) == names
     assert all(isinstance(text, str) and text.strip() for text in TOOL_DESCRIPTIONS.values())
+
+
+def test_import_owned_descriptions_are_shared_without_a_second_definition():
+    """Imported capabilities own exact prose and parameter metadata together."""
+    names = []
+    for builder in IMPORTED_BUILDERS:
+        for item in builder():
+            function = item["function"]
+            names.append(function["name"])
+            assert TOOL_DESCRIPTIONS[function["name"]] == function["description"]
+    assert len(names) == len(set(names)) == 25
 
 
 def test_all_descriptions_are_neutral_metadata(native_schemas):
@@ -79,7 +98,7 @@ def test_native_shapes_parameters_and_required_fields_are_preserved(native_schem
         assert set(parameters["required"]) <= set(parameters["properties"])
         # Preserve imported native metadata too, including operation-ID descriptions.
         assert parameters == latest[name]["function"]["parameters"]
-        if name not in {item["function"]["name"] for item in social_schema()}:
+        if name not in {item["function"]["name"] for builder in IMPORTED_BUILDERS for item in builder()}:
             assert all("description" not in prop for prop in parameters["properties"].values())
     assert native_schemas == original
 

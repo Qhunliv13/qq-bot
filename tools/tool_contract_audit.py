@@ -3,8 +3,9 @@
 
 Reuse the existing AST production fixture; never import plugin.main or initialize
 AstrBot. Actual dispatch, VM request mapping, foreground group-file routing and
-provider-loop observations execute. Only external edges are simulated. No VM code,
-shell, browser JavaScript, downloads or message delivery is actually executed.
+provider-loop observations execute. Workspace Python helpers execute locally only
+under a temporary runtime root. Other VM code, shell, browser JavaScript, downloads
+and message delivery remain simulated; no production endpoints are contacted.
 """
 
 from __future__ import annotations
@@ -34,7 +35,9 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT / "tests") not in sys.path:
     sys.path.insert(0, str(ROOT / "tests"))
 import test_production_integration as integration  # noqa: E402
-from plugin import browser_eval, memory, tasks  # noqa: E402
+from plugin import browser_eval, memory, tasks, workspace_tools, tool_discovery, delegation, task_planning  # noqa: E402
+import base64
+import hashlib
 from plugin.autonomy import AutonomousController  # noqa: E402
 from plugin.tool_catalog import NATIVE_TOOL_COUNT  # noqa: E402
 from plugin.qq_social import schema as social_schema  # noqa: E402
@@ -42,8 +45,29 @@ from plugin.tool_context import redact  # noqa: E402
 
 # Every distinct advertised name must be reviewed here; schema additions cannot
 # silently acquire a generic mocked success. Strings resembling code are inert
-# payloads only: all VM transports and task execution are blocked before use.
+# payloads only except exact generated workspace helpers: other VM execution and
+# task-trigger execution remain blocked or explicitly simulated at the transport.
 CASES = {
+    "workspace_read": {"path": "contract.txt"},
+    "workspace_write": {"path": "contract.txt", "content": "contract written\n"},
+    "workspace_edit": {"path": "contract.txt", "old_string": "baseline", "new_string": "edited", "expected_sha256": "SEEDED"},
+    "workspace_glob": {"pattern": "*.txt"},
+    "workspace_grep": {"pattern": "contract", "include": "*.txt"},
+    "workspace_cwd": {},
+    "workspace_present": {"paths": ["contract.txt"]},
+    "workspace_read_image": {"path": "contract.png"},
+    "tool_search": {"query": "vm_shot"},
+    "tool_describe": {"names": ["vm_shot"]},
+    "skill_list": {}, "skill_read": {"name": "contract"},
+    "skill_save": {"name": "contract-save", "instructions": "Offline reference.", "description": "Contract reference"},
+    "agent_start": {"task": "Offline contract research", "label": "contract"},
+    "agent_status": {"id": "SEEDED"}, "agent_list": {},
+    "agent_message": {"id": "SEEDED", "message": "Offline update"},
+    "agent_interrupt": {"id": "SEEDED"},
+    "task_plan_read": {"task_id": "SEEDED"},
+    "task_plan_update": {"task_id": "SEEDED", "expected_revision": 0,
+                         "steps": [{"id": "step1", "content": "Contract work", "status": "in_progress"}]},
+    "vm_job_list": {},
     "autonomy_status": {},
     "autonomy_schedule": {"scope": "42", "interval_seconds": 600, "enabled": True},
     "qq_account_info": {},
@@ -110,6 +134,7 @@ EXPECTED_VM_PATHS = {
     "vm_shot": "/vm/shot", "vm_browse": "/vm/browse",
     "vm_click_confirm": "/vm/click_confirm", "vm_click_preview": "/vm/click_preview",
     "vm_click_text": "/vm/click_text", "vm_click": "/vm/click", "vm_type": "/vm/type",
+    "vm_job_list": "/vm/exec",
     "vm_key": "/vm/key", "vm_job_start": "/vm/exec", "vm_job_status": "/vm/exec",
     "vm_job_cancel": "/vm/exec", "vm_exec": "/vm/exec", "vm_files": "/vm/files?dir=files",
     "vm_recall": "/vm/qq/recall", "vm_eval": "/vm/eval", "vm_slider_gap": "/vm/slider/gap",
@@ -221,6 +246,17 @@ def _handler_inventory():
         result[item["function"]["name"]] = {
             "handler": "_dispatch_tool", "branch_line": social_branch.lineno,
             "body_lines": [child.lineno for child in social_branch.body]}
+    # Imported routers are observed at the actual native membership branch.
+    for builder, marker in ((workspace_tools.schema, "workspace_schema"),
+                            (tool_discovery.schema, "discovery_schema"),
+                            (delegation.schema, "delegation_schema"),
+                            (task_planning.schema, "planning_schema")):
+        branch = next(node for node in ast.walk(klass)
+                      if isinstance(node, ast.If) and marker in ast.dump(node.test))
+        for item in builder():
+            result[item["function"]["name"]] = {
+                "handler": "_dispatch_tool", "branch_line": branch.lineno,
+                "body_lines": [child.lineno for child in branch.body]}
     return result
 
 
@@ -233,8 +269,18 @@ class AuditHarness:
         self.edges, self.provider_replies, self.requests = [], [], []
         self.denied = []
         self.signature = "contract signature"
+        self.native_popen = subprocess.Popen
+        self.workspace_root = self.root / "vm-runtime"
+        self.workspace_dir = self.workspace_root / "workspace"
+        self.workspace_dir.mkdir(parents=True, exist_ok=True)
+        self.patch.setattr(workspace_tools, "_ROOT", str(self.workspace_root))
+        self.patch.setattr(delegation, "_MANAGERS", {})
+        self.helper_count = 0
+        self.worker_calls = []
+        self.worker_gate = asyncio.Event()
         self.make_plugin = integration.production.__wrapped__(self.root, monkeypatch)
         self.plugin = self.make_plugin()
+        self.bind_worker(self.plugin)
         self.controller = AutonomousController(self.root / "autonomy.json")
         self.plugin._autonomy_controller = lambda: self.controller
         namespace = self.plugin._dispatch_tool.__globals__
@@ -266,6 +312,60 @@ class AuditHarness:
         # imports (notably agent_loop) still load the existing production source.
         self.original_spec = importlib.util.spec_from_file_location
         self.patch.setattr(importlib.util, "spec_from_file_location", self.memory_spec)
+
+    def bind_worker(self, plugin):
+        """Stub only child model transport; native worker and manager remain real."""
+        original = plugin._llm_tools
+
+        async def llm(*args, **kwargs):
+            """Hold children at a deterministic request boundary until cleanup."""
+            if kwargs.get("tool_schemas") is not None:
+                self.worker_calls.append({"scope": "native-child", "schemas": len(kwargs["tool_schemas"])})
+                await self.worker_gate.wait()
+                return "Offline worker complete.", []
+            return await original(*args, **kwargs)
+
+        plugin._llm_tools = llm
+
+    async def resolve_args(self, plugin, name, args, scope, event):
+        """Resolve real scope-bound IDs immediately before a native invocation."""
+        if name in {"task_plan_read", "task_plan_update"}:
+            # Each actual scope gets an existing scheduler task, not a second store.
+            task = tasks.add("seed " + name, "inert planning goal", scope)
+            args["task_id"] = task["id"]
+            if name == "task_plan_update":
+                receipt = await plugin._dispatch_tool("task_plan_read", {"task_id": task["id"]}, scope, event=event)
+                args["expected_revision"] = receipt["revision"]
+        if name in {"agent_status", "agent_message", "agent_interrupt"}:
+            started = await plugin._dispatch_tool("agent_start", {"task": "Contract seeded worker"}, scope, event=event)
+            await asyncio.sleep(0)
+            args["id"] = started["id"]
+        return args
+
+    def execute_helper(self, code):
+        """Run only the exact generated workspace runtime against a temporary root."""
+        if not code.startswith(workspace_tools._RUNTIME + "\nimport base64\nREQUEST = "):
+            raise AssertionError("unreviewed helper code")
+        token = ast.literal_eval(code.split("base64.b64decode(", 1)[1].split(").decode", 1)[0])
+        request = json.loads(base64.b64decode(token))
+        if Path(request["root"]).resolve() != self.workspace_root.resolve():
+            raise AssertionError("workspace helper escaped temp root")
+        if code != workspace_tools.build_script(request["operation"], request["args"]):
+            raise AssertionError("workspace helper differs from native generator")
+        self.helper_count += 1
+        script = self.root / ("workspace-helper-%s.py" % self.helper_count)
+        script.write_text(code, encoding="utf-8")
+        # File-backed stdio works under Windows without spawning captured pipes.
+        output = self.root / ("workspace-output-%s.txt" % self.helper_count)
+        with output.open("w", encoding="utf-8") as stream:
+            process = self.native_popen([sys.executable, str(script)], cwd=str(self.root),
+                                       stdout=stream, stderr=stream)
+            process.wait(timeout=20)
+        text = output.read_text(encoding="utf-8")
+        if process.returncode:
+            raise AssertionError(text)
+        self.edges.append({"edge": "workspace_helper", "operation": request["operation"], "executed_locally": True})
+        return {"ok": True, "output": text}
 
     def forbidden(self, *args, **kwargs):
         """Fail closed at every forbidden process/network boundary, even if caught."""
@@ -352,7 +452,13 @@ class AuditHarness:
         elif url.startswith("http://127.0.0.1:18003/vm/"):
             self.edges.append({"edge": "vm_http_stub", "url": url,
                 "method": "GET" if isinstance(request, str) else request.get_method()})
-            result = {"ok": True, "simulated": True, "output": json.dumps({"ok": True, "simulated": True, "job_id": "offline-job"})}
+            payload = json.loads(request.data.decode("utf-8")) if not isinstance(request, str) and request.data else {}
+            code = payload.get("code", "")
+            if code.startswith(workspace_tools._RUNTIME + "\nimport base64\nREQUEST = "):
+                result = self.execute_helper(code)
+            else:
+                # Legacy VM/job endpoints remain explicit external-edge simulations.
+                result = {"ok": True, "simulated": True, "output": json.dumps({"ok": True, "simulated": True, "job_id": "offline-job", "jobs": []})}
             if url.endswith(("/eval", "/frame_eval")):
                 result["value"] = json.dumps({"marker": browser_eval._ENVELOPE_MARKER,
                     "ok": True, "value_type": "json", "value": "offline-evaluation"})
@@ -364,9 +470,30 @@ class AuditHarness:
     def prepare(self, name):
         """Seed independent local state so mutation routes do not depend on tool order."""
         args = copy.deepcopy(CASES[name])
+        if name.startswith("workspace_"):
+            if name in {"workspace_write", "workspace_edit"}:
+                args["path"] = name + ".txt"
+            baseline = self.workspace_dir / args.get("path", "contract.txt")
+            if baseline.suffix == ".png":
+                baseline = self.workspace_dir / "contract.txt"
+            baseline.write_text("contract baseline\n", encoding="utf-8")
+            (self.workspace_dir / "contract.png").write_bytes(base64.b64decode(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6LwAAAABJRU5ErkJggg=="))
+            if name in {"workspace_write", "workspace_edit"}:
+                # The actual helper establishes the observation before any overwrite.
+                receipt = json.loads(self.execute_helper(workspace_tools.build_script(
+                    "workspace_read", {"path": args["path"]}))["output"])
+                args["expected_sha256"] = receipt["sha256"]
+        if name.startswith("skill_"):
+            skill_root = self.root / "skills"
+            skill_root.mkdir(exist_ok=True)
+            (skill_root / "contract.md").write_text("Offline reference.\n", encoding="utf-8")
+            if name == "skill_save" and (skill_root / "contract-save.md").exists():
+                args["expected_sha256"] = hashlib.sha256((skill_root / "contract-save.md").read_bytes()).hexdigest()
         store = memory.Memory(str(self.memory_path)).load()
-        store.add_fact("contract seeded fact", "audit")
-        fact_id = store.list_facts()[0]["id"]
+        seed_text = "contract seeded fact" + (" for " + name if name in {"facts_edit", "wp_fact_move"} else "")
+        store.add_fact(seed_text, "audit")
+        fact_id = next(row["id"] for row in store.list_facts() if row["text"] == seed_text)
         memory.WakePersonFacts(str(self.person_path)).load().add("10001", "contract seeded person")
         if name in {"facts_edit", "wp_fact_move"}:
             args["id"] = str(fact_id)
@@ -378,7 +505,7 @@ class AuditHarness:
         event = integration.Event("contract audit")
         # Identity is supplied only by the trusted fixture event, never tool arguments.
         # This source owner ID remains independent of the production OWNER_QQS set.
-        if name in {"qq_set_signature", "qq_publish_post", "qq_set_profile", "autonomy_schedule"}:
+        if name in {"qq_set_signature", "qq_publish_post", "qq_set_profile", "autonomy_schedule", "skill_save"}:
             event.get_sender_id = lambda: "2084526117"
         event.action_results = {
             "get_group_root_files": {"files": [{"file_name": "contract-nonce.txt", "file_id": "file-contract", "file_size": 10}], "folders": []},
@@ -442,6 +569,7 @@ async def _audit(root, monkeypatch, batch_size):
         if name not in CASES:
             continue
         args, event = harness.prepare(name)
+        args = await harness.resolve_args(harness.plugin, name, args, "42", event)
         entry["argument_errors"] = argument_errors(schemas[name], args)
         start = len(harness.edges)
         executed_lines = set()
@@ -482,6 +610,39 @@ async def _audit(root, monkeypatch, batch_size):
                 entry["boundary_contract_matches"] = entry["boundary_contract_matches"] and native_edges[0]["params"] == {"content": args["content"], "ugc_right": 64} and result.get("outcome") == "accepted" and result.get("tid") == "offline-contract-post"
             elif name == "qq_set_profile":
                 entry["boundary_contract_matches"] = entry["boundary_contract_matches"] and native_edges[0]["params"] == {"nickname": args["nickname"]} and result.get("outcome") == "accepted"
+        elif name.startswith("workspace_"):
+            helper_edges = [edge for edge in entry["stubbed_edges"] if edge["edge"] == "workspace_helper"]
+            entry["boundary_contract_matches"] = len(helper_edges) == 1 and helper_edges[0]["operation"] == name
+            if name in {"workspace_write", "workspace_edit"}:
+                expected_text = "contract written\n" if name == "workspace_write" else "contract edited\n"
+                actual = (harness.workspace_dir / args["path"]).read_text(encoding="utf-8")
+                entry["boundary_contract_matches"] &= actual == expected_text and result.get("sha256") == hashlib.sha256((harness.workspace_dir / args["path"]).read_bytes()).hexdigest()
+            elif name == "workspace_present":
+                entry["boundary_contract_matches"] &= result.get("delivery") == "references_only" and len(result.get("files", [])) == 1
+            elif name == "workspace_read_image":
+                entry["boundary_contract_matches"] &= isinstance(result.get("image"), dict)
+        elif name in {"tool_search", "tool_describe"}:
+            found = result.get("tools", [])
+            entry["boundary_contract_matches"] = bool(found) and found[0].get("name") == "vm_shot" and found[0].get("schema") == schemas["vm_shot"]
+        elif name.startswith("agent_"):
+            entry["boundary_contract_matches"] = bool(harness.worker_calls)
+            if name == "agent_start":
+                entry["boundary_contract_matches"] = result.get("status") == "running" and result.get("attached") is True
+            elif name == "agent_status":
+                entry["boundary_contract_matches"] &= result.get("id") == args["id"] and result.get("status") == "running"
+            elif name == "agent_message":
+                entry["boundary_contract_matches"] &= result.get("status") == "queued"
+            elif name == "agent_interrupt":
+                entry["boundary_contract_matches"] &= result.get("status") in {"cancelling", "cancel_requested", "cancelled"}
+            else:
+                entry["boundary_contract_matches"] &= bool(result.get("agents"))
+        elif name in {"task_plan_read", "task_plan_update"}:
+            expected_steps = [] if name == "task_plan_read" else args["steps"]
+            expected_revision = 0 if name == "task_plan_read" else args["expected_revision"] + 1
+            current = tasks.read_plan(args["task_id"], "42")
+            entry["boundary_contract_matches"] = (result.get("task_id") == args["task_id"]
+                and result.get("revision") == expected_revision and result.get("steps") == expected_steps
+                and current == {"task_id": args["task_id"], "revision": expected_revision, "steps": expected_steps})
         elif name in EXPECTED_VM_PATHS:
             actual_paths = [edge["url"].removeprefix("http://127.0.0.1:18003")
                             for edge in entry["stubbed_edges"] if edge["edge"] == "vm_http_stub"]
@@ -503,11 +664,16 @@ async def _audit(root, monkeypatch, batch_size):
     for offset in range(0, len(names), batch_size):
         batch = [name for name in names[offset:offset + batch_size] if name in CASES]
         plugin = harness.make_plugin()
+        harness.bind_worker(plugin)
         for attribute in ("manifest", "_autonomy_controller", "_tasks_mod", "_web_search", "_fetch_page", "_onebot_http", "_qq_send", "_deliver_media"):
             setattr(plugin, attribute, getattr(harness.plugin, attribute))
         scope = str(4200 + offset)
-        calls = [integration._call(name, harness.prepare(name)[0], "batch-%s-%s" % (offset, name)) for name in batch]
+        calls = []
         event = harness.prepare("group_files")[1]
+        for name in batch:
+            args, _ = harness.prepare(name)
+            args = await harness.resolve_args(plugin, name, args, scope, event)
+            calls.append(integration._call(name, args, "batch-%s-%s" % (offset, name)))
         # The mixed batch contains owner-only mutations; use a genuine event identity.
         event.get_sender_id = lambda: "2084526117"
         event.group = scope
@@ -528,6 +694,8 @@ async def _audit(root, monkeypatch, batch_size):
             "exact_id_pairing": [message["tool_call_id"] for message in paired] == expected,
             "retained_observation_names": [row["tool_name"] for row in observations],
             "all_observations_retained": [row["tool_name"] for row in observations] == batch,
+            "failed_results": [{"name": row["tool_name"], "result": row["result"]} for row in observations if row["result"].get("ok") is not True],
+            "all_results_successful": all(row["result"].get("ok") is True for row in observations),
             "paired_results_match_archive": [json.loads(message["content"])["result"] for message in paired] == [row["result"] for row in observations]})
     unknown = await harness.plugin._dispatch_tool("__contract_unknown_tool__", {}, "42")
     report["unknown_tool"] = {"result": unknown, "rejected": unknown.get("ok") is False and "unknown tool" in unknown.get("error", "")}
@@ -537,8 +705,18 @@ async def _audit(root, monkeypatch, batch_size):
         if not entry["executed"] or entry["exception"] or not entry.get("handler_body_executed") or not entry.get("boundary_contract_matches") or entry.get("argument_errors") or not all(quality.get(key) for key in ("object", "json_serializable", "boolean_ok")) or quality.get("ok") is not True:
             report["gaps"].append({"name": entry["name"], "reason": "route, fixture arguments, exception or result quality failed"})
     report["route_contracts_pass"] = not (report["gaps"] or report["unmapped_cases"] or report["stale_cases"] or report["schema_errors"] or harness.denied) and report["unknown_tool"]["rejected"] and all(
-        batch["exact_id_pairing"] and batch["all_observations_retained"] and batch["paired_results_match_archive"] and not batch["exception"] for batch in report["provider_batches"])
+        batch["exact_id_pairing"] and batch["all_observations_retained"] and batch["paired_results_match_archive"] and batch["all_results_successful"] and not batch["exception"] for batch in report["provider_batches"])
     report["raw_schemas_unique"] = not report["duplicate_schema_names"]
+    harness.worker_gate.set()
+    workers = [job["worker"] for owner in delegation._MANAGERS.values()
+               if owner.root.is_relative_to(harness.root.resolve()) for job in owner._jobs.values()]
+    if workers:
+        await asyncio.gather(*workers, return_exceptions=True)
+    report["workspace_helpers_executed"] = harness.helper_count
+    report["native_worker_calls"] = harness.worker_calls
+    report["native_worker_receipts"] = [{key: record.get(key) for key in ("id", "status", "result", "error")}
+                                        for path in (harness.root / "delegation").glob("*.json")
+                                        for record in [json.loads(path.read_text(encoding="utf-8"))]]
     return report
 
 
