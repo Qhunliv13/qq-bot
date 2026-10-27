@@ -4,6 +4,8 @@ The caller must supply a pristine extracted software-only QQ directory. System
 library directories are exposed read-only; no host account directories are bound.
 Default mode validates the candidate but executes nothing. Real execution needs
 Linux root, util-linux unshare/mount, and explicit --execute consent.
+--userns-control substitutes trusted system unshare/true under identical isolation;
+it is a namespace prerequisite control, never QQ/runtime/native verification.
 Optional --private-diagnostics creates a new owner-only file outside this repository
 with at most 16 KiB of exact stderr. Treat this raw diagnostic as sensitive: do not
 share it. It never enters public JSON, even for this account-free runtime probe.
@@ -36,14 +38,19 @@ class ProbeError(ValueError):
     """Carry fixed redacted failure codes rather than host paths or raw output."""
 
 
-def base_report():
+def base_report(*, userns_control=False):
     """Keep runtime evidence distinct from native compatibility or release consent."""
-    return {"mode": "isolated_runtime_versions", "status": "not_executed",
+    report = {"mode": "isolated_runtime_versions", "status": "not_executed",
             "runtime_executed": False, "runtime_versions_verified": False,
             "versions": {}, "errors": [], "private_diagnostics_written": False,
             "production_cutover": False, "production_cutover_authorized": False,
             "native_binding_verified": False, "independent_backend_ready": False,
             "safe_to_login": False, "abi_compatibility": "unverified"}
+    if userns_control:
+        # Trusted namespace control supplies no QQ or version evidence.
+        report.update(mode="isolated_userns_control", control_executed=False,
+                      user_namespace_creation_verified=False)
+    return report
 
 
 def minimal_environment():
@@ -213,13 +220,13 @@ def copy_private_stderr(errors, fd):
     return bool(data)
 
 
-def child_probe(root, jail, nonce, parent_ids, mount, diagnostic_fd=None):
-    """Build an empty chroot in private namespaces, drop privilege, then probe QQ.
+def child_probe(root, jail, nonce, parent_ids, mount, diagnostic_fd=None, *, userns_control=False):
+    """Build the shared isolation, then probe QQ or a trusted namespace control.
 
     This helper is PID 1 in its new namespace. On exit the kernel kills remaining
     descendants. No QQ process starts unless all isolation setup has succeeded.
     """
-    report = base_report()
+    report = base_report(userns_control=userns_control)
     if diagnostic_fd is not None:
         validate_diagnostic_fd(diagnostic_fd)
     observed = namespace_ids()
@@ -267,17 +274,23 @@ def child_probe(root, jail, nonce, parent_ids, mount, diagnostic_fd=None):
         resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
         resource.setrlimit(resource.RLIMIT_FSIZE, (OUTPUT_LIMIT, OUTPUT_LIMIT))
         resource.setrlimit(resource.RLIMIT_NOFILE, (128, 128))
-        report["runtime_launch_attempted"] = True
+        # Same chroot, UID, NNP and cap-zero hook; only the trusted command differs.
+        command = (["/usr/bin/unshare", "--user", "--map-root-user", "/usr/bin/true"]
+                   if userns_control else ["/opt/QQ/qq", "/probe.js"])
+        executed_key = "control_executed" if userns_control else "runtime_executed"
+        failure_prefix = "userns_control" if userns_control else "runtime"
+        report["control_launch_attempted" if userns_control else "runtime_launch_attempted"] = True
         try:
-            result = subprocess.run(["/opt/QQ/qq", "/probe.js"], env=minimal_environment(),
+            result = subprocess.run(command, env=minimal_environment(),
                                     stdin=subprocess.DEVNULL, stdout=output,
                                     stderr=errors, timeout=10, check=False,
                                     preexec_fn=drop_runtime_privileges, close_fds=True)
         except subprocess.TimeoutExpired:
-            report.update(status="failed", runtime_executed=True, errors=["runtime_timeout"])
+            report.update(status="failed", errors=[failure_prefix + "_timeout"])
+            report[executed_key] = True
             return report
         except (OSError, subprocess.SubprocessError):
-            report.update(status="failed", errors=["runtime_launch_failed"])
+            report.update(status="failed", errors=[failure_prefix + "_launch_failed"])
             return report
         finally:
             if diagnostic_fd is not None:
@@ -286,9 +299,21 @@ def child_probe(root, jail, nonce, parent_ids, mount, diagnostic_fd=None):
                 except (OSError, ProbeError):
                     # Preserve the original runtime failure; disclose no raw data.
                     report["errors"].append("private_diagnostic_write_failed")
-        report["runtime_executed"] = True
+        report[executed_key] = True
         report["isolation"].update(unprivileged=True, no_new_privileges=True,
                                    effective_capabilities_zero=True)
+        if userns_control:
+            # Success requires the real unshare + mapping + true chain, not a flag.
+            errors.seek(0)
+            denied = b"unshare failed: Operation not permitted" in errors.read(OUTPUT_LIMIT + 1)
+            report.update(status="observed" if result.returncode == 0 else "failed",
+                          control_status="control_succeeded" if result.returncode == 0 else "control_failed",
+                          control_exit_code=result.returncode,
+                          user_namespace_creation_verified=result.returncode == 0,
+                          errors=[] if result.returncode == 0 else ["userns_control_failed"])
+            if result.returncode != 0 and denied:
+                report["control_failure_category"] = "user_namespace_creation_denied"
+            return report
         report["runtime_exit_code"] = result.returncode
         if result.returncode != 0:
             errors.seek(0)
@@ -305,9 +330,9 @@ def child_probe(root, jail, nonce, parent_ids, mount, diagnostic_fd=None):
     return report
 
 
-def probe(qq_root, execute=False, private_diagnostics=None):
+def probe(qq_root, execute=False, private_diagnostics=None, *, userns_control=False):
     """Validate by default; only consented Linux-root execution creates diagnostics."""
-    report = base_report()
+    report = base_report(userns_control=userns_control)
     diagnostic_fd = None
     if sys.platform != "linux":
         report.update(status="refused", errors=["linux_required"])
@@ -335,6 +360,8 @@ def probe(qq_root, execute=False, private_diagnostics=None):
                     "--mount-proc", sys.executable, str(helper), "--child",
                     "--qq-root", str(root), "--jail", str(jail), "--nonce", nonce,
                     "--parent-ns", json.dumps(parent_ids), "--mount-tool", mount]
+            if userns_control:
+                args.append("--userns-control")
             private_kwargs = {}
             if diagnostic_fd is not None:
                 args.extend(["--private-diagnostic-fd", str(diagnostic_fd)])
@@ -349,7 +376,7 @@ def probe(qq_root, execute=False, private_diagnostics=None):
                 raise ProbeError("helper_output_limit")
             child = json.loads(result.stdout)
             # Only allow fixed helper fields; never surface unparsed process output.
-            for key in ("status", "runtime_executed", "runtime_launch_attempted", "runtime_versions_verified", "versions", "errors", "platform", "arch", "isolation", "runtime_exit_code", "runtime_failure_category", "missing_library"):
+            for key in ("status", "runtime_executed", "runtime_launch_attempted", "runtime_versions_verified", "versions", "errors", "platform", "arch", "isolation", "runtime_exit_code", "runtime_failure_category", "missing_library", "control_executed", "control_launch_attempted", "control_status", "control_exit_code", "control_failure_category", "user_namespace_creation_verified"):
                 if key in child:
                     report[key] = child[key]
             # A helper cannot invent consent or publish the descriptor/path/bytes.
@@ -372,6 +399,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--qq-root", required=True)
     parser.add_argument("--execute", action="store_true")
+    parser.add_argument("--userns-control", action="store_true",
+                        help="Run trusted user-namespace control instead of QQ; still needs --execute")
     parser.add_argument("--report", type=Path)
     parser.add_argument("--private-diagnostics", type=Path,
                         help="New outside-repository owner-only raw stderr file (16 KiB max); sensitive, do not share")
@@ -383,16 +412,19 @@ def main(argv=None):
     parser.add_argument("--mount-tool", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     if args.child:
-        report = base_report()
+        report = base_report(userns_control=args.userns_control)
         try:
             report = child_probe(validate_root(args.qq_root), args.jail, args.nonce,
                                  json.loads(args.parent_ns), args.mount_tool,
-                                 diagnostic_fd=args.private_diagnostic_fd)
+                                 diagnostic_fd=args.private_diagnostic_fd,
+                                 userns_control=args.userns_control)
         except Exception:
             # Child errors are intentionally fixed and redacted; no host traceback.
             report.update(status="failed", errors=["isolation_setup_or_probe_failed"])
     else:
         kwargs = {"execute": args.execute}
+        if args.userns_control:
+            kwargs["userns_control"] = True
         if args.private_diagnostics is not None:
             kwargs["private_diagnostics"] = args.private_diagnostics
         report = probe(args.qq_root, **kwargs)

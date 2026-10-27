@@ -328,3 +328,80 @@ def test_private_open_exclusive_mode_and_symlink(tmp_path):
     with pytest.raises(FileExistsError):
         probe.open_private_diagnostics(link)
     assert destination.read_bytes() == b""
+
+
+def test_userns_control_default_never_executes(monkeypatch, software):
+    """Control selection alone cannot supply execution consent or runtime evidence."""
+    linux(monkeypatch)
+    runner = Mock(side_effect=AssertionError("execution forbidden"))
+    monkeypatch.setattr(probe.subprocess, "run", runner)
+    report = probe.probe(software, userns_control=True)
+    assert report["mode"] == "isolated_userns_control"
+    assert report["control_executed"] is False
+    assert report["user_namespace_creation_verified"] is False
+    assert report["runtime_executed"] is False
+    runner.assert_not_called()
+
+
+def test_userns_control_flag_reaches_helper_and_cli(monkeypatch, software, capsys):
+    """Both CLI paths explicitly forward the boolean without changing default calls."""
+    linux(monkeypatch)
+    monkeypatch.setattr(probe.os, "geteuid", lambda: 0, raising=False)
+    monkeypatch.setattr(probe.shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(probe, "namespace_ids", lambda: {k: k for k in probe.NAMESPACES})
+    child = probe.base_report(userns_control=True)
+    child.update(status="observed", control_executed=True, control_exit_code=0,
+                 user_namespace_creation_verified=True)
+    runner = Mock(return_value=subprocess.CompletedProcess([], 0, json.dumps(child).encode()))
+    monkeypatch.setattr(probe.subprocess, "run", runner)
+    assert probe.main(["--qq-root", str(software), "--execute", "--userns-control"]) == 0
+    assert "--userns-control" in runner.call_args.args[0]
+    report = json.loads(capsys.readouterr().out)
+    assert report["control_exit_code"] == 0
+    assert report["user_namespace_creation_verified"] is True
+    assert report["runtime_versions_verified"] is False
+    assert report["versions"] == {}
+
+
+@pytest.mark.parametrize("returncode,stderr,denied", [
+    (0, b"", False),
+    (1, b"unshare: unshare failed: Operation not permitted", True),
+    (1, b"unshare: write failed /proc/self/uid_map: Operation not permitted", False),
+])
+def test_userns_control_child_uses_existing_isolation(monkeypatch, tmp_path, returncode, stderr, denied):
+    """Mock setup only: exact trusted command retains the existing privilege hook."""
+    import sys
+
+    monkeypatch.setitem(sys.modules, "resource", Mock())
+    ids = {k: k + "-child" for k in probe.NAMESPACES}
+    monkeypatch.setattr(probe, "namespace_ids", lambda: ids)
+    monkeypatch.setattr(probe, "run_checked", Mock())
+    monkeypatch.setattr(probe, "bind_readonly", Mock())
+    monkeypatch.setattr(probe.os, "chown", Mock(), raising=False)
+    monkeypatch.setattr(probe.os, "chroot", Mock(), raising=False)
+    monkeypatch.setattr(probe.os, "chdir", Mock())
+    jail = tmp_path / "jail"
+    jail.mkdir()
+
+    def run_control(command, **kwargs):
+        """Write synthetic stderr without invoking a command or privilege setters."""
+        assert command == ["/usr/bin/unshare", "--user", "--map-root-user", "/usr/bin/true"]
+        assert kwargs["preexec_fn"] is probe.drop_runtime_privileges
+        assert kwargs["close_fds"] is True
+        assert "shell" not in kwargs
+        kwargs["stderr"].write(stderr)
+        return subprocess.CompletedProcess(command, returncode)
+
+    monkeypatch.setattr(probe.subprocess, "run", run_control)
+    report = probe.child_probe(tmp_path, jail, "nonce", {k: k for k in ids},
+                               "/usr/bin/mount", userns_control=True)
+    assert report["mode"] == "isolated_userns_control"
+    assert report["control_executed"] is True
+    assert report["control_exit_code"] == returncode
+    assert report["user_namespace_creation_verified"] is (returncode == 0)
+    assert report.get("control_failure_category") == ("user_namespace_creation_denied" if denied else None)
+    assert report["runtime_executed"] is False
+    assert report["runtime_versions_verified"] is False
+    assert "runtime_exit_code" not in report
+    assert report["versions"] == {}
+    assert report["isolation"]["effective_capabilities_zero"] is True

@@ -274,6 +274,22 @@ and NO_NEW_PRIVS. No setuid installation, sandbox-disabling flag, binary patch o
 was attempted. See `qq-runtime-sandbox-diagnostic.json`. The safe independent host
 initialization path remains an open validation gate, not a completed QQ backend.
 
+## User-namespace controls: investigate the harness, not only QQ
+
+A static identifier scan found three `ELECTRON_RUN_AS_NODE` occurrences and no
+alternative name containing RUN_AS_NODE; this does not prove the variable is honored.
+A trusted-command control inside the existing chroot returned EPERM creating a user
+namespace, while a non-chroot control with private outer namespaces, UID/GID 65534
+and no-new-privileges succeeded. No QQ process ran in either control. This contrast
+is consistent with the kernel's documented chroot limitation, not proof that all
+other settings were matched or that the entire original QQ failure is explained.
+See `qq-userns-control-evidence.json`.
+
+The next filesystem experiment should investigate a reviewed root-replacement and
+old-root-detachment boundary rather than removing account/file isolation, enabling
+setuid or disabling Chromium sandboxing. The existing chroot probe must not be treated
+as evidence that independent QQ is impossible. No native/login/feature gate has passed.
+
 ## Next validation gates
 
 1. Complete the installed backend API/event inventory and preserve configuration mappings.

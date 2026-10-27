@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "scope": "Local trusted-command controls only; no QQ execution, account state or production access.",
+  "runtime_mode_static_scan": {
+    "binary_bytes": 204344328,
+    "binary_sha256": "ae67432744180adc2b6567aa61b9575b14b28745f57b377a2853a1b744299ec2",
+    "electron_run_as_node_occurrences": 3,
+    "run_as_node_occurrences": 3,
+    "all_run_as_node_occurrences_belong_to_electron_name": true,
+    "alternative_environment_name_found": false,
+    "standalone_electron_name_offset": 19249893,
+    "byte_presence_proves_runtime_acceptance": false
+  },
+  "without_chroot_control": {
+    "outer_private_namespaces": ["mount", "network", "pid"],
+    "uid": 65534,
+    "gid": 65534,
+    "supplementary_groups_cleared": true,
+    "no_new_privileges": true,
+    "command": ["unshare", "--user", "--map-root-user", "/usr/bin/true"],
+    "exit_code": 0,
+    "user_namespace_command_succeeded": true,
+    "qq_executed": false
+  },
+  "inside_existing_chroot_control": {
+    "mode": "isolated_userns_control",
+    "control_executed": true,
+    "control_exit_code": 1,
+    "control_failure_category": "user_namespace_creation_denied",
+    "operation_not_permitted_observed": true,
+    "runtime_executed": false,
+    "runtime_versions_verified": false,
+    "user_namespace_creation_verified": false,
+    "isolation": {
+      "mount": true, "network": true, "pid": true, "chroot": true,
+      "unprivileged": true, "no_new_privileges": true,
+      "effective_capabilities_zero": true
+    }
+  },
+  "documented_kernel_constraint": {
+    "source": "https://man7.org/linux/man-pages/man2/unshare.2.html",
+    "condition": "CLONE_NEWUSER can return EPERM when the process root does not match its mount namespace root, including a chroot environment.",
+    "parent_source_fetch_verified": true
+  },
+  "interpretation": [
+    "This WSL environment does permit the tested unprivileged user namespace outside the chroot; global user-namespace unavailability is not established.",
+    "The existing filesystem boundary prevents the tested user namespace. The observed contrast is consistent with the documented chroot constraint.",
+    "These are related but not otherwise perfectly matched experimental arms: no claim is made that all other process details were identical.",
+    "The original QQ failure is not proof that independent QQ operation is impossible. The probe's filesystem boundary is a prerequisite to investigate.",
+    "Replacing the mount namespace root with a carefully reviewed pivot_root-style boundary is a future experiment, not a proven fix or an authorization to remove isolation."
+  ],
+  "system_policy_modified": false,
+  "production_modified": false,
+  "native_binding_verified": false,
+  "login_verified": false,
+  "full_feature_parity_verified": false,
+  "production_cutover_authorized": false
+}

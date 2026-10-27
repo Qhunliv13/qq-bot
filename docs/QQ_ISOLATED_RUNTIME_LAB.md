@@ -79,6 +79,28 @@ remain active. Do not disable them, patch fuses or use `--no-sandbox` to manufac
 success. See `qq-runtime-sandbox-diagnostic.json`; native initialization and login
 remain unverified.
 
+## Trusted namespace control: a limitation in the experiment harness
+
+The opt-in `--userns-control` mode runs only trusted
+`/usr/bin/unshare --user --map-root-user /usr/bin/true` through the same filesystem,
+network, PID, UID and capability boundary. It never invokes QQ and keeps all runtime
+and native verification flags false. The actual inside-chroot command returned 1
+with `unshare failed: Operation not permitted`.
+
+A separate non-chroot control, already inside private network/mount/PID namespaces
+and running as UID/GID 65534 with no-new-privileges, returned 0. Thus user namespaces
+are available in this WSL environment at least in that context. These arms are not
+otherwise perfectly matched; the result is consistent with the documented kernel
+EPERM condition for CLONE_NEWUSER when a chroot root differs from the mount namespace
+root. It does not prove that all QQ failure causes are explained.
+
+The control distinguishes a harness limitation from failure of independent QQ in
+principle. A future, separately reviewed pivot_root-style boundary may replace the
+mount namespace root and detach the old root without removing filesystem isolation.
+It is **not implemented or validated by this control**. Do not infer that chroot should
+simply be removed or that setuid/native/login testing is authorized.
+See `qq-userns-control-evidence.json` for the actual command outcomes and limitations.
+
 If this step succeeds, the next separate gate is an independently authored, narrowly
 scoped native-binding experiment in the same account-free and network-isolated lab.
 If it fails, record the exact redacted failure and investigate prerequisites without
