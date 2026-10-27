@@ -1,0 +1,49 @@
+{
+  "schema": "qq-native-static-abi-evidence-v1",
+  "collected_utc": "2026-10-27T14:50:49.681743+00:00",
+  "local_head_observed": "11bc976",
+  "outer_workspace_head_observed": "9d7d840",
+  "scope": "Read-only software ELF inspection; production unchanged; no native load, client execution, debugger, login, credential or account-data inspection.",
+  "container": {"name": "napcat", "verified_running_pid": 425033},
+  "host_readelf": {"command": "command -v readelf", "exit": 0, "path": "/usr/bin/readelf"},
+  "software": {
+    "package_version": "3.2.34-53644",
+    "package_build_version": "53644",
+    "package_main": "./loadNapCat.js",
+    "wrapper_remote_bytes": 152017008,
+    "qq_executable_bytes": 204344328,
+    "qq_build_id": "ffcd4df7e7b28aa467cba86ebc2ad41d872b6ed4",
+    "partial_local_bytes_observed_unchanged": 84934656,
+    "wrapper_elf": {"class": "ELF64", "endianness": "little", "machine": "AMD x86-64", "type": "DYN shared object", "soname": "wrapper.node", "runpath": "$ORIGIN:$ORIGIN/sharp-lib"}
+  },
+  "wrapper_symbols": {
+    "command": "readelf -h -d -W -s /proc/425033/root/opt/QQ/resources/app/wrapper.node",
+    "exit": 0,
+    "stderr": "",
+    "capture_truncated": false,
+    "symbol_rows": 1522,
+    "defined_global_or_weak_symbols": 882,
+    "standard_registration_exports_found": [],
+    "custom_undefined_registration_symbol": "qq_magic_napi_register",
+    "napi_prefixed_undefined_symbol_count": 41,
+    "napi_examples": ["napi_define_class", "napi_wrap", "napi_unwrap", "napi_create_promise", "napi_get_uv_event_loop"],
+    "sdk_export_examples": ["_ZN3MSF6MSFSDK14sharedInstanceEv", "_ZN2nt7wrapper15INTSessionShell20CreateNTSessionShellERKNSt2Cr12basic_stringIcNS2_11char_traitsIcEENS2_9allocatorIcEEEE", "_ZN2nt7wrapper17IGProSessionShell22CreateGProSessionShellERKNSt2Cr12basic_stringIcNS2_11char_traitsIcEENS2_9allocatorIcEEEE"],
+    "glibc_symbol_versions": ["GLIBC_2.2.5", "GLIBC_2.3", "GLIBC_2.3.2", "GLIBC_2.3.3", "GLIBC_2.4", "GLIBC_2.6", "GLIBC_2.7", "GLIBC_2.14", "GLIBC_2.16", "GLIBC_2.17"],
+    "highest_observed_glibc_requirement": "2.17",
+    "glibcxx_or_cxxabi_versioned_symbols_found": false,
+    "needed_sonames": ["libpthread.so.0", "libvips-cpp.so.42", "libX11.so.6", "libX11-xcb.so.1", "libuuid.so.1", "libbugly.so", "libz.so.1", "librt.so.1", "libXext.so.6", "libm.so.6", "libgcc_s.so.1", "libc.so.6", "ld-linux-x86-64.so.2"],
+    "libnode_libstdcpp_or_qt_direct_needed_found": false
+  },
+  "qq_host_registration": {
+    "command": "readelf -W -s /proc/425033/root/opt/QQ/qq",
+    "exit": 0,
+    "stderr": "",
+    "lines_scanned": 11331,
+    "bytes_scanned": 1394972,
+    "matching_symbol_rows": ["9121: 0000000002d82090 77 FUNC GLOBAL DEFAULT 10 napi_get_version", "10794: 0000000002d9a1f0 93 FUNC GLOBAL DEFAULT 10 qq_magic_napi_register"]
+  },
+  "conclusion": "The native wrapper has a QQ-specific unresolved registration dependency which the shipped QQ executable exports. Ordinary generic Node addon compatibility is not demonstrated. This is real static ABI evidence, not a mock or live feature validation.",
+  "unknown": ["Node module ABI number", "runtime Node/Electron versions", "runtime N-API version", "full JavaScript export object and method signatures", "complete dependency closure and symlink resolution", "all personal QQ features", "standalone initialization/login/session lifecycle"],
+  "limitations": ["No standard napi_register_module_v1, node_register_module_v{ABI}, or node_api_module_get_api_version export was found in the inspected wrapper symbol table.", "A highest observed GLIBC symbol requirement of 2.17 for wrapper alone is not a supported minimum for the full application/dependency closure.", "C++ exports and RTTI are not a self-describing complete JavaScript API manifest.", "Symbol row count includes any symbol tables readelf reports; defined GLOBAL/WEAK rows are declarations, not proof of callable JS exports. No absence claim is made about proprietary registries, constructor initialization, or relocations.", "The custom symbol import/export pair demonstrates host coupling, not a proven usable registration handler or standalone SSO implementation.", "No further binary download occurred; the truncated local partial was not used to assert symbol completeness."],
+  "full_safe_evidence": "_inbox/qq_native_lab_20261027/native-abi.safe.json"
+}

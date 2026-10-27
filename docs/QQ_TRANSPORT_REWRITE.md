@@ -1,6 +1,6 @@
 # Independent QQ transport rewrite — preservation-first work plan
 
-Status: **inventory and offline acceptance foundation only; no replacement backend exists yet**.
+Status: **static native investigation and isolated transport core; no replacement QQ backend exists yet**.
 Inventory date: 2026-10-27, Asia/Shanghai. The production transport remains unchanged.
 
 ## User requirement and non-negotiable boundary
@@ -158,6 +158,50 @@ The internal mutation interface requires an operation ID and therefore is not ye
 drop-in OneBot compatibility layer. HTTP/WS serving, authentication, native QQ binding,
 real login, event subscription and lossless migration remain future work. No production
 adapter or configuration has been changed.
+
+## Static event and message baseline
+
+`qq-installed-event-inventory.json` is tied by byte size and SHA-256 to the same
+installed 4.18.37 bundle as the action inventory. It records **32 discriminant-bearing
+class candidates**, not 32 distinct event types: candidates include base classes and
+similarly named non-event fields. Inheritance, dynamic values and export namespace
+names are unresolved. Lifecycle, heartbeat and group-upload literal discriminants
+have source-line evidence; runtime emission and schema requiredness do not.
+
+The bundle also has **23 string-enum message type values**, including voice's `record`
+value, nested-forward/node, images, files and flash-transfer. Enum presence does not
+prove that every segment is accepted by every send action or emitted on receive.
+The local member-list-delta flow remains explicitly non-native. Full event parity is
+still unknown; these facts must not be converted into automatically enabled handlers.
+
+## Static native feasibility findings (2026-10-27)
+
+The native software boundary was inspected without loading libraries or starting QQ:
+
+- `qq-native-abi-evidence.json` records complete remote `readelf` output provenance.
+  `wrapper.node` imports `qq_magic_napi_register`, and the shipped QQ executable
+  exports it. The wrapper also imports 41 `napi_*` symbols. This is evidence of
+  QQ host coupling, not an ordinary generic-Node addon implementation. No conventional
+  Node/N-API registration entry was observed in that symbol table; this is not an
+  absence claim about proprietary initialization or relocation mechanisms.
+- `qq-native-bootstrap-evidence.json` records that two official outer launchers
+  reference `../major.node`. The existing package main is NapCat-modified. The
+  archive has no root `package.json`, so an unmodified original main was not recovered.
+  Sampled archive payloads were not readable UTF-8; no encryption or missing-API
+  conclusion is inferred from that.
+- `tools/qq_asar_inventory.py` is independently authored, header-only ASAR metadata
+  inspection. It does not extract/read entry payloads or execute code. Synthetic
+  tests verify bounded reads, path handling, offsets and malformed input rejection.
+- The official-listed package endpoint refused both initial HEAD and a single bounded,
+  anonymous Range GET with HTTP 403 from this environment. This does not prove that
+  the package does not exist or is unavailable everywhere. No mirror, authentication
+  bypass or QQ account credentials were used.
+
+**Practical gate:** obtain an authorized pristine matching-version QQ software package
+and establish the actual official host/bootstrap prerequisites before a runtime
+experiment. Do not guess an API from exported C++ names, call a native constructor in
+the live process, use generic Node `require` as a parity demonstration, or retain
+NapCat's loader under a new name. Login and all 180 base actions remain unimplemented.
 
 ## Next validation gates
 

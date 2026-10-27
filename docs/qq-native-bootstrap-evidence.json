@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "sampled_at": "2026-10-27T22:50:00+08:00",
+  "sampling_time_note": "Session time sample; exact individual SFTP read times not recorded.",
+  "method": "Read-only SSH docker inspect State and bounded SFTP reads of installed QQ application software; no client or native module execution.",
+  "container": {"name": "napcat", "status": "running", "pid": 425033, "started_at": "2026-10-25T02:31:45.216352424Z"},
+  "installed_package": {"name": "QQ", "version": "3.2.34-53644", "current_main": "./loadNapCat.js", "original_main": null, "original_main_status": "Unknown: installed outer package main is modified; no package.json exists inside this archive. No reconstruction from the NapCat loader was attempted."},
+  "official_outer_launcher_metadata": [
+    {"path": "app_launcher/index.js", "bytes": 56, "literal_require_targets": ["../major.node"]},
+    {"path": "app_launcher/launcher.js", "bytes": 59, "literal_require_targets": ["../major.node"]}
+  ],
+  "application_json": {"keys_only": ["application.asar", "major.node", "package.json", "wrapper.node"], "bootstrap_main_field_found": false},
+  "asar": {
+    "prefix_little_endian_uint32": [4, 386524, 386520, 386515],
+    "header_json_bytes": 386515,
+    "entry_count": 1421,
+    "package_json_entry_present": false,
+    "native_node_entries_present": false,
+    "root_bootstrap_candidate_paths": ["app_launcher/index.js", "app_launcher/launcher.js", "background.js", "background_ex.js", "node-plugin.background.js"],
+    "selected_payload_metadata": [
+      {"path": "app_launcher/index.js", "size": 80, "utf8_decode_replacements": 29, "printable_ascii_fraction": 0.45},
+      {"path": "app_launcher/launcher.js", "size": 80, "utf8_decode_replacements": 26, "printable_ascii_fraction": 0.5},
+      {"path": "background.js", "size": 80, "utf8_decode_replacements": 25, "printable_ascii_fraction": 0.487},
+      {"path": "node-plugin.background.js", "size": 96, "utf8_decode_replacements": 47, "printable_ascii_fraction": 0.354}
+    ],
+    "payload_interpretation": "Selected small payloads are not readable UTF-8 JavaScript. Empty regex reference results cannot establish that native interfaces are absent. Encryption/compression/custom format was not determined."
+  },
+  "confirmed_relationships": ["Two outer official launcher files have literal require references to ../major.node.", "Native .node files exist outside application.asar in the application software directory, including major.node and wrapper.node."],
+  "not_established": ["Original unmodified QQ package main", "Exact official bootstrap export names and call ordering", "Native JavaScript object exports, constructors, session initialization and event contract", "Personal-account login or full feature parity", "A working independent transport"],
+  "boundary": {"napcat_source_read": false, "napcat_loader_read": false, "credentials_copied": false, "account_data_read": false, "production_files_written": false, "native_module_loaded": false, "client_started": false, "login_attempted": false, "implementation_code_copied": false},
+  "next_safe_foundation": "Obtain an authorized pristine same-version Tencent QQ package to establish original main and official host/bootstrap prerequisites; keep static inspection distinct from any separately authorized isolated runtime experiment. Do not guess an API from filenames."
+}

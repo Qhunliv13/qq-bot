@@ -1,0 +1,1637 @@
+{
+  "schema_version": 1,
+  "coverage_scope": "installed_napcat_static_event_constructor_and_message_enum_metadata",
+  "source": {
+    "path": "/app/napcat/napcat.mjs",
+    "verified_container_pid": 425033,
+    "bytes": 3117637,
+    "sha256": "96934cbd3a4a7ad4d50bfeeaa10adb600fd142cbb4f1be00ce427287fd5926fb",
+    "version_literals": [
+      "4.18.37"
+    ]
+  },
+  "events": [
+    {
+      "symbol": "DU",
+      "export_names": [],
+      "class_line": 64056,
+      "extends_symbol": "U2",
+      "fields": [
+        {
+          "name": "post_type",
+          "line": 64057
+        }
+      ],
+      "discriminants": [
+        {
+          "field": "post_type",
+          "value": "unknown",
+          "value_kind": "dynamic_expression_or_parameter",
+          "line": 64057
+        }
+      ],
+      "inherited_fields": "unknown",
+      "runtime_required_fields": "unknown"
+    },
+    {
+      "symbol": "wy",
+      "export_names": [],
+      "class_line": 64060,
+      "extends_symbol": "DU",
+      "fields": [
+        {
+          "name": "meta_event_type",
+          "line": 64061
+        },
+        {
+          "name": "sub_type",
+          "line": 64062
+        },
+        {
+          "name": "sub_type",
+          "line": 64064
+        }
+      ],
+      "discriminants": [
+        {
+          "field": "meta_event_type",
+          "value": "lifecycle",
+          "value_kind": "literal",
+          "line": 64061
+        },
+        {
+          "field": "sub_type",
+          "value": "unknown",
+          "value_kind": "dynamic_expression_or_parameter",
+          "line": 64064
+        }
+      ],
+      "inherited_fields": "unknown",
+      "runtime_required_fields": "unknown"
+    },
+    {
+      "symbol": "Sg",
+      "export_names": [],
+      "class_line": 64110,
+      "extends_symbol": "DU",
+      "fields": [
+        {
+          "name": "meta_event_type",
+          "line": 64111
+        },
+        {
+          "name": "status",
+          "line": 64112
+        },
+        {
+          "name": "interval",
+          "line": 64113
+        },
+        {
+          "name": "interval",
+          "line": 64115
+        },
+        {
+          "name": "status",
+          "line": 64115
+        }
+      ],
+      "discriminants": [
+        {
+          "field": "meta_event_type",
+          "value": "heartbeat",
+          "value_kind": "literal",
+          "line": 64111
+        }
+      ],
+      "inherited_fields": "unknown",
+      "runtime_required_fields": "unknown"
+    },
+    {
+      "symbol": "Os",
+      "export_names": [],
+      "class_line": 70573,
+      "extends_symbol": "U2",
+      "fields": [
+        {
+          "name": "post_type",
+          "line": 70574
+        }
+      ],
+      "discriminants": [
+        {
+          "field": "post_type",
+          "value": "unknown",
+          "value_kind": "dynamic_expression_or_parameter",
+          "line": 70574
+        }
+      ],
+      "inherited_fields": "unknown",
+      "runtime_required_fields": "unknown"
+    },
+    {
+      "symbol": "WU",
+      "export_names": [],
+      "class_line": 70576,
+      "extends_symbol": "Os",
+      "fields": [
+        {
+          "name": "notice_type",
+          "line": 70577
+        },
+        {
+          "name": "sub_type",
+          "line": 70578
+        },
+        {
+          "name": "target_id",
+          "line": 70579
+        },
+        {
+          "name": "user_id",
+          "line": 70580
+        }
+      ],
+      "discriminants": [
+        {
+          "field": "notice_type",
+          "value": "notify",
+          "value_kind": "literal",
+          "line": 70577
+        },
+        {
+          "field": "sub_type",
+          "value": "poke",
+          "value_kind": "literal",
+          "line": 70578
+        }
+      ],
+      "inherited_fields": "unknown",
+      "runtime_required_fields": "unknown"
+    },
+    {
+      "symbol": "Bge",
+      "export_names": [],
+      "class_line": 70624,
+      "extends_symbol": "_o",
+      "fields": [
+        {
+          "name": "notice_type",
+          "line": 70625
+        },
+        {
+          "name": "operator_id",
+          "line": 70626
+        },
+        {
+          "name": "duration",
+          "line": 70627
+        },
+        {
+          "name": "sub_type",
+          "line": 70628
+        },
+        {
+          "name": "group_id",
+          "line": 70630
+        },
+        {
+          "name": "operator_id",
+          "line": 70630
+        },
+        {
+          "name": "user_id",
+          "line": 70630
+        },
+        {
+          "name": "duration",
+          "line": 70630
+        },
+        {
+          "name": "sub_type",
+          "line": 70630
+        }
+      ],
+      "discriminants": [
+        {
+          "field": "notice_type",
+          "value": "group_ban",
+          "value_kind": "literal",
+          "line": 70625
+        },
+        {
+          "field": "sub_type",
+          "value": "unknown",
+          "value_kind": "dynamic_expression_or_parameter",
+          "line": 70630
+        }
+      ],
+      "inherited_fields": "unknown",
+      "runtime_required_fields": "unknown"
+    },
+    {
+      "symbol": "Yge",
+      "export_names": [],
+      "class_line": 71722,
+      "extends_symbol": "_o",
+      "fields": [
+        {
+          "name": "notice_type",
+          "line": 71723
+        },
+        {
+          "name": "message_id",
+          "line": 71724
+        },
+        {
+          "name": "likes",
+          "line": 71725
+        },
+        {
+          "name": "is_add",
+          "line": 71726
+        },
+        {
+          "name": "message_seq",
+          "line": 71727
+        },
+        {
+          "name": "group_id",
+          "line": 71729
+        },
+        {
+          "name": "user_id",
+          "line": 71729
+        },
+        {
+          "name": "message_id",
+          "line": 71729
+        },
+        {
+          "name": "likes",
+          "line": 71729
+        },
+        {
+          "name": "is_add",
+          "line": 71729
+        }
+      ],
+      "discriminants": [
+        {
+          "field": "notice_type",
+          "value": "group_msg_emoji_like",
+          "value_kind": "literal",
+          "line": 71723
+        }
+      ],
+      "inherited_fields": "unknown",
+      "runtime_required_fields": "unknown"
+    },
+    {
+      "symbol": "Xge",
+      "export_names": [],
+      "class_line": 71732,
+      "extends_symbol": "_o",
+      "fields": [
+        {
+          "name": "notice_type",
+          "line": 71733
+        },
+        {
+          "name": "card_new",
+          "line": 71734
+        },
+        {
+          "name": "card_old",
+          "line": 71735
+        },
+        {
+          "name": "group_id",
+          "line": 71737
+        },
+        {
+          "name": "user_id",
+          "line": 71737
+        },
+        {
+          "name": "card_new",
+          "line": 71737
+        },
+        {
+          "name": "card_old",
+          "line": 71737
+        }
+      ],
+      "discriminants": [
+        {
+          "field": "notice_type",
+          "value": "group_card",
+          "value_kind": "literal",
+          "line": 71733
+        }
+      ],
+      "inherited_fields": "unknown",
+      "runtime_required_fields": "unknown"
+    },
+    {
+      "symbol": "Jge",
+      "export_names": [],
+      "class_line": 71740,
+      "extends_symbol": "_o",
+      "fields": [
+        {
+          "name": "notice_type",
+          "line": 71741
+        },
+        {
+          "name": "message_id",
+          "line": 71742
+        },
+        {
+          "name": "sender_id",
+          "line": 71743
+        },
+        {
+          "name": "operator_id",
+          "line": 71744
+        },
+        {
+          "name": "sub_type",
+          "line": 71745
+        },
+        {
+          "name": "group_id",
+          "line": 71747
+        },
+        {
+          "name": "operator_id",
+          "line": 71747
+        },
+        {
+          "name": "message_id",
+          "line": 71747
+        },
+        {
+          "name": "sender_id",
+          "line": 71747
+        }
+      ],
+      "discriminants": [
+        {
+          "field": "notice_type",
+          "value": "essence",
+          "value_kind": "literal",
+          "line": 71741
+        },
+        {
+          "field": "sub_type",
+          "value": "add",
+          "value_kind": "literal",
+          "line": 71745
+        }
+      ],
+      "inherited_fields": "unknown",
+      "runtime_required_fields": "unknown"
+    },
+    {
+      "symbol": "Zge",
+      "export_names": [],
+      "class_line": 71750,
+      "extends_symbol": "_o",
+      "fields": [
+        {
+          "name": "notice_type",
+          "line": 71751
+        },
+        {
+          "name": "sub_type",
+          "line": 71752
+        },
+        {
+          "name": "title",
+          "line": 71753
+        },
+        {
+          "name": "group_id",
+          "line": 71755
+        },
+        {
+          "name": "user_id",
+          "line": 71755
+        },
+        {
+          "name": "title",
+          "line": 71755
+        }
+      ],
+      "discriminants": [
+        {
+          "field": "notice_type",
+          "value": "notify",
+          "value_kind": "literal",
+          "line": 71751
+        },
+        {
+          "field": "sub_type",
+          "value": "title",
+          "value_kind": "literal",
+          "line": 71752
+        }
+      ],
+      "inherited_fields": "unknown",
+      "runtime_required_fields": "unknown"
+    },
+    {
+      "symbol": "e0e",
+      "export_names": [],
+      "class_line": 71758,
+      "extends_symbol": "Os",
+      "fields": [
+        {
+          "name": "notice_type",
+          "line": 71759
+        },
+        {
+          "name": "sub_type",
+          "line": 71760
+        },
+        {
+          "name": "group_id",
+          "line": 71761
+        },
+        {
+          "name": "user_id",
+          "line": 71762
+        },
+        {
+          "name": "message_id",
+          "line": 71764
+        },
+        {
+          "name": "busi_id",
+          "line": 71766
+        },
+        {
+          "name": "content",
+          "line": 71768
+        },
+        {
+          "name": "raw_info",
+          "line": 71770
+        },
+        {
+          "name": "group_id",
+          "line": 71773
+        },
+        {
+          "name": "user_id",
+          "line": 71773
+        },
+        {
+          "name": "message_id",
+          "line": 71773
+        },
+        {
+          "name": "busi_id",
+          "line": 71773
+        },
+        {
+          "name": "content",
+          "line": 71773
+        },
+        {
+          "name": "raw_info",
+          "line": 71773
+        }
+      ],
+      "discriminants": [
+        {
+          "field": "notice_type",
+          "value": "notify",
+          "value_kind": "literal",
+          "line": 71759
+        },
+        {
+          "field": "sub_type",
+          "value": "gray_tip",
+          "value_kind": "literal",
+          "line": 71760
+        }
+      ],
+      "inherited_fields": "unknown",
+      "runtime_required_fields": "unknown"
+    },
+    {
+      "symbol": "t0e",
+      "export_names": [],
+      "class_line": 71776,
+      "extends_symbol": "_o",
+      "fields": [
+        {
+          "name": "notice_type",
+          "line": 71777
+        },
+        {
+          "name": "file",
+          "line": 71778
+        },
+        {
+          "name": "group_id",
+          "line": 71780
+        },
+        {
+          "name": "user_id",
+          "line": 71780
+        },
+        {
+          "name": "file",
+          "line": 71780
+        }
+      ],
+      "discriminants": [
+        {
+          "field": "notice_type",
+          "value": "group_upload",
+          "value_kind": "literal",
+          "line": 71777
+        }
+      ],
+      "inherited_fields": "unknown",
+      "runtime_required_fields": "unknown"
+    },
+    {
+      "symbol": "n0e",
+      "export_names": [],
+      "class_line": 71783,
+      "extends_symbol": "_o",
+      "fields": [
+        {
+          "name": "notice_type",
+          "line": 71784
+        },
+        {
+          "name": "sub_type",
+          "line": 71785
+        },
+        {
+          "name": "name_new",
+          "line": 71786
+        },
+        {
+          "name": "name_new",
+          "line": 71788
+        }
+      ],
+      "discriminants": [
+        {
+          "field": "notice_type",
+          "value": "notify",
+          "value_kind": "literal",
+          "line": 71784
+        },
+        {
+          "field": "sub_type",
+          "value": "group_name",
+          "value_kind": "literal",
+          "line": 71785
+        }
+      ],
+      "inherited_fields": "unknown",
+      "runtime_required_fields": "unknown"
+    },
+    {
+      "symbol": "fm",
+      "export_names": [],
+      "class_line": 71864,
+      "extends_symbol": "_o",
+      "fields": [
+        {
+          "name": "notice_type",
+          "line": 71865
+        },
+        {
+          "name": "operator_id",
+          "line": 71866
+        },
+        {
+          "name": "sub_type",
+          "line": 71867
+        },
+        {
+          "name": "group_id",
+          "line": 71869
+        },
+        {
+          "name": "operator_id",
+          "line": 71869
+        },
+        {
+          "name": "user_id",
+          "line": 71869
+        },
+        {
+          "name": "sub_type",
+          "line": 71869
+        }
+      ],
+      "discriminants": [
+        {
+          "field": "notice_type",
+          "value": "group_increase",
+          "value_kind": "literal",
+          "line": 71865
+        },
+        {
+          "field": "sub_type",
+          "value": "unknown",
+          "value_kind": "dynamic_expression_or_parameter",
+          "line": 71869
+        }
+      ],
+      "inherited_fields": "unknown",
+      "runtime_required_fields": "unknown"
+    },
+    {
+      "symbol": "a0e",
+      "export_names": [],
+      "class_line": 72124,
+      "extends_symbol": "Os",
+      "fields": [
+        {
+          "name": "notice_type",
+          "line": 72125
+        },
+        {
+          "name": "sub_type",
+          "line": 72126
+        },
+        {
+          "name": "operator_id",
+          "line": 72127
+        },
+        {
+          "name": "operator_nick",
+          "line": 72128
+        },
+        {
+          "name": "times",
+          "line": 72129
+        },
+        {
+          "name": "time",
+          "line": 72130
+        },
+        {
+          "name": "operator_id",
+          "line": 72132
+        },
+        {
+          "name": "operator_nick",
+          "line": 72132
+        },
+        {
+          "name": "times",
+          "line": 72132
+        },
+        {
+          "name": "time",
+          "line": 72132
+        }
+      ],
+      "discriminants": [
+        {
+          "field": "notice_type",
+          "value": "notify",
+          "value_kind": "literal",
+          "line": 72125
+        },
+        {
+          "field": "sub_type",
+          "value": "profile_like",
+          "value_kind": "literal",
+          "line": 72126
+        }
+      ],
+      "inherited_fields": "unknown",
+      "runtime_required_fields": "unknown"
+    },
+    {
+      "symbol": "V0e",
+      "export_names": [],
+      "class_line": 72697,
+      "extends_symbol": "Os",
+      "fields": [
+        {
+          "name": "notice_type",
+          "line": 72698
+        },
+        {
+          "name": "user_id",
+          "line": 72699
+        },
+        {
+          "name": "user_id",
+          "line": 72701
+        }
+      ],
+      "discriminants": [
+        {
+          "field": "notice_type",
+          "value": "friend_add",
+          "value_kind": "literal",
+          "line": 72698
+        }
+      ],
+      "inherited_fields": "unknown",
+      "runtime_required_fields": "unknown"
+    },
+    {
+      "symbol": "Y0e",
+      "export_names": [],
+      "class_line": 72704,
+      "extends_symbol": "_o",
+      "fields": [
+        {
+          "name": "notice_type",
+          "line": 72705
+        },
+        {
+          "name": "sub_type",
+          "line": 72706
+        },
+        {
+          "name": "operator_id",
+          "line": 72707
+        },
+        {
+          "name": "group_id",
+          "line": 72709
+        },
+        {
+          "name": "operator_id",
+          "line": 72709
+        },
+        {
+          "name": "user_id",
+          "line": 72709
+        },
+        {
+          "name": "sub_type",
+          "line": 72709
+        }
+      ],
+      "discriminants": [
+        {
+          "field": "notice_type",
+          "value": "group_decrease",
+          "value_kind": "literal",
+          "line": 72705
+        },
+        {
+          "field": "sub_type",
+          "value": "leave",
+          "value_kind": "literal",
+          "line": 72706
+        },
+        {
+          "field": "sub_type",
+          "value": "unknown",
+          "value_kind": "dynamic_expression_or_parameter",
+          "line": 72709
+        }
+      ],
+      "inherited_fields": "unknown",
+      "runtime_required_fields": "unknown"
+    },
+    {
+      "symbol": "Z0e",
+      "export_names": [],
+      "class_line": 72724,
+      "extends_symbol": "_o",
+      "fields": [
+        {
+          "name": "notice_type",
+          "line": 72725
+        },
+        {
+          "name": "sub_type",
+          "line": 72726
+        },
+        {
+          "name": "sub_type",
+          "line": 72728
+        }
+      ],
+      "discriminants": [
+        {
+          "field": "notice_type",
+          "value": "group_admin",
+          "value_kind": "literal",
+          "line": 72725
+        },
+        {
+          "field": "sub_type",
+          "value": "unknown",
+          "value_kind": "dynamic_expression_or_parameter",
+          "line": 72728
+        }
+      ],
+      "inherited_fields": "unknown",
+      "runtime_required_fields": "unknown"
+    },
+    {
+      "symbol": "VU",
+      "export_names": [],
+      "class_line": 72731,
+      "extends_symbol": "U2",
+      "fields": [
+        {
+          "name": "post_type",
+          "line": 72732
+        }
+      ],
+      "discriminants": [
+        {
+          "field": "post_type",
+          "value": "unknown",
+          "value_kind": "dynamic_expression_or_parameter",
+          "line": 72732
+        }
+      ],
+      "inherited_fields": "unknown",
+      "runtime_required_fields": "unknown"
+    },
+    {
+      "symbol": "mm",
+      "export_names": [],
+      "class_line": 72734,
+      "extends_symbol": "VU",
+      "fields": [
+        {
+          "name": "request_type",
+          "line": 72735
+        },
+        {
+          "name": "group_id",
+          "line": 72736
+        },
+        {
+          "name": "user_id",
+          "line": 72737
+        },
+        {
+          "name": "comment",
+          "line": 72738
+        },
+        {
+          "name": "flag",
+          "line": 72739
+        },
+        {
+          "name": "sub_type",
+          "line": 72740
+        },
+        {
+          "name": "group_id",
+          "line": 72742
+        },
+        {
+          "name": "user_id",
+          "line": 72742
+        },
+        {
+          "name": "sub_type",
+          "line": 72742
+        },
+        {
+          "name": "comment",
+          "line": 72742
+        },
+        {
+          "name": "flag",
+          "line": 72742
+        }
+      ],
+      "discriminants": [
+        {
+          "field": "request_type",
+          "value": "group",
+          "value_kind": "literal",
+          "line": 72735
+        },
+        {
+          "field": "sub_type",
+          "value": "unknown",
+          "value_kind": "dynamic_expression_or_parameter",
+          "line": 72742
+        }
+      ],
+      "inherited_fields": "unknown",
+      "runtime_required_fields": "unknown"
+    },
+    {
+      "symbol": "c8",
+      "export_names": [],
+      "class_line": 73045,
+      "extends_symbol": "YU",
+      "fields": [
+        {
+          "name": "notice_type",
+          "line": 73046
+        },
+        {
+          "name": "sub_type",
+          "line": 73047
+        },
+        {
+          "name": "notice_type",
+          "line": 73049
+        },
+        {
+          "name": "sub_type",
+          "line": 73049
+        }
+      ],
+      "discriminants": [
+        {
+          "field": "notice_type",
+          "value": "online_file_receive",
+          "value_kind": "literal",
+          "line": 73049
+        },
+        {
+          "field": "sub_type",
+          "value": "cancel",
+          "value_kind": "literal",
+          "line": 73049
+        }
+      ],
+      "inherited_fields": "unknown",
+      "runtime_required_fields": "unknown"
+    },
+    {
+      "symbol": "_w",
+      "export_names": [],
+      "class_line": 73052,
+      "extends_symbol": "YU",
+      "fields": [
+        {
+          "name": "notice_type",
+          "line": 73053
+        },
+        {
+          "name": "sub_type",
+          "line": 73054
+        },
+        {
+          "name": "sub_type",
+          "line": 73056
+        }
+      ],
+      "discriminants": [
+        {
+          "field": "notice_type",
+          "value": "online_file_send",
+          "value_kind": "literal",
+          "line": 73053
+        },
+        {
+          "field": "sub_type",
+          "value": "unknown",
+          "value_kind": "dynamic_expression_or_parameter",
+          "line": 73056
+        }
+      ],
+      "inherited_fields": "unknown",
+      "runtime_required_fields": "unknown"
+    },
+    {
+      "symbol": "sye",
+      "export_names": [],
+      "class_line": 73062,
+      "extends_symbol": null,
+      "fields": [
+        {
+          "name": "obContext",
+          "line": 73063
+        },
+        {
+          "name": "core",
+          "line": 73064
+        },
+        {
+          "name": "notifyGroupInvite",
+          "line": 73065
+        },
+        {
+          "name": "rawToOb11Converters",
+          "line": 73067
+        },
+        {
+          "name": "ob11ToRawConverters",
+          "line": 73469
+        },
+        {
+          "name": "obContext",
+          "line": 73759
+        },
+        {
+          "name": "core",
+          "line": 73759
+        }
+      ],
+      "discriminants": [
+        {
+          "field": "sub_type",
+          "value": "normal",
+          "value_kind": "literal",
+          "line": 73864
+        },
+        {
+          "field": "sub_type",
+          "value": "friend",
+          "value_kind": "literal",
+          "line": 73869
+        },
+        {
+          "field": "sub_type",
+          "value": "group",
+          "value_kind": "literal",
+          "line": 73879
+        }
+      ],
+      "inherited_fields": "unknown",
+      "runtime_required_fields": "unknown"
+    },
+    {
+      "symbol": "Ay",
+      "export_names": [],
+      "class_line": 74273,
+      "extends_symbol": "ue",
+      "fields": [
+        {
+          "name": "payloadSchema",
+          "line": 74274
+        },
+        {
+          "name": "returnSchema",
+          "line": 74275
+        },
+        {
+          "name": "actionTags",
+          "line": 74276
+        }
+      ],
+      "discriminants": [
+        {
+          "field": "message_type",
+          "value": "unknown",
+          "value_kind": "dynamic_expression_or_parameter",
+          "line": 74288
+        },
+        {
+          "field": "message_type",
+          "value": "unknown",
+          "value_kind": "dynamic_expression_or_parameter",
+          "line": 74288
+        }
+      ],
+      "inherited_fields": "unknown",
+      "runtime_required_fields": "unknown"
+    },
+    {
+      "symbol": "pye",
+      "export_names": [],
+      "class_line": 74529,
+      "extends_symbol": null,
+      "fields": [
+        {
+          "name": "obContext",
+          "line": 74530
+        },
+        {
+          "name": "core",
+          "line": 74531
+        },
+        {
+          "name": "obContext",
+          "line": 74533
+        },
+        {
+          "name": "core",
+          "line": 74533
+        }
+      ],
+      "discriminants": [
+        {
+          "field": "post_type",
+          "value": "unknown",
+          "value_kind": "dynamic_expression_or_parameter",
+          "line": 74536
+        },
+        {
+          "field": "post_type",
+          "value": "unknown",
+          "value_kind": "dynamic_expression_or_parameter",
+          "line": 74536
+        },
+        {
+          "field": "request_type",
+          "value": "unknown",
+          "value_kind": "dynamic_expression_or_parameter",
+          "line": 74538
+        },
+        {
+          "field": "request_type",
+          "value": "unknown",
+          "value_kind": "dynamic_expression_or_parameter",
+          "line": 74538
+        },
+        {
+          "field": "message_type",
+          "value": "unknown",
+          "value_kind": "dynamic_expression_or_parameter",
+          "line": 74542
+        },
+        {
+          "field": "message_type",
+          "value": "unknown",
+          "value_kind": "dynamic_expression_or_parameter",
+          "line": 74548
+        }
+      ],
+      "inherited_fields": "unknown",
+      "runtime_required_fields": "unknown"
+    },
+    {
+      "symbol": "Fye",
+      "export_names": [],
+      "class_line": 75148,
+      "extends_symbol": "Ay",
+      "fields": [
+        {
+          "name": "actionName",
+          "line": 75149
+        },
+        {
+          "name": "actionSummary",
+          "line": 75150
+        },
+        {
+          "name": "actionDescription",
+          "line": 75151
+        },
+        {
+          "name": "actionTags",
+          "line": 75152
+        },
+        {
+          "name": "payloadExample",
+          "line": 75153
+        },
+        {
+          "name": "returnExample",
+          "line": 75154
+        }
+      ],
+      "discriminants": [
+        {
+          "field": "message_type",
+          "value": "group",
+          "value_kind": "literal",
+          "line": 75156
+        }
+      ],
+      "inherited_fields": "unknown",
+      "runtime_required_fields": "unknown"
+    },
+    {
+      "symbol": "Mye",
+      "export_names": [],
+      "class_line": 75162,
+      "extends_symbol": "Ay",
+      "fields": [
+        {
+          "name": "actionName",
+          "line": 75163
+        },
+        {
+          "name": "actionSummary",
+          "line": 75164
+        },
+        {
+          "name": "actionDescription",
+          "line": 75165
+        },
+        {
+          "name": "actionTags",
+          "line": 75166
+        },
+        {
+          "name": "payloadExample",
+          "line": 75167
+        },
+        {
+          "name": "returnExample",
+          "line": 75171
+        }
+      ],
+      "discriminants": [
+        {
+          "field": "message_type",
+          "value": "private",
+          "value_kind": "literal",
+          "line": 75175
+        }
+      ],
+      "inherited_fields": "unknown",
+      "runtime_required_fields": "unknown"
+    },
+    {
+      "symbol": "AEe",
+      "export_names": [],
+      "class_line": 81008,
+      "extends_symbol": "Os",
+      "fields": [
+        {
+          "name": "notice_type",
+          "line": 81009
+        },
+        {
+          "name": "sub_type",
+          "line": 81010
+        },
+        {
+          "name": "status_text",
+          "line": 81011
+        },
+        {
+          "name": "event_type",
+          "line": 81012
+        },
+        {
+          "name": "user_id",
+          "line": 81013
+        },
+        {
+          "name": "group_id",
+          "line": 81014
+        },
+        {
+          "name": "user_id",
+          "line": 81016
+        },
+        {
+          "name": "event_type",
+          "line": 81016
+        },
+        {
+          "name": "status_text",
+          "line": 81016
+        }
+      ],
+      "discriminants": [
+        {
+          "field": "notice_type",
+          "value": "notify",
+          "value_kind": "literal",
+          "line": 81009
+        },
+        {
+          "field": "sub_type",
+          "value": "input_status",
+          "value_kind": "literal",
+          "line": 81010
+        }
+      ],
+      "inherited_fields": "unknown",
+      "runtime_required_fields": "unknown"
+    },
+    {
+      "symbol": "IEe",
+      "export_names": [],
+      "class_line": 81019,
+      "extends_symbol": "VU",
+      "fields": [
+        {
+          "name": "request_type",
+          "line": 81020
+        },
+        {
+          "name": "user_id",
+          "line": 81021
+        },
+        {
+          "name": "comment",
+          "line": 81022
+        },
+        {
+          "name": "flag",
+          "line": 81023
+        },
+        {
+          "name": "user_id",
+          "line": 81025
+        },
+        {
+          "name": "comment",
+          "line": 81025
+        },
+        {
+          "name": "flag",
+          "line": 81025
+        }
+      ],
+      "discriminants": [
+        {
+          "field": "request_type",
+          "value": "friend",
+          "value_kind": "literal",
+          "line": 81020
+        }
+      ],
+      "inherited_fields": "unknown",
+      "runtime_required_fields": "unknown"
+    },
+    {
+      "symbol": "CEe",
+      "export_names": [],
+      "class_line": 81028,
+      "extends_symbol": "Os",
+      "fields": [
+        {
+          "name": "notice_type",
+          "line": 81029
+        },
+        {
+          "name": "user_id",
+          "line": 81030
+        },
+        {
+          "name": "message_id",
+          "line": 81031
+        },
+        {
+          "name": "user_id",
+          "line": 81033
+        },
+        {
+          "name": "message_id",
+          "line": 81033
+        }
+      ],
+      "discriminants": [
+        {
+          "field": "notice_type",
+          "value": "friend_recall",
+          "value_kind": "literal",
+          "line": 81029
+        }
+      ],
+      "inherited_fields": "unknown",
+      "runtime_required_fields": "unknown"
+    },
+    {
+      "symbol": "TEe",
+      "export_names": [],
+      "class_line": 81036,
+      "extends_symbol": "_o",
+      "fields": [
+        {
+          "name": "notice_type",
+          "line": 81037
+        },
+        {
+          "name": "operator_id",
+          "line": 81038
+        },
+        {
+          "name": "message_id",
+          "line": 81039
+        },
+        {
+          "name": "group_id",
+          "line": 81041
+        },
+        {
+          "name": "user_id",
+          "line": 81041
+        },
+        {
+          "name": "operator_id",
+          "line": 81041
+        },
+        {
+          "name": "message_id",
+          "line": 81041
+        }
+      ],
+      "discriminants": [
+        {
+          "field": "notice_type",
+          "value": "group_recall",
+          "value_kind": "literal",
+          "line": 81037
+        }
+      ],
+      "inherited_fields": "unknown",
+      "runtime_required_fields": "unknown"
+    },
+    {
+      "symbol": "kEe",
+      "export_names": [],
+      "class_line": 81044,
+      "extends_symbol": "Os",
+      "fields": [
+        {
+          "name": "notice_type",
+          "line": 81045
+        },
+        {
+          "name": "user_id",
+          "line": 81046
+        },
+        {
+          "name": "tag",
+          "line": 81047
+        },
+        {
+          "name": "message",
+          "line": 81048
+        },
+        {
+          "name": "user_id",
+          "line": 81050
+        },
+        {
+          "name": "tag",
+          "line": 81050
+        },
+        {
+          "name": "message",
+          "line": 81050
+        }
+      ],
+      "discriminants": [
+        {
+          "field": "notice_type",
+          "value": "bot_offline",
+          "value_kind": "literal",
+          "line": 81045
+        }
+      ],
+      "inherited_fields": "unknown",
+      "runtime_required_fields": "unknown"
+    }
+  ],
+  "message_type_enum_candidates": [
+    {
+      "symbol": "ze",
+      "line": 72183,
+      "entries": [
+        {
+          "key": "text",
+          "type": "text",
+          "line": 72183
+        },
+        {
+          "key": "image",
+          "type": "image",
+          "line": 72183
+        },
+        {
+          "key": "music",
+          "type": "music",
+          "line": 72183
+        },
+        {
+          "key": "video",
+          "type": "video",
+          "line": 72183
+        },
+        {
+          "key": "voice",
+          "type": "record",
+          "line": 72183
+        },
+        {
+          "key": "file",
+          "type": "file",
+          "line": 72183
+        },
+        {
+          "key": "at",
+          "type": "at",
+          "line": 72183
+        },
+        {
+          "key": "reply",
+          "type": "reply",
+          "line": 72183
+        },
+        {
+          "key": "json",
+          "type": "json",
+          "line": 72183
+        },
+        {
+          "key": "face",
+          "type": "face",
+          "line": 72183
+        },
+        {
+          "key": "mface",
+          "type": "mface",
+          "line": 72183
+        },
+        {
+          "key": "markdown",
+          "type": "markdown",
+          "line": 72183
+        },
+        {
+          "key": "node",
+          "type": "node",
+          "line": 72183
+        },
+        {
+          "key": "forward",
+          "type": "forward",
+          "line": 72183
+        },
+        {
+          "key": "xml",
+          "type": "xml",
+          "line": 72183
+        },
+        {
+          "key": "poke",
+          "type": "poke",
+          "line": 72183
+        },
+        {
+          "key": "dice",
+          "type": "dice",
+          "line": 72183
+        },
+        {
+          "key": "rps",
+          "type": "rps",
+          "line": 72183
+        },
+        {
+          "key": "miniapp",
+          "type": "miniapp",
+          "line": 72183
+        },
+        {
+          "key": "contact",
+          "type": "contact",
+          "line": 72183
+        },
+        {
+          "key": "location",
+          "type": "location",
+          "line": 72183
+        },
+        {
+          "key": "onlinefile",
+          "type": "onlinefile",
+          "line": 72183
+        },
+        {
+          "key": "flashtransfer",
+          "type": "flashtransfer",
+          "line": 72183
+        }
+      ],
+      "evidence_kind": "static_string_enum_assignment_sequence",
+      "runtime_registered_support_verified": false
+    }
+  ],
+  "coverage": {
+    "static_only": true,
+    "constructors_executed": false,
+    "runtime_complete": false,
+    "requiredness_inferred": false,
+    "inheritance_resolved": false,
+    "local.member_list_delta_native": false,
+    "unknowns": [
+      "Balanced class bodies parsed statically; JavaScript regex literals are not a complete ECMAScript parser.",
+      "No runtime registration completeness claim.",
+      "Assignments do not establish schema requiredness.",
+      "Inherited and dynamic discriminants remain unknown.",
+      "Event candidates include base classes and non-event classes with similarly named fields; not a count of distinct native event types.",
+      "Export namespace names not resolved.",
+      "Enum presence does not prove every segment is accepted in every send API or emitted on receive.",
+      "No schema requiredness, field defaults or inherited post_type combinations inferred."
+    ],
+    "source_bundle_verified_against_action_inventory": true,
+    "event_records_are_discriminant_bearing_class_candidates": true,
+    "event_record_count": 32,
+    "message_type_enum_entry_count": 23,
+    "export_names_resolved": false,
+    "full_event_inventory_complete": false,
+    "dynamic_runtime_registry_complete_claim": false
+  }
+}
