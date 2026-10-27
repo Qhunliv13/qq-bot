@@ -45,5 +45,5 @@ def test_plugin_access_default_scope_remains_narrow():
     """The additive command key choice leaves every existing release call plugin-only."""
     spec=importlib.util.spec_from_file_location('release_access',Path(__file__).parents[1]/'tools/release_access.py')
     module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
-    assert module.SCOPES==('plugin','tool')
+    assert module.SCOPES==('plugin',)
     assert module.NAME=='context-tools-20261025'
