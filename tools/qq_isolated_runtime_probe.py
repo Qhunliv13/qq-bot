@@ -1,4 +1,8 @@
-"""Opt-in LinuxQQ process.versions probe, never an application/native/login probe.
+"""Opt-in isolated QQ versions probe and fixed system-Node native-load control.
+
+Default mode never imports native modules. Explicit --native-load-control loads only
+wrapper/major with trusted system Node and reports descriptors, not QQ readiness.
+No mode calls exports, initializes QQ services, loads QQ main or performs login.
 
 The caller must supply a pristine extracted software-only QQ directory. System
 library directories are exposed read-only; no host account directories are bound.
@@ -38,7 +42,7 @@ class ProbeError(ValueError):
     """Carry fixed redacted failure codes rather than host paths or raw output."""
 
 
-def base_report(*, userns_control=False):
+def base_report(*, userns_control=False, native_load_control=False):
     """Keep runtime evidence distinct from native compatibility or release consent."""
     report = {"mode": "isolated_runtime_versions", "status": "not_executed",
             "runtime_executed": False, "runtime_versions_verified": False,
@@ -50,6 +54,9 @@ def base_report(*, userns_control=False):
         # Trusted namespace control supplies no QQ or version evidence.
         report.update(mode="isolated_userns_control", control_executed=False,
                       user_namespace_creation_verified=False)
+    if native_load_control:
+        report.update(mode="system_node_native_load_control", native_control_executed=False,
+                      native_load_control_verified=False, system_node_versions={}, native_candidates=[])
     return report
 
 
@@ -95,6 +102,80 @@ def node_script(nonce):
     return ("'use strict';\nconst versions = {};\nfor (const key of " + keys + ") {\n"
             "  if (typeof process.versions[key] === 'string') versions[key] = process.versions[key];\n"
             "}\nprocess.stdout.write(" + marker + "+JSON.stringify({versions,platform:process.platform,arch:process.arch})+'\\n');\n")
+
+
+def native_load_script(nonce):
+    """Load only fixed software modules; inspect data descriptors without invoking exports."""
+    marker = json.dumps("QQ_NATIVE_" + nonce + ":")
+    return """'use strict';
+const candidates = [];
+for (const candidate of ['wrapper', 'major']) {
+  try {
+    const mod = require('/opt/QQ/resources/app/' + candidate + '.node');
+    const keys = Object.getOwnPropertyNames(mod);
+    const exports = keys.slice(0, 32).map(name => {
+      const d = Object.getOwnPropertyDescriptor(mod, name);
+      return {name, type: Object.prototype.hasOwnProperty.call(d, 'value') ? typeof d.value : 'accessor'};
+    });
+    candidates.push({candidate, loaded:true, exports, exportsTruncated:keys.length > 32});
+  } catch (e) {
+    const text = String(e.message);
+    candidates.push({candidate, loaded:false, dlopenFailed:e.code === 'ERR_DLOPEN_FAILED',
+      undefinedSymbol:text.includes('undefined symbol:'),
+      missingQqMagic:text.includes('undefined symbol: qq_magic_napi_register'),
+      missingSharedLibrary:text.includes('cannot open shared object file'),
+      moduleVersionMismatch:text.includes('NODE_MODULE_VERSION'),
+      notSelfRegister:text.includes('Module did not self-register')});
+  }
+}
+const versions = {};
+for (const key of ['node', 'modules', 'napi']) versions[key] = process.versions[key];
+process.stdout.write(""" + marker + """ + JSON.stringify({versions, candidates}) + String.fromCharCode(10));
+"""
+
+
+def parse_native_output(data, nonce):
+    """Accept one nonce record of bounded export descriptors and fixed failure booleans."""
+    if len(data) > OUTPUT_LIMIT:
+        raise ProbeError("output_limit")
+    marker = ("QQ_NATIVE_" + nonce + ":").encode("ascii")
+    records = [line[len(marker):] for line in data.splitlines() if line.startswith(marker)]
+    if len(records) != 1:
+        raise ProbeError("native_record_missing_or_ambiguous")
+    try:
+        value = json.loads(records[0])
+        if not isinstance(value, dict) or set(value) != {"versions", "candidates"}:
+            raise ValueError
+        versions = value["versions"]
+        if not isinstance(versions, dict) or set(versions) != {"node", "modules", "napi"}:
+            raise ValueError
+        if any(not isinstance(v, str) or not re.fullmatch(r"[0-9A-Za-z.+_-]{1,80}", v) for v in versions.values()):
+            raise ValueError
+        candidates = value["candidates"]
+        if not isinstance(candidates, list) or len(candidates) != 2:
+            raise ValueError
+        failure_keys = {"dlopenFailed", "undefinedSymbol", "missingQqMagic", "missingSharedLibrary", "moduleVersionMismatch", "notSelfRegister"}
+        for expected, item in zip(("wrapper", "major"), candidates):
+            if not isinstance(item, dict) or item.get("candidate") != expected or type(item.get("loaded")) is not bool:
+                raise ValueError
+            if item["loaded"]:
+                if set(item) != {"candidate", "loaded", "exports", "exportsTruncated"} or type(item["exportsTruncated"]) is not bool:
+                    raise ValueError
+                exports = item["exports"]
+                if not isinstance(exports, list) or len(exports) > 32:
+                    raise ValueError
+                for export in exports:
+                    if not isinstance(export, dict) or set(export) != {"name", "type"}:
+                        raise ValueError
+                    if not isinstance(export["name"], str) or not re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]{0,79}", export["name"]):
+                        raise ValueError
+                    if export["type"] not in ("function", "object", "string", "number", "boolean", "undefined", "symbol", "bigint", "accessor"):
+                        raise ValueError
+            elif set(item) != {"candidate", "loaded"} | failure_keys or any(type(item[k]) is not bool for k in failure_keys):
+                raise ValueError
+    except (ValueError, TypeError, UnicodeError) as exc:
+        raise ProbeError("invalid_native_record") from exc
+    return {"system_node_versions": versions, "native_candidates": candidates}
 
 
 def parse_output(data, nonce):
@@ -249,7 +330,7 @@ def enter_filesystem_root(jail, filesystem_mode, pivot_tool=None, umount_tool=No
 
 
 def child_probe(root, jail, nonce, parent_ids, mount, diagnostic_fd=None, *, userns_control=False,
-                filesystem_mode="chroot", pivot_tool=None, umount_tool=None):
+                filesystem_mode="chroot", pivot_tool=None, umount_tool=None, native_load_control=False):
     """Build the shared isolation, then probe QQ or a trusted namespace control.
 
     This helper is PID 1 in its new namespace. On exit the kernel kills remaining
@@ -262,7 +343,10 @@ def child_probe(root, jail, nonce, parent_ids, mount, diagnostic_fd=None, *, use
         for name, tool in (("pivot_root", pivot_tool), ("umount", umount_tool)):
             if not tool or not Path(tool).is_absolute() or tool != shutil.which(name, path="/usr/sbin:/usr/bin:/sbin:/bin"):
                 raise ProbeError("pivot_tools_missing_or_untrusted")
-    report = base_report(userns_control=userns_control)
+    report = base_report(userns_control=userns_control, native_load_control=native_load_control)
+    if userns_control and native_load_control:
+        report.update(status="refused", errors=["mutually_exclusive_controls"])
+        return report
     report["filesystem_mode"] = filesystem_mode
     if diagnostic_fd is not None:
         validate_diagnostic_fd(diagnostic_fd)
@@ -301,7 +385,7 @@ def child_probe(root, jail, nonce, parent_ids, mount, diagnostic_fd=None, *, use
         run_checked([mount, "--bind", "/dev/" + device, str(target)])
         run_checked([mount, "-o", "remount,bind,ro,nosuid,noexec", str(target)])
     run_checked([mount, "-t", "proc", "-o", "nosuid,nodev,noexec", "proc", str(jail / "proc")])
-    (jail / "probe.js").write_text(node_script(nonce), encoding="utf-8")
+    (jail / "probe.js").write_text(native_load_script(nonce) if native_load_control else node_script(nonce), encoding="utf-8")
     # File capture + RLIMIT_FSIZE bounds output before parsing, unlike PIPE capture.
     with (jail / "tmp" / "stdout").open("w+b") as output, (jail / "tmp" / "stderr").open("w+b") as errors:
         enter_filesystem_root(jail, filesystem_mode, pivot_tool, umount_tool)
@@ -319,10 +403,10 @@ def child_probe(root, jail, nonce, parent_ids, mount, diagnostic_fd=None, *, use
         resource.setrlimit(resource.RLIMIT_NOFILE, (128, 128))
         # Same chroot, UID, NNP and cap-zero hook; only the trusted command differs.
         command = (["/usr/bin/unshare", "--user", "--map-root-user", "/usr/bin/true"]
-                   if userns_control else ["/opt/QQ/qq", "/probe.js"])
-        executed_key = "control_executed" if userns_control else "runtime_executed"
-        failure_prefix = "userns_control" if userns_control else "runtime"
-        report["control_launch_attempted" if userns_control else "runtime_launch_attempted"] = True
+                   if userns_control else (["/usr/bin/node", "/probe.js"] if native_load_control else ["/opt/QQ/qq", "/probe.js"]))
+        executed_key = "control_executed" if userns_control else ("native_control_executed" if native_load_control else "runtime_executed")
+        failure_prefix = "userns_control" if userns_control else ("native_control" if native_load_control else "runtime")
+        report["control_launch_attempted" if userns_control else ("native_control_launch_attempted" if native_load_control else "runtime_launch_attempted")] = True
         try:
             result = subprocess.run(command, env=minimal_environment(),
                                     stdin=subprocess.DEVNULL, stdout=output,
@@ -357,6 +441,19 @@ def child_probe(root, jail, nonce, parent_ids, mount, diagnostic_fd=None, *, use
             if result.returncode != 0 and denied:
                 report["control_failure_category"] = "user_namespace_creation_denied"
             return report
+        if native_load_control:
+            report["native_control_exit_code"] = result.returncode
+            if result.returncode != 0:
+                report.update(status="failed", errors=["native_control_nonzero_exit"])
+                return report
+            output.seek(0)
+            try:
+                report.update(parse_native_output(output.read(OUTPUT_LIMIT + 1), nonce))
+            except ProbeError as exc:
+                report.update(status="failed", errors=[str(exc)])
+                return report
+            report.update(status="observed", native_load_control_verified=True)
+            return report
         report["runtime_exit_code"] = result.returncode
         if result.returncode != 0:
             errors.seek(0)
@@ -374,9 +471,12 @@ def child_probe(root, jail, nonce, parent_ids, mount, diagnostic_fd=None, *, use
 
 
 def probe(qq_root, execute=False, private_diagnostics=None, *, userns_control=False,
-          filesystem_mode="chroot"):
+          filesystem_mode="chroot", native_load_control=False):
     """Validate by default; explicit pivot mode never changes execution consent."""
-    report = base_report(userns_control=userns_control)
+    report = base_report(userns_control=userns_control, native_load_control=native_load_control)
+    if userns_control and native_load_control:
+        report.update(status="refused", errors=["mutually_exclusive_controls"])
+        return report
     report["filesystem_mode"] = filesystem_mode
     if filesystem_mode not in ("chroot", "pivot-root"):
         report.update(status="refused", errors=["invalid_filesystem_mode"])
@@ -421,6 +521,8 @@ def probe(qq_root, execute=False, private_diagnostics=None, *, userns_control=Fa
                              "--pivot-tool", pivot_tool, "--umount-tool", umount_tool])
             if userns_control:
                 args.append("--userns-control")
+            if native_load_control:
+                args.append("--native-load-control")
             private_kwargs = {}
             if diagnostic_fd is not None:
                 args.extend(["--private-diagnostic-fd", str(diagnostic_fd)])
@@ -438,6 +540,12 @@ def probe(qq_root, execute=False, private_diagnostics=None, *, userns_control=Fa
             for key in ("status", "runtime_executed", "runtime_launch_attempted", "runtime_versions_verified", "versions", "errors", "platform", "arch", "isolation", "runtime_exit_code", "runtime_failure_category", "missing_library", "control_executed", "control_launch_attempted", "control_status", "control_exit_code", "control_failure_category", "user_namespace_creation_verified"):
                 if key in child:
                     report[key] = child[key]
+            if native_load_control:
+                for key in ("native_control_executed", "native_control_launch_attempted", "native_control_exit_code", "native_load_control_verified", "system_node_versions", "native_candidates"):
+                    if key in child:
+                        report[key] = child[key]
+                # System Node evidence never becomes QQ Electron/runtime/ABI readiness.
+                report.update(runtime_executed=False, runtime_versions_verified=False, versions={})
             # A helper cannot invent consent or publish the descriptor/path/bytes.
             report["private_diagnostics_written"] = (
                 diagnostic_fd is not None and child.get("private_diagnostics_written") is True)
@@ -462,7 +570,10 @@ def main(argv=None):
                         help="Opt-in detached pivot root; default keeps existing chroot isolation")
     parser.add_argument("--pivot-tool", help=argparse.SUPPRESS)
     parser.add_argument("--umount-tool", help=argparse.SUPPRESS)
-    parser.add_argument("--userns-control", action="store_true",
+    controls = parser.add_mutually_exclusive_group()
+    controls.add_argument("--native-load-control", action="store_true",
+                          help="Load fixed pristine native modules with system Node; never calls exports or verifies QQ runtime")
+    controls.add_argument("--userns-control", action="store_true",
                         help="Run trusted user-namespace control instead of QQ; still needs --execute")
     parser.add_argument("--report", type=Path)
     parser.add_argument("--private-diagnostics", type=Path,
@@ -475,14 +586,15 @@ def main(argv=None):
     parser.add_argument("--mount-tool", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     if args.child:
-        report = base_report(userns_control=args.userns_control)
+        report = base_report(userns_control=args.userns_control, native_load_control=args.native_load_control)
         try:
             report = child_probe(validate_root(args.qq_root), args.jail, args.nonce,
                                  json.loads(args.parent_ns), args.mount_tool,
                                  diagnostic_fd=args.private_diagnostic_fd,
                                  userns_control=args.userns_control,
                                  filesystem_mode=args.filesystem_mode,
-                                 pivot_tool=args.pivot_tool, umount_tool=args.umount_tool)
+                                 pivot_tool=args.pivot_tool, umount_tool=args.umount_tool,
+                                  native_load_control=args.native_load_control)
         except Exception:
             # Child errors are intentionally fixed and redacted; no host traceback.
             report.update(status="failed", errors=["isolation_setup_or_probe_failed"])
@@ -492,6 +604,8 @@ def main(argv=None):
             kwargs["filesystem_mode"] = args.filesystem_mode
         if args.userns_control:
             kwargs["userns_control"] = True
+        if args.native_load_control:
+            kwargs["native_load_control"] = True
         if args.private_diagnostics is not None:
             kwargs["private_diagnostics"] = args.private_diagnostics
         report = probe(args.qq_root, **kwargs)

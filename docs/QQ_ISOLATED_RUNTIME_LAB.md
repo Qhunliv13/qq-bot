@@ -120,6 +120,38 @@ path; do not claim the executable accepted generic Node-only mode. A next GUI/na
 experiment needs a separately planned private display, not a borrowed production session.
 See `qq-pivot-root-evidence.json` for outcomes, limits and unchanged cutover requirements.
 
+## System-Node native-load control (2026-10-28)
+
+The opt-in `--native-load-control` runs a fixed script with `/usr/bin/node` through
+exactly the existing namespace, read-only software, detached pivot-root, UID 65534,
+cap-zero and no-new-privileges boundary. It is mutually exclusive with userns control.
+No arbitrary script/command is accepted. It imports only pristine `wrapper.node` and
+`major.node`, lists bounded own-property descriptors without invoking getters or
+exported functions, and accepts one strictly validated nonce-marked JSON record.
+It never loads QQ main, copies account data, logs in, or calls a native service.
+
+Reproduce in the existing account-free Linux lab:
+
+```bash
+python tools/qq_isolated_runtime_probe.py --qq-root /path/to/pristine/opt/QQ --filesystem-mode pivot-root --execute --native-load-control
+```
+
+Actual observed system Node **18.19.1**, module ABI **109**, N-API **9**: `major.node`
+loaded and exposed `load` as a function (not called); `wrapper.node` failed with
+`ERR_DLOPEN_FAILED` and an undefined-symbol classification. The exact symbol is not
+published or inferred; missing-library, module-version-mismatch and exact
+`qq_magic_napi_register` match flags were false. Static inventory separately shows
+that wrapper **imports**, rather than exports, `qq_magic_napi_register`.
+
+See `qq-native-load-control-evidence.json`. This proves a limited real native module
+load in **system Node**, not Tencent Electron compatibility, QQ runtime bootstrap,
+session initialization, independent actions/events or replacement readiness. Thus
+`runtime_executed`, `runtime_versions_verified`, `native_binding_verified`,
+`safe_to_login` and all backend/cutover readiness flags remain **false**. The native
+control can succeed as an experiment even while a candidate load fails.
+Existing Xvfb was discovered locally; no display server was started or package installed
+by this control, and the earlier GUI limitation is not resolved by this Node result.
+
 If this step succeeds, the next separate gate is an independently authored, narrowly
 scoped native-binding experiment in the same account-free and network-isolated lab.
 If it fails, record the exact redacted failure and investigate prerequisites without

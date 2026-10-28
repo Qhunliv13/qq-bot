@@ -1,0 +1,30 @@
+{
+  "plugin_commit": "8430aa0fead59c418bfe5d1ae515f28094ab8c1b",
+  "baseline_plugin_commit": "7e4e20793bdf50310b68d92ca23a1979c5f6c862",
+  "status": "active",
+  "reload": "exact_native_plugin_reload",
+  "full_plugin_hashes_verified": 52,
+  "python_regression_passed": 3044,
+  "python_regression_skipped": 37,
+  "subtests_passed": 100,
+  "temporary_plugin_key_revoked": true,
+  "framework_process_unchanged": true,
+  "napcat_process_unchanged": true,
+  "qq_session_preserved": true,
+  "protected_configs_unchanged_during_plugin_deploy": true,
+  "chat_commands_disabled_after_deploy": true,
+  "slash_prefix_disabled_after_deploy": true,
+  "permission_reply_disabled_after_deploy": true,
+  "default_empty_mention_disabled_after_deploy": true,
+  "model_test_calls": 0,
+  "qq_test_messages_sent": 0,
+  "postdeploy_natural_sample": {
+    "controlled_comparison": false,
+    "lock_wait_seconds": {"count": 2, "median": 0.0, "max": 0.0},
+    "history_snapshot_seconds": {"count": 3, "median": 0.483, "max": 2.595},
+    "context_seconds": {"count": 3, "median": 0.183, "max": 0.511},
+    "image_prepare_seconds": {"count": 3, "median": 0.693, "max": 3.807},
+    "whole_turn_seconds": {"count": 2, "median": 31.059, "max": 40.657},
+    "end_to_end_improvement_claimed": false
+  }
+}
