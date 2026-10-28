@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "sampled_at": "2026-10-28T21:20:17+08:00",
+  "sampling_time_note": "Session clock sampled before the inspection; exact individual command times were not recorded.",
+  "method": "Read-only WSL inspection of extracted pristine software plus offline fixed-entry ASAR inspection; no QQ, Node, native module, or account execution in this step.",
+  "software": {
+    "package_name": "QQ",
+    "package_version": "3.2.34-53644",
+    "package_main": "./application.asar/app_launcher/index.js",
+    "archive_bytes": 30361684,
+    "archive_payload_offset": 386532,
+    "archive_entry": "app_launcher/index.js",
+    "archive_entry_offset": 1200,
+    "archive_entry_size": 80,
+    "archive_entry_sha256": "0797da28c00619c2110cd622447d43cb9bc8e09fa47751105acd562ecaee9264",
+    "archive_entry_format": "not_utf8_javascript_source",
+    "outer_launcher_fixed_literal": "require('../major.node').load('internal_index', module);"
+  },
+  "prior_isolated_evidence": {
+    "private_display_source": "qq-private-display-evidence.json",
+    "private_display_result": "QQ executable timed out after 10 seconds; nonce runtime record absent; DBus and fontconfig unavailable categories observed; Xvfb ready.",
+    "native_load_source": "qq-native-load-control-evidence.json",
+    "native_load_result": "System Node 18.19.1 loads major.node with a load function descriptor (not invoked); wrapper.node fails with undefined symbol classification."
+  },
+  "interpretation": {
+    "direct_system_node_archive_entry_as_plain_js": "blocked: the exact declared archived entry fails strict UTF-8 decoding, a necessary condition for plain JS source; no proprietary loader is inferred or emulated.",
+    "system_node_supported_apis": "unverified: outer launcher calls major.node.load; the control only inspected its descriptor and never invoked it.",
+    "isolated_electron_bootstrap": "unverified: prior real execution entered GUI/diagnostics and timed out without a nonce record; no successful application bootstrap was observed.",
+    "account_login_or_actions": "not attempted"
+  },
+  "safety": {
+    "new_step_executed_native_code": false,
+    "production_account_or_session_used": false,
+    "napcat_proxy_used": false,
+    "production_files_modified": false,
+    "native_binding_verified": false,
+    "independent_backend_ready": false,
+    "safe_to_login": false,
+    "production_cutover_authorized": false
+  }
+}

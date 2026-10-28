@@ -21,6 +21,7 @@ share it. It never enters public JSON, even for this account-free runtime probe.
 import argparse
 from contextlib import contextmanager, ExitStack
 import ctypes
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -39,6 +40,8 @@ OUTPUT_LIMIT = 1024 * 1024
 # Raw diagnostics use a separate inherited descriptor, never helper JSON/PIPE.
 PRIVATE_STDERR_LIMIT = 16 * 1024
 HELPER_OUTPUT_LIMIT = 128 * 1024
+# Static entry reads are bounded to the official tiny bootstrap, not the whole ASAR.
+BOOTSTRAP_ENTRY_LIMIT = 4096
 SYSTEM_DIRS = ("/usr", "/lib", "/lib64", "/bin")
 NAMESPACES = ("net", "mnt", "pid")
 
@@ -93,6 +96,66 @@ def validate_root(candidate):
         if stream.read(4) != b"\x7fELF":
             raise ProbeError("qq_not_elf")
     return root
+
+
+def inspect_bootstrap(qq_root):
+    """Read the fixed pristine QQ ASAR entry offline; never evaluate its bytes.
+
+    This is a format gate, not a runtime test: decodable text alone would not
+    prove valid JS, supported Node APIs, native initialization, or QQ readiness.
+    """
+    report = base_report()
+    report.update(mode="offline_qq_bootstrap_readiness", status="refused",
+                  entry_format="unverified", entry_sha256=None, entry_size=None,
+                  system_node_direct_entry_supported=False,
+                  electron_bootstrap_verified=False)
+    try:
+        # Runtime helper.py is copied alone into a namespace. Import metadata
+        # dependencies only for this offline mode, never during child bootstrap.
+        try:
+            from tools.qq_asar_inventory import inspect_archive
+            from tools.qq_native_preflight import checked_file, read_bounded
+        except ModuleNotFoundError as exc:
+            if exc.name != "tools":
+                raise
+            from qq_asar_inventory import inspect_archive
+            from qq_native_preflight import checked_file, read_bounded
+        root = validate_root(qq_root)
+        package = json.loads(read_bounded(checked_file(root, "resources/app/package.json"),
+                                          64 * 1024).decode("utf-8"))
+        # Pin the only Tencent package/version and declared entry under investigation.
+        # No user-provided entry path or arbitrary JavaScript is ever loaded.
+        if (not isinstance(package, dict) or package.get("name") != "QQ"
+                or package.get("version") != "3.2.34-53644"
+                or package.get("main") != "./application.asar/app_launcher/index.js"):
+            raise ProbeError("unexpected_pristine_package_entry")
+        archive = checked_file(root, "resources/app/application.asar")
+        metadata = inspect_archive(archive)
+        entries = [item for item in metadata["entries"]
+                   if item["name"] == "app_launcher/index.js"]
+        if (len(entries) != 1 or entries[0]["kind"] != "file"
+                or entries[0]["unpacked"] or not 0 < entries[0]["size"] <= BOOTSTRAP_ENTRY_LIMIT):
+            raise ProbeError("unsupported_pristine_entry_metadata")
+        entry = entries[0]
+        with archive.open("rb") as stream:
+            stream.seek(metadata["payload_offset"] + entry["offset"])
+            content = stream.read(entry["size"])
+        if len(content) != entry["size"]:
+            raise ProbeError("truncated_pristine_entry")
+        report["entry_size"] = len(content)
+        report["entry_sha256"] = hashlib.sha256(content).hexdigest()
+        try:
+            content.decode("utf-8", errors="strict")
+        except UnicodeDecodeError:
+            report["entry_format"] = "not_utf8_javascript_source"
+        else:
+            # UTF-8 is only a necessary condition for plain source, not JS syntax.
+            report["entry_format"] = "utf8_text_syntax_unverified"
+        report["status"] = "observed_static"
+    except (OSError, ValueError, UnicodeError, RuntimeError, RecursionError, TypeError):
+        # Archive/package paths or raw bytes are never surfaced on failure.
+        report["errors"] = ["bootstrap_static_inspection_failed"]
+    return report
 
 
 def namespace_ids():
@@ -718,6 +781,8 @@ def main(argv=None):
     parser.add_argument("--pivot-tool", help=argparse.SUPPRESS)
     parser.add_argument("--umount-tool", help=argparse.SUPPRESS)
     controls = parser.add_mutually_exclusive_group()
+    controls.add_argument("--bootstrap-readiness", action="store_true",
+                          help="Offline fixed ASAR entry format check; refuses --execute and never runs QQ")
     controls.add_argument("--native-load-control", action="store_true",
                           help="Load fixed pristine native modules with system Node; never calls exports or verifies QQ runtime")
     controls.add_argument("--userns-control", action="store_true",
@@ -734,6 +799,15 @@ def main(argv=None):
     parser.add_argument("--parent-ns", help=argparse.SUPPRESS)
     parser.add_argument("--mount-tool", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
+    # Static inspection is a separate offline mode: reject all runtime options even
+    # when the caller explicitly grants --execute (consent cannot alter this gate).
+    if args.bootstrap_readiness:
+        if (args.child or args.execute or args.private_display or args.private_diagnostics
+                or args.filesystem_mode != "chroot" or args.report is not None):
+            parser.error("bootstrap-readiness permits only --qq-root")
+        report = inspect_bootstrap(args.qq_root)
+        sys.stdout.write(json.dumps(report, sort_keys=True) + "\n")
+        return 1  # Offline format evidence is never a readiness gate pass.
     if args.child:
         report = base_report(userns_control=args.userns_control, native_load_control=args.native_load_control)
         try:

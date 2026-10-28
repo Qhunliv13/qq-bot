@@ -200,3 +200,42 @@ independent-backend and cutover readiness remain **false**. This is real progres
 the missing-display/shared-memory gates, not completion of the independent transport.
 The focused mock regressions (isolated runtime, native-load probe, private display)
 returned **83 passed, 1 Windows-specific skipped**; tests alone are not runtime evidence.
+
+## Offline pristine bootstrap entry gate (2026-10-28)
+
+The new opt-in `--bootstrap-readiness` performs **static-only** inspection of the fixed
+Tencent `QQ 3.2.34-53644` package entry. It rejects `--execute`, display, native and
+userns controls before reading any software, never spawns QQ/Node/Electron, and returns
+exit status 1 even when static metadata is observed: success is **not readiness**.
+The only software reads are the QQ executable's four-byte ELF check, exact package
+metadata, ASAR header and its at-most-4096-byte `app_launcher/index.js` payload.
+It reuses the existing strict path and ASAR metadata parsers; no guessed loader,
+decryptor, native export call or source rewrite is involved. Caller-verified package
+provenance is still required; this metadata check cannot attest pristine origin.
+The runtime helper's copied-file execution stays independent of these offline imports.
+
+Run against the existing software-only lab (no isolation needed because nothing executes):
+
+```bash
+python tools/qq_isolated_runtime_probe.py --qq-root /tmp/qq-native-lab-20261027-pristine/opt/QQ --bootstrap-readiness
+```
+
+**Actual WSL observation:** package `main` is
+`./application.asar/app_launcher/index.js`; the packed entry is 80 bytes (ASAR offset
+1200, header payload start 386532), SHA-256
+`0797da28c00619c2110cd622447d43cb9bc8e09fa47751105acd562ecaee9264`.
+It fails strict UTF-8 decoding; thus it is **not plain UTF-8 JavaScript source** that
+can simply be fed to system Node. The separate outer `app_launcher/index.js` is a
+56-byte call to `require('../major.node').load('internal_index', module)`; the prior
+Node control observed only a `load` function descriptor, not its invocation or a
+supported API contract. Electron's documented ASAR support alone does not establish
+that it can decode this package-specific payload or finish QQ initialization.
+
+The previous actual QQ run under detached pivot-root, private network, cap-zero UID,
+private Xvfb and bounded 10-second watchdog timed out without a nonce record; DBus/
+fontconfig diagnostics are observations, not proven causes. The offline step cannot
+resolve that gate. See `qq-bootstrap-readiness-evidence.json` and the earlier two
+probe evidence files. No login/session import, NapCat proxy, production mutation or
+readiness claim follows; further native/bootstrap execution needs a separate safe
+experiment retaining **all** existing boundaries and an independently validated
+interface, rather than invoking `major.node.load` with guessed parameters.
