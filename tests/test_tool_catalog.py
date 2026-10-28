@@ -22,6 +22,22 @@ from plugin.fact_tools import schemas as fact_schema  # noqa: E402
 
 from plugin.group_inspection import schemas as group_inspection_schema  # noqa: E402
 
+from plugin.fact_structure import structure_schema  # noqa: E402
+
+
+def literal_with_structure(node):
+    """Decode reviewed pure schema calls and literal metadata, never host code."""
+    if isinstance(node, ast.Call):
+        assert isinstance(node.func, ast.Name) and node.func.id == "structure_schema"
+        assert not node.args and not node.keywords
+        return structure_schema()
+    if isinstance(node, ast.Dict):
+        return {literal_with_structure(key): literal_with_structure(value)
+                for key, value in zip(node.keys, node.values)}
+    if isinstance(node, ast.List):
+        return [literal_with_structure(item) for item in node.elts]
+    return ast.literal_eval(node)
+
 IMPORTED_BUILDERS = (social_schema, workspace_schema, discovery_schema, delegation_schema, planning_schema, interim_schema, image_schema, request_schema, transfer_schema, fact_schema, group_inspection_schema)
 from plugin.tool_catalog import NATIVE_TOOL_COUNT, TOOL_DESCRIPTIONS, neutralize_schemas  # noqa: E402
 
@@ -48,7 +64,7 @@ def native_schemas():
             key=lambda node: node.lineno,
         )
         for call in calls:
-            args = [ast.literal_eval(arg) for arg in call.args]
+            args = [literal_with_structure(arg) for arg in call.args]
             schemas.append({"type": "function", "function": {
                 "name": args[0], "description": args[1],
                 "parameters": {"type": "object",

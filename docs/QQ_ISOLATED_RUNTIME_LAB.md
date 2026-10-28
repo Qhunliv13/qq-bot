@@ -21,9 +21,10 @@ success still exits non-ready and does not establish a usable native binding.
 `tools/qq_isolated_runtime_probe.py` defaults to validation without executing anything.
 Actual execution is Linux-only and needs explicit `--execute`. It attempts a saved
 script which reads a strict allowlist of `process.versions` under `ELECTRON_RUN_AS_NODE`.
-It does not load QQ's application main, import a native module, call a QQ service,
-perform login, or send a message. The runtime can reject that mode; do not assume the
-fuse or host supports it in advance.
+The saved script does not import QQ main/native modules, call QQ services, perform
+login or send messages. The executable can ignore that mode and enter its pristine
+application bootstrap before the script; that is why the account-free filesystem and
+network boundary are mandatory. Do not assume the fuse or host supports it in advance.
 
 The execution boundary requires:
 
@@ -156,3 +157,46 @@ If this step succeeds, the next separate gate is an independently authored, narr
 scoped native-binding experiment in the same account-free and network-isolated lab.
 If it fails, record the exact redacted failure and investigate prerequisites without
 using production credentials, NapCat runtime APIs or a renamed loader as a fallback.
+
+## Private authenticated display experiment (2026-10-28)
+
+`--private-display` is an explicit runtime-only option requiring `--filesystem-mode
+pivot-root`. It is refused for chroot, userns control and native-load control. It does
+not grant execution consent. The new display starts only after root replacement and
+old-root detach; no system package installation, host display, account directory,
+production service or NapCat bootstrap is used.
+
+The fixed `/usr/bin/Xvfb :99 -screen 0 1024x768x24 -nolisten tcp -auth ...` runs through
+the same UID/GID 65534, no-new-privileges, cap-zero and PID1-parent checks as QQ.
+A fresh private `0700` X socket directory belongs to UID 65534; readiness checks its
+actual socket type and owner. A new `0600` Xauthority file holds a random MIT cookie
+inside the jail. There is no `-ac`, inherited DISPLAY/XAUTHORITY or externally exposed
+TCP listener. A new IPC namespace and a fresh bounded tmpfs `/dev/shm` avoid host IPC
+and fix the first observed Chromium shared-memory fatal without any sandbox bypass.
+Xvfb stderr is captured separately under the existing file-size limit; only fixed
+booleans are returned. QQ private diagnostics remain an optional new `0600` outside-
+repository file; no raw diagnostics or identifiers enter committed evidence.
+
+Reproduce with a fresh private diagnostic filename on each explicit run:
+
+```bash
+python tools/qq_isolated_runtime_probe.py --qq-root /path/to/pristine/opt/QQ --execute --filesystem-mode pivot-root --private-display --private-diagnostics /tmp/new-private-stderr
+```
+
+**Actual result:** authenticated Xvfb was ready, socket owner verified, privilege and
+namespace checks passed, and QQ was actually executed with the version script and
+`ELECTRON_RUN_AS_NODE=1`. The new private `/dev/shm` removed the previously observed
+shared-memory fatal. QQ still timed out after 10 seconds, with **no nonce-marked
+runtime record**. Fixed diagnostic categories were DBus unavailable, fontconfig
+unavailable, and crash-reporter activity; shared-memory unavailable was false. No DBus
+server was added: these messages do not prove DBus is the remaining root cause.
+The launcher source entry remains the pristine package's
+`./application.asar/app_launcher/index.js`; it was only read, not patched or invoked
+with invented native arguments. GUI/bootstrap behavior despite RUN_AS_NODE is observed,
+not successful Node-only execution or proof that an Electron fuse is disabled.
+
+See `qq-private-display-evidence.json`. Runtime versions, native binding, session/login,
+independent-backend and cutover readiness remain **false**. This is real progress past
+the missing-display/shared-memory gates, not completion of the independent transport.
+The focused mock regressions (isolated runtime, native-load probe, private display)
+returned **83 passed, 1 Windows-specific skipped**; tests alone are not runtime evidence.

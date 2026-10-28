@@ -102,15 +102,16 @@ def test_restart_preserves_exact_bytes_source_categories_and_image_only_fact(tmp
 
 
 def test_dedup_uses_text_and_images_preserving_first_private_origin(tmp_path):
-    """A public repeat cannot publish a private image fact or replace its labels."""
+    """Public repeats get independent IDs without leaking or publishing private origins."""
     memory = Memory(str(tmp_path / "memory.json"))
     fid = memory.add_fact("same", "private:7", source={"scope": "private:7"},
                           categories=["first"], images=[image_ref()])
-    before = copy.deepcopy(memory.data)
-    assert memory.add_fact(" same ", "123", source={"scope": "123"},
-                           categories=["later"], images=[image_ref(mime="image/jpeg")]) == fid
-    assert memory.data == before
-    assert memory.list_facts(None, current_scope="123") == []
+    before = copy.deepcopy(memory.data["global"]["facts"][0])
+    public = memory.add_fact(" same ", "123", source={"scope": "123"},
+                             categories=["later"], images=[image_ref(mime="image/jpeg")])
+    assert public != fid
+    assert memory.data["global"]["facts"][0] == before
+    assert [row["id"] for row in memory.list_facts(None, current_scope="123")] == [public]
     other = memory.add_fact("same", "123", images=[image_ref(PNG + b"other")])
     text_only = memory.add_fact("same", "123")
     assert len({fid, other, text_only}) == 3

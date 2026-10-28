@@ -22,12 +22,14 @@ from typing import Iterable, Optional
 # Preserve the existing direct-script self-test as well as normal package imports.
 if __package__:
     from .fact_images import images_metadata, normalize_images
+    from .fact_structure import normalize_structure
 else:
     from fact_images import images_metadata, normalize_images
+    from fact_structure import normalize_structure
 
 #: 每条摘要的长度上限（字符）：防止摘要膨胀成第二份全文
 MAX_SUMMARY_CHARS = 100000
-#: 全局事实数量上限；超出时按插入顺序移除最早的条目。
+#: 历史容量阈值，仅保留兼容导入；不再静默淘汰用户的长期记录。
 MAX_FACTS = 2000
 
 
@@ -36,6 +38,16 @@ def _fact_scope(item: dict) -> str:
     provenance = item.get("source")
     scope = provenance.get("scope") if isinstance(provenance, dict) else None
     return str(scope if scope is not None else item.get("source_scope") or "")
+
+
+def _dedup_scope(item: dict) -> str:
+    """Partition exact private namespaces without inventing filename/identity aliases.
+
+    Public and unknown legacy sources retain their established shared dedup class;
+    native and legacy-private labels remain isolated by their exact stored scope.
+    """
+    scope = _fact_scope(item)
+    return scope if scope.startswith(("private:", "private_")) else ""
 
 
 def _categories(value) -> list[str]:
@@ -162,8 +174,8 @@ class Memory:
     def facts_for_scope(self, current_scope: str, *, muted=()) -> list[dict]:
         """Return detached visible facts; unknown legacy labels remain grandfathered.
 
-        Provenance is evidence, never an owner role or permission grant. A known
-        private first origin stays private even if another scope repeats its text.
+        Provenance and structure are evidence, never owner roles or permissions.
+        Private first origins stay private; public repeats get independent records.
         """
         from .cross_scope_memory import visible_scope
 
@@ -176,7 +188,10 @@ class Memory:
             known = scope.isascii() and scope.isdigit() or scope.startswith(("private:", "group:", "private_"))
             if known and not visible_scope(scope, current_scope, muted):
                 continue
-            out.append(json.loads(json.dumps(item, ensure_ascii=False, allow_nan=False)))
+            detached = json.loads(json.dumps(item, ensure_ascii=False, allow_nan=False))
+            # Read projections expose legacy defaults without backfilling durable data.
+            detached["structure"] = normalize_structure(item.get("structure"))
+            out.append(detached)
         return out
 
     def list_facts(self, limit: Optional[int] = 500, *, current_scope=None,
@@ -194,6 +209,7 @@ class Memory:
                    "at": it.get("at") or 0, "source": it.get("source_scope") or "",
                    "source_scope": it.get("source_scope") or "",
                    "categories": _categories(it.get("categories")),
+                   "structure": normalize_structure(it.get("structure")),
                    "images": images_metadata(it.get("images"))}
             if "source" in it:
                 row["provenance"] = json.loads(json.dumps(it["source"], ensure_ascii=False,
@@ -261,14 +277,15 @@ class Memory:
                 return {"ref": refs[index], **metadata}
         return None
 
-    def edit_fact(self, fact_id: str, text: str, *, images=None,
+    def edit_fact(self, fact_id: str, text: str, *, images=None, structure=None,
                   current_scope=None, muted=()) -> bool:
-        """Atomically edit visible facts, preserving images unless explicitly replaced.
+        """Atomically edit visible facts, preserving omitted images and structure.
 
         An explicit empty list clears attachments, but a fact must retain text or
         images. Keep the existing edit timestamp convention and original provenance.
         """
         normalized = normalize_images(images) if images is not None else None
+        metadata = normalize_structure(structure) if structure is not None else None
         clean = (text or "").strip()
         visible = {str(row["id"]) for row in self.list_facts(
             None, current_scope=current_scope, muted=muted)}
@@ -285,6 +302,9 @@ class Memory:
                 item["text"] = clean
                 if normalized is not None:
                     item["images"] = retained
+                if metadata is not None:
+                    # Explicit replacement/reset cannot alter provenance or visibility.
+                    item["structure"] = metadata
                 item["at"] = int(time.time())
                 try:
                     self.save_checked()
@@ -325,15 +345,17 @@ class Memory:
         return removed
 
     def add_fact(self, text: str, source_scope: str = "", *, source=None,
-                 categories=None, images=None) -> str:
+                 categories=None, images=None, structure=None) -> str:
         """Store detached provenance and persistent images with checked atomic writes.
 
-        Text plus canonical images deduplicate while preserving the first origin,
-        categories and ID. Legacy text-only records compare as an empty image list.
-        Validate all inputs before assigning IDs or changing any stored record.
+        Text and canonical images deduplicate within the same privacy partition.
+        Explicit structure also participates; omitted structure preserves legacy
+        duplicate behavior. Never replace the first origin, labels or ID, and never
+        evict older records. Validate inputs before allocating IDs or changing data.
         """
         labels = _categories(categories)
         normalized = normalize_images(images)
+        metadata = normalize_structure(structure) if structure is not None else None
         if source is not None and not isinstance(source, dict):
             raise TypeError("source must be a dictionary or None")
         snapshot = (json.loads(json.dumps(source, ensure_ascii=False, allow_nan=False))
@@ -344,9 +366,13 @@ class Memory:
         bucket = (self.data.get("global") or {}).get("facts") or []
         # Resolve the duplicate before mutation so invalid legacy images cannot
         # partially allocate IDs or create a global container.
+        partition = _dedup_scope({"source_scope": source_scope, "source": snapshot})
         duplicate = next((item for item in bucket
-                          if clean == str(item.get("text") or "")
-                          and normalized == normalize_images(item.get("images"))), None)
+                          if partition == _dedup_scope(item)
+                          and clean == str(item.get("text") or "")
+                          and normalized == normalize_images(item.get("images"))
+                          and (metadata is None
+                               or metadata == normalize_structure(item.get("structure")))), None)
         if duplicate is not None and duplicate.get("id"):
             return str(duplicate["id"])
         previous = copy.deepcopy(self.data)
@@ -365,12 +391,13 @@ class Memory:
                         "images": normalized}
                 if snapshot is not None:
                     fact["source"] = snapshot
+                if metadata is not None:
+                    fact["structure"] = metadata
+                # Facts are user records, not a cache: adding one must not erase another.
                 bucket.append(fact)
-                if len(bucket) > MAX_FACTS:
-                    del bucket[0:len(bucket) - MAX_FACTS]
             self.save_checked()
         except Exception:
-            # Restore IDs, evicted facts and counters as well as the new record.
+            # Restore IDs, metadata and counters as well as the new record.
             self.data = previous
             raise
         return fid

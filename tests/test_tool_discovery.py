@@ -22,6 +22,9 @@ def discovery():
     return module
 
 
+from test_tool_catalog import literal_with_structure
+
+
 @pytest.fixture
 def catalog():
     """Supply exact schemas, including opaque metadata, as the sole source of truth."""
@@ -55,7 +58,7 @@ def test_all_native_schema_names_are_indexed_without_importing_host(discovery, t
         method = next(node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == method_name)
         calls = sorted((node for node in ast.walk(method) if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "_f"), key=lambda node: node.lineno)
         for call in calls:
-            values = [ast.literal_eval(arg) for arg in call.args]
+            values = [literal_with_structure(arg) for arg in call.args]
             native.append({"type": "function", "function": {"name": values[0], "description": values[1], "parameters": {"type": "object", "properties": values[2] if len(values) > 2 else {}, "required": values[3] if len(values) > 3 else []}}})
     spec = importlib.util.spec_from_file_location("isolated_discovery_social", plugin / "qq_social.py")
     social = importlib.util.module_from_spec(spec)

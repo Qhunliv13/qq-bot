@@ -39,14 +39,17 @@ def test_invalid_source_fails_before_mutation(tmp_path, source):
 
 
 def test_first_origin_dedup_cannot_publish_private_fact(tmp_path):
-    """Cross-scope duplicate text retains its original private provenance only."""
+    """A public repeat has its own ID and never exposes the original private source."""
     memory = Memory(str(tmp_path / "memory.json"))
     fid = memory.add_fact("same fact", "private:7", source={"scope": "private:7", "message_id": "secret"})
-    assert memory.add_fact("same fact", "123", source={"scope": "123", "message_id": "public"}) == fid
-    assert memory.list_facts(None, current_scope="123") == []
+    public = memory.add_fact("same fact", "123", source={"scope": "123", "message_id": "public"})
+    assert public != fid
+    visible = memory.list_facts(None, current_scope="123")
+    assert [row["id"] for row in visible] == [public]
+    assert visible[0]["provenance"]["message_id"] == "public"
     private = memory.list_facts(None, current_scope="private:7")
     assert private[0]["provenance"]["message_id"] == "secret"
-    assert len(memory.list_facts()) == 1
+    assert len(memory.list_facts()) == 2
 
 
 def test_scope_filter_muting_unknown_legacy_and_detached_results(tmp_path):
@@ -83,8 +86,8 @@ def test_full_listing_and_search_preserve_existing_or_ranking(tmp_path):
     assert memory.search_facts("") == []
 
 
-def test_storage_cap_is_preserved(tmp_path):
-    """Complete listing never increases the established 2000-entry storage budget."""
+def test_legacy_storage_threshold_never_discards_records(tmp_path):
+    """The deprecated cache threshold must not silently delete user-authored facts."""
     memory = Memory(str(tmp_path / "memory.json"))
     memory.data["global"]["facts"] = [
         {"id": "f%03d" % index, "text": str(index), "source_scope": "tool", "at": index}
@@ -92,6 +95,6 @@ def test_storage_cap_is_preserved(tmp_path):
     ]
     memory.add_fact("new", "123")
     rows = memory.list_facts(None)
-    assert len(rows) == MAX_FACTS
-    assert rows[0]["text"] == "2"
+    assert len(rows) == MAX_FACTS + 1
+    assert rows[0]["text"] == "1"
     assert rows[-1]["text"] == "new"

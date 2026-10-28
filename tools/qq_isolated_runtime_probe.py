@@ -2,7 +2,10 @@
 
 Default mode never imports native modules. Explicit --native-load-control loads only
 wrapper/major with trusted system Node and reports descriptors, not QQ readiness.
-No mode calls exports, initializes QQ services, loads QQ main or performs login.
+No mode calls native exports or performs login. QQ may ignore RUN_AS_NODE and
+enter its pristine application bootstrap; account-free filesystem and network
+isolation remain mandatory. --private-display permits this only after pivot-root,
+using trusted authenticated Xvfb, no host sockets and a new private /dev/shm.
 
 The caller must supply a pristine extracted software-only QQ directory. System
 library directories are exposed read-only; no host account directories are bound.
@@ -16,6 +19,7 @@ share it. It never enters public JSON, even for this account-free runtime probe.
 """
 
 import argparse
+from contextlib import contextmanager, ExitStack
 import ctypes
 import json
 import os
@@ -27,6 +31,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 
 # Only runtime version strings, never arbitrary process properties, enter reports.
 VERSION_KEYS = ("node", "electron", "chrome", "v8", "modules", "napi", "openssl", "uv")
@@ -329,8 +334,84 @@ def enter_filesystem_root(jail, filesystem_mode, pivot_tool=None, umount_tool=No
         raise ProbeError("old_root_detach_failed")
 
 
+def validate_private_display_mode(private_display, filesystem_mode, userns_control, native_load_control):
+    """Permit display only for QQ under a detached root, never for trusted controls."""
+    if private_display and (filesystem_mode != "pivot-root" or userns_control or native_load_control):
+        raise ProbeError("private_display_requires_pivot_runtime")
+
+
+def private_display_authority(cookie):
+    """Encode one FamilyWild MIT cookie without exposing host X authority or names."""
+    fields = (b"", b"99", b"MIT-MAGIC-COOKIE-1", cookie)
+    return b"\xff\xff" + b"".join(len(field).to_bytes(2, "big") + field for field in fields)
+
+
+@contextmanager
+def private_display_session(report):
+    """Start trusted Xvfb after pivot, with cap-zero UID and private cookie-only access.
+
+    The only socket path is in this jail's blank tmpfs. No host DISPLAY, X socket,
+    IPC namespace, xauth file or DBus socket is imported. stderr stays separate and
+    RLIMIT_FSIZE bounds it; only fixed categories enter the public report.
+    """
+    directory = Path("/tmp/.X11-unix")
+    directory.mkdir(mode=0o700)
+    os.chown(directory, 65534, 65534)
+    authority = Path("/tmp/home/.Xauthority")
+    with authority.open("xb") as stream:
+        stream.write(private_display_authority(secrets.token_bytes(16)))
+    authority.chmod(0o600)
+    os.chown(authority, 65534, 65534)
+    env = minimal_environment()
+    env.update(DISPLAY=":99", XAUTHORITY=str(authority))
+    # Start only the fixed system binary; never search a QQ-controlled PATH.
+    with Path("/tmp/xvfb-stderr").open("x+b") as errors:
+        process = subprocess.Popen(
+            ["/usr/bin/Xvfb", ":99", "-screen", "0", "1024x768x24",
+             "-nolisten", "tcp", "-auth", str(authority)],
+            env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=errors, preexec_fn=drop_runtime_privileges, close_fds=True)
+        report["private_display"] = {"launch_attempted": True, "ready": False,
+                                     "authenticated": True, "tcp_disabled": True}
+        try:
+            deadline = time.monotonic() + 2
+            while time.monotonic() < deadline:
+                if process.poll() is not None:
+                    report["private_display"]["failure_category"] = "server_exited_before_ready"
+                    raise ProbeError("private_display_start_failed")
+                try:
+                    info = Path("/tmp/.X11-unix/X99").lstat()
+                except FileNotFoundError:
+                    time.sleep(0.025)
+                    continue
+                # A ready signal must be a real Unix socket owned by our dropped UID.
+                if not stat.S_ISSOCK(info.st_mode) or info.st_uid != 65534:
+                    raise ProbeError("private_display_socket_invalid")
+                report["private_display"].update(ready=True, socket_owner_verified=True,
+                                                unprivileged=True, effective_capabilities_zero=True)
+                yield env
+                break
+            else:
+                report["private_display"]["failure_category"] = "server_socket_timeout"
+                raise ProbeError("private_display_start_failed")
+        finally:
+            # PID1 death remains a second backstop for every Xvfb/QQ descendant.
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=1)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=1)
+            errors.seek(0)
+            data = errors.read(PRIVATE_STDERR_LIMIT)
+            report["private_display"]["stderr_present"] = bool(data)
+            report["private_display"]["stderr_prefix_bounded"] = True
+
+
 def child_probe(root, jail, nonce, parent_ids, mount, diagnostic_fd=None, *, userns_control=False,
-                filesystem_mode="chroot", pivot_tool=None, umount_tool=None, native_load_control=False):
+                filesystem_mode="chroot", pivot_tool=None, umount_tool=None, native_load_control=False,
+                private_display=False):
     """Build the shared isolation, then probe QQ or a trusted namespace control.
 
     This helper is PID 1 in its new namespace. On exit the kernel kills remaining
@@ -343,6 +424,7 @@ def child_probe(root, jail, nonce, parent_ids, mount, diagnostic_fd=None, *, use
         for name, tool in (("pivot_root", pivot_tool), ("umount", umount_tool)):
             if not tool or not Path(tool).is_absolute() or tool != shutil.which(name, path="/usr/sbin:/usr/bin:/sbin:/bin"):
                 raise ProbeError("pivot_tools_missing_or_untrusted")
+    validate_private_display_mode(private_display, filesystem_mode, userns_control, native_load_control)
     report = base_report(userns_control=userns_control, native_load_control=native_load_control)
     if userns_control and native_load_control:
         report.update(status="refused", errors=["mutually_exclusive_controls"])
@@ -351,7 +433,12 @@ def child_probe(root, jail, nonce, parent_ids, mount, diagnostic_fd=None, *, use
     if diagnostic_fd is not None:
         validate_diagnostic_fd(diagnostic_fd)
     observed = namespace_ids()
-    if set(parent_ids) != set(NAMESPACES) or any(observed[k] == parent_ids[k] for k in NAMESPACES):
+    expected_namespaces = set(NAMESPACES)
+    if private_display:
+        # X11 may allocate SysV IPC: do not share the host's kernel IPC namespace.
+        observed["ipc"] = os.readlink("/proc/self/ns/ipc")
+        expected_namespaces.add("ipc")
+    if set(parent_ids) != expected_namespaces or any(observed[k] == parent_ids[k] for k in expected_namespaces):
         raise ProbeError("namespace_isolation_failed")
     import resource
 
@@ -374,6 +461,11 @@ def child_probe(root, jail, nonce, parent_ids, mount, diagnostic_fd=None, *, use
     for directory in ("tmp", "run"):
         run_checked([mount, "-t", "tmpfs", "-o", "nosuid,nodev,noexec,size=16m,mode=1777",
                      "tmpfs", str(jail / directory)])
+    if private_display:
+        # Chromium needs shared memory; use new tmpfs, never bind host IPC state.
+        (jail / "dev" / "shm").mkdir()
+        run_checked([mount, "-t", "tmpfs", "-o", "nosuid,nodev,noexec,size=16m,mode=1777",
+                     "tmpfs", str(jail / "dev" / "shm")])
     for directory in ("home", "config", "cache"):
         private = jail / "tmp" / directory
         private.mkdir(mode=0o700)
@@ -387,9 +479,12 @@ def child_probe(root, jail, nonce, parent_ids, mount, diagnostic_fd=None, *, use
     run_checked([mount, "-t", "proc", "-o", "nosuid,nodev,noexec", "proc", str(jail / "proc")])
     (jail / "probe.js").write_text(native_load_script(nonce) if native_load_control else node_script(nonce), encoding="utf-8")
     # File capture + RLIMIT_FSIZE bounds output before parsing, unlike PIPE capture.
-    with (jail / "tmp" / "stdout").open("w+b") as output, (jail / "tmp" / "stderr").open("w+b") as errors:
+    with (jail / "tmp" / "stdout").open("w+b") as output, (jail / "tmp" / "stderr").open("w+b") as errors, ExitStack() as runtime_stack:
         enter_filesystem_root(jail, filesystem_mode, pivot_tool, umount_tool)
-        if namespace_ids() != observed:
+        entered_ids = namespace_ids()
+        if private_display:
+            entered_ids["ipc"] = os.readlink("/proc/self/ns/ipc")
+        if entered_ids != observed:
             raise ProbeError("private_proc_identity_failed")
         # Keep this PID 1 supervisor root: changing its credentials would clear
         # unshare --kill-child's PDEATHSIG. Only QQ's child drops privileges.
@@ -397,10 +492,19 @@ def child_probe(root, jail, nonce, parent_ids, mount, diagnostic_fd=None, *, use
                                "chroot": filesystem_mode == "chroot",
                                "pivotRoot": filesystem_mode == "pivot-root",
                                "oldroot_detached": filesystem_mode == "pivot-root"}
+        if private_display:
+            report["isolation"]["ipc"] = True
         resource.setrlimit(resource.RLIMIT_CPU, (10, 10))
         resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
         resource.setrlimit(resource.RLIMIT_FSIZE, (OUTPUT_LIMIT, OUTPUT_LIMIT))
         resource.setrlimit(resource.RLIMIT_NOFILE, (128, 128))
+        runtime_env = minimal_environment()
+        if private_display:
+            try:
+                runtime_env = runtime_stack.enter_context(private_display_session(report))
+            except (ProbeError, OSError, subprocess.SubprocessError):
+                report.update(status="failed", errors=["private_display_start_failed"])
+                return report
         # Same chroot, UID, NNP and cap-zero hook; only the trusted command differs.
         command = (["/usr/bin/unshare", "--user", "--map-root-user", "/usr/bin/true"]
                    if userns_control else (["/usr/bin/node", "/probe.js"] if native_load_control else ["/opt/QQ/qq", "/probe.js"]))
@@ -408,13 +512,28 @@ def child_probe(root, jail, nonce, parent_ids, mount, diagnostic_fd=None, *, use
         failure_prefix = "userns_control" if userns_control else ("native_control" if native_load_control else "runtime")
         report["control_launch_attempted" if userns_control else ("native_control_launch_attempted" if native_load_control else "runtime_launch_attempted")] = True
         try:
-            result = subprocess.run(command, env=minimal_environment(),
+            result = subprocess.run(command, env=runtime_env,
                                     stdin=subprocess.DEVNULL, stdout=output,
                                     stderr=errors, timeout=10, check=False,
                                     preexec_fn=drop_runtime_privileges, close_fds=True)
         except subprocess.TimeoutExpired:
             report.update(status="failed", errors=[failure_prefix + "_timeout"])
             report[executed_key] = True
+            if private_display:
+                errors.seek(0)
+                text = errors.read(OUTPUT_LIMIT).decode("ascii", errors="ignore")
+                # Fixed exact categories only: timeout is not version or app readiness.
+                report["runtime_diagnostics"] = {
+                    "dbus_unavailable": "Failed to connect to the bus:" in text,
+                    "fontconfig_unavailable": "Fontconfig error:" in text,
+                    "shared_memory_unavailable": "Unable to access(W_OK|X_OK) /dev/shm" in text,
+                    "crash_reporter_activity": "third_party/crashpad/" in text}
+                output.seek(0)
+                try:
+                    parse_output(output.read(OUTPUT_LIMIT + 1), nonce)
+                    report["runtime_record_present"] = True
+                except ProbeError:
+                    report["runtime_record_present"] = False
             return report
         except (OSError, subprocess.SubprocessError):
             report.update(status="failed", errors=[failure_prefix + "_launch_failed"])
@@ -471,8 +590,8 @@ def child_probe(root, jail, nonce, parent_ids, mount, diagnostic_fd=None, *, use
 
 
 def probe(qq_root, execute=False, private_diagnostics=None, *, userns_control=False,
-          filesystem_mode="chroot", native_load_control=False):
-    """Validate by default; explicit pivot mode never changes execution consent."""
+          filesystem_mode="chroot", native_load_control=False, private_display=False):
+    """Validate by default; explicit pivot/display modes never change execution consent."""
     report = base_report(userns_control=userns_control, native_load_control=native_load_control)
     if userns_control and native_load_control:
         report.update(status="refused", errors=["mutually_exclusive_controls"])
@@ -480,6 +599,11 @@ def probe(qq_root, execute=False, private_diagnostics=None, *, userns_control=Fa
     report["filesystem_mode"] = filesystem_mode
     if filesystem_mode not in ("chroot", "pivot-root"):
         report.update(status="refused", errors=["invalid_filesystem_mode"])
+        return report
+    try:
+        validate_private_display_mode(private_display, filesystem_mode, userns_control, native_load_control)
+    except ProbeError as exc:
+        report.update(status="refused", errors=[str(exc)])
         return report
     diagnostic_fd = None
     if sys.platform != "linux":
@@ -505,6 +629,8 @@ def probe(qq_root, execute=False, private_diagnostics=None, *, userns_control=Fa
         if private_diagnostics is not None:
             diagnostic_fd = open_private_diagnostics(private_diagnostics)
         parent_ids = namespace_ids()
+        if private_display:
+            parent_ids["ipc"] = os.readlink("/proc/self/ns/ipc")
         nonce = secrets.token_hex(16)
         with tempfile.TemporaryDirectory(prefix="qq-isolated-probe-") as temporary:
             jail = Path(temporary) / "root"
@@ -523,6 +649,9 @@ def probe(qq_root, execute=False, private_diagnostics=None, *, userns_control=Fa
                 args.append("--userns-control")
             if native_load_control:
                 args.append("--native-load-control")
+            if private_display:
+                args.insert(1, "--ipc")
+                args.append("--private-display")
             private_kwargs = {}
             if diagnostic_fd is not None:
                 args.extend(["--private-diagnostic-fd", str(diagnostic_fd)])
@@ -540,6 +669,24 @@ def probe(qq_root, execute=False, private_diagnostics=None, *, userns_control=Fa
             for key in ("status", "runtime_executed", "runtime_launch_attempted", "runtime_versions_verified", "versions", "errors", "platform", "arch", "isolation", "runtime_exit_code", "runtime_failure_category", "missing_library", "control_executed", "control_launch_attempted", "control_status", "control_exit_code", "control_failure_category", "user_namespace_creation_verified"):
                 if key in child:
                     report[key] = child[key]
+            if private_display:
+                if type(child.get("runtime_record_present")) is bool:
+                    report["runtime_record_present"] = child["runtime_record_present"]
+                diagnostics = child.get("runtime_diagnostics", {})
+                if isinstance(diagnostics, dict):
+                    report["runtime_diagnostics"] = {
+                        key: diagnostics[key] for key in ("dbus_unavailable", "fontconfig_unavailable",
+                                                         "shared_memory_unavailable", "crash_reporter_activity")
+                        if type(diagnostics.get(key)) is bool}
+            if private_display and isinstance(child.get("private_display"), dict):
+                allowed = ("launch_attempted", "ready", "authenticated", "tcp_disabled",
+                           "socket_owner_verified", "unprivileged", "effective_capabilities_zero",
+                           "stderr_present", "stderr_prefix_bounded")
+                report["private_display"] = {key: child["private_display"][key] for key in allowed
+                                             if type(child["private_display"].get(key)) is bool}
+                category = child["private_display"].get("failure_category")
+                if category in ("server_exited_before_ready", "server_socket_timeout"):
+                    report["private_display"]["failure_category"] = category
             if native_load_control:
                 for key in ("native_control_executed", "native_control_launch_attempted", "native_control_exit_code", "native_load_control_verified", "system_node_versions", "native_candidates"):
                     if key in child:
@@ -575,6 +722,8 @@ def main(argv=None):
                           help="Load fixed pristine native modules with system Node; never calls exports or verifies QQ runtime")
     controls.add_argument("--userns-control", action="store_true",
                         help="Run trusted user-namespace control instead of QQ; still needs --execute")
+    parser.add_argument("--private-display", action="store_true",
+                        help="Private authenticated Xvfb inside pivot-root runtime only; no host display")
     parser.add_argument("--report", type=Path)
     parser.add_argument("--private-diagnostics", type=Path,
                         help="New outside-repository owner-only raw stderr file (16 KiB max); sensitive, do not share")
@@ -594,7 +743,8 @@ def main(argv=None):
                                  userns_control=args.userns_control,
                                  filesystem_mode=args.filesystem_mode,
                                  pivot_tool=args.pivot_tool, umount_tool=args.umount_tool,
-                                  native_load_control=args.native_load_control)
+                                  native_load_control=args.native_load_control,
+                                  private_display=args.private_display)
         except Exception:
             # Child errors are intentionally fixed and redacted; no host traceback.
             report.update(status="failed", errors=["isolation_setup_or_probe_failed"])
@@ -606,6 +756,8 @@ def main(argv=None):
             kwargs["userns_control"] = True
         if args.native_load_control:
             kwargs["native_load_control"] = True
+        if args.private_display:
+            kwargs["private_display"] = True
         if args.private_diagnostics is not None:
             kwargs["private_diagnostics"] = args.private_diagnostics
         report = probe(args.qq_root, **kwargs)
