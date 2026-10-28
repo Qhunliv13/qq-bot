@@ -239,3 +239,48 @@ probe evidence files. No login/session import, NapCat proxy, production mutation
 readiness claim follows; further native/bootstrap execution needs a separate safe
 experiment retaining **all** existing boundaries and an independently validated
 interface, rather than invoking `major.node.load` with guessed parameters.
+
+## Extended private-display bootstrap observation (2026-10-28)
+
+The only safe next runtime observation is an explicit `--extended-startup` flag on
+the existing private-display/pivot-root execution gate. The default remains the
+10-second watchdog. This flag never executes without explicit `--execute` and is
+refused unless private authenticated Xvfb and pivot-root are selected; it cannot combine with native-load or userns
+controls. The same clean environment, isolated network/mount/PID/IPC namespaces,
+read-only software binds, cap-zero UID/GID 65534, no-new-privileges, private
+`/dev/shm`, bounded outputs and unchanged QQ invocation remain in force. QQ is
+never given an arbitrary startup argument or a sandbox-disabling flag. The
+opt-in child timeout and CPU limit are 30 seconds; the outer helper watchdog is
+35 seconds, so helper/setup hang remains distinguishable from a QQ child timeout.
+
+The redacted diagnostic phases are narrowly **boundary verified** (namespace
+and detached root in `isolation`), **private display ready** (`private_display`),
+**QQ invoked** (`runtime_launch_attempted`/`runtime_executed`), and **30-second
+watchdog** (`startup_observation=qq_invoked_watchdog_at_30s` only if the QQ child
+timed out). These are harness observations, not claims that QQ reached a
+particular internal initialization phase. No milestone is inferred from DBus,
+fontconfig or crashpad stderr categories. A failed helper setup or outer timeout
+does not receive a QQ-watchdog marker. No raw logs or account identifiers are
+published. Reproduce only in the existing software-only, network-isolated lab:
+
+```bash
+python tools/qq_isolated_runtime_probe.py --qq-root /tmp/qq-native-lab-20261027-pristine/opt/QQ --execute --filesystem-mode pivot-root --private-display --extended-startup
+```
+
+**Observed:** all isolation and authenticated private-display checks passed, QQ
+was invoked, and the **30-second watchdog expired**. `runtime_record_present=false`;
+no nonce-marked Electron/Node record was produced. Fixed stderr categories
+remain DBus unavailable, fontconfig unavailable and crash-reporter activity;
+shared-memory unavailable is false. This additional bounded time did **not**
+resolve the runtime gate or identify a blocker inside Tencent's native code.
+Runtime versions, native binding, login and independent backend remain
+**unverified/not ready**. The ASAR inventory lists `app_launcher/index.js`,
+`app_launcher/launcher.js` and `app_launcher/adm-zip.js`, not an `_bootstrap`
+entry. `major.node.load('internal_index', module)` occurs only in the outer
+launcher; its ABI cannot be established from the export descriptor or from
+this timed-out run. Do not call it with guessed parameters, decode the 80-byte
+packed entry by speculation, or use live credentials. Next progress requires
+a validated vendor interface or further safe evidence, not a fabricated backend.
+
+Mock-only focused tests: 59 passed, 1 Windows-specific skipped. They verify
+gating and report propagation but cannot verify Tencent startup.

@@ -474,7 +474,7 @@ def private_display_session(report):
 
 def child_probe(root, jail, nonce, parent_ids, mount, diagnostic_fd=None, *, userns_control=False,
                 filesystem_mode="chroot", pivot_tool=None, umount_tool=None, native_load_control=False,
-                private_display=False):
+                private_display=False, extended_startup=False):
     """Build the shared isolation, then probe QQ or a trusted namespace control.
 
     This helper is PID 1 in its new namespace. On exit the kernel kills remaining
@@ -488,6 +488,8 @@ def child_probe(root, jail, nonce, parent_ids, mount, diagnostic_fd=None, *, use
             if not tool or not Path(tool).is_absolute() or tool != shutil.which(name, path="/usr/sbin:/usr/bin:/sbin:/bin"):
                 raise ProbeError("pivot_tools_missing_or_untrusted")
     validate_private_display_mode(private_display, filesystem_mode, userns_control, native_load_control)
+    if extended_startup and not private_display:
+        raise ProbeError("extended_startup_requires_private_display")
     report = base_report(userns_control=userns_control, native_load_control=native_load_control)
     if userns_control and native_load_control:
         report.update(status="refused", errors=["mutually_exclusive_controls"])
@@ -557,7 +559,9 @@ def child_probe(root, jail, nonce, parent_ids, mount, diagnostic_fd=None, *, use
                                "oldroot_detached": filesystem_mode == "pivot-root"}
         if private_display:
             report["isolation"]["ipc"] = True
-        resource.setrlimit(resource.RLIMIT_CPU, (10, 10))
+        # The longer opt-in observation remains CPU-bounded as well as wall-bounded.
+        resource.setrlimit(resource.RLIMIT_CPU, (30 if extended_startup else 10,
+                                               30 if extended_startup else 10))
         resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
         resource.setrlimit(resource.RLIMIT_FSIZE, (OUTPUT_LIMIT, OUTPUT_LIMIT))
         resource.setrlimit(resource.RLIMIT_NOFILE, (128, 128))
@@ -577,11 +581,14 @@ def child_probe(root, jail, nonce, parent_ids, mount, diagnostic_fd=None, *, use
         try:
             result = subprocess.run(command, env=runtime_env,
                                     stdin=subprocess.DEVNULL, stdout=output,
-                                    stderr=errors, timeout=10, check=False,
+                                    stderr=errors, timeout=30 if extended_startup else 10, check=False,
                                     preexec_fn=drop_runtime_privileges, close_fds=True)
         except subprocess.TimeoutExpired:
             report.update(status="failed", errors=[failure_prefix + "_timeout"])
             report[executed_key] = True
+            if extended_startup:
+                # Timeouts prove only a bounded observation, never a bootstrap phase.
+                report["startup_observation"] = "qq_invoked_watchdog_at_30s"
             if private_display:
                 errors.seek(0)
                 text = errors.read(OUTPUT_LIMIT).decode("ascii", errors="ignore")
@@ -653,7 +660,8 @@ def child_probe(root, jail, nonce, parent_ids, mount, diagnostic_fd=None, *, use
 
 
 def probe(qq_root, execute=False, private_diagnostics=None, *, userns_control=False,
-          filesystem_mode="chroot", native_load_control=False, private_display=False):
+          filesystem_mode="chroot", native_load_control=False, private_display=False,
+          extended_startup=False):
     """Validate by default; explicit pivot/display modes never change execution consent."""
     report = base_report(userns_control=userns_control, native_load_control=native_load_control)
     if userns_control and native_load_control:
@@ -665,6 +673,8 @@ def probe(qq_root, execute=False, private_diagnostics=None, *, userns_control=Fa
         return report
     try:
         validate_private_display_mode(private_display, filesystem_mode, userns_control, native_load_control)
+        if extended_startup and not private_display:
+            raise ProbeError("extended_startup_requires_private_display")
     except ProbeError as exc:
         report.update(status="refused", errors=[str(exc)])
         return report
@@ -715,11 +725,14 @@ def probe(qq_root, execute=False, private_diagnostics=None, *, userns_control=Fa
             if private_display:
                 args.insert(1, "--ipc")
                 args.append("--private-display")
+            if extended_startup:
+                args.append("--extended-startup")
             private_kwargs = {}
             if diagnostic_fd is not None:
                 args.extend(["--private-diagnostic-fd", str(diagnostic_fd)])
                 private_kwargs["pass_fds"] = (diagnostic_fd,)
-            result = subprocess.run(args, env=minimal_environment(), timeout=15,
+            result = subprocess.run(args, env=minimal_environment(),
+                                    timeout=35 if extended_startup else 15,
                                     stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                     stderr=subprocess.DEVNULL, check=False, start_new_session=True,
                                     close_fds=True, **private_kwargs)
@@ -732,6 +745,8 @@ def probe(qq_root, execute=False, private_diagnostics=None, *, userns_control=Fa
             for key in ("status", "runtime_executed", "runtime_launch_attempted", "runtime_versions_verified", "versions", "errors", "platform", "arch", "isolation", "runtime_exit_code", "runtime_failure_category", "missing_library", "control_executed", "control_launch_attempted", "control_status", "control_exit_code", "control_failure_category", "user_namespace_creation_verified"):
                 if key in child:
                     report[key] = child[key]
+            if extended_startup and child.get("startup_observation") == "qq_invoked_watchdog_at_30s":
+                report["startup_observation"] = "qq_invoked_watchdog_at_30s"
             if private_display:
                 if type(child.get("runtime_record_present")) is bool:
                     report["runtime_record_present"] = child["runtime_record_present"]
@@ -789,6 +804,8 @@ def main(argv=None):
                         help="Run trusted user-namespace control instead of QQ; still needs --execute")
     parser.add_argument("--private-display", action="store_true",
                         help="Private authenticated Xvfb inside pivot-root runtime only; no host display")
+    parser.add_argument("--extended-startup", action="store_true",
+                        help="Opt-in 30-second QQ observation, only with private authenticated display")
     parser.add_argument("--report", type=Path)
     parser.add_argument("--private-diagnostics", type=Path,
                         help="New outside-repository owner-only raw stderr file (16 KiB max); sensitive, do not share")
@@ -802,7 +819,7 @@ def main(argv=None):
     # Static inspection is a separate offline mode: reject all runtime options even
     # when the caller explicitly grants --execute (consent cannot alter this gate).
     if args.bootstrap_readiness:
-        if (args.child or args.execute or args.private_display or args.private_diagnostics
+        if (args.child or args.execute or args.private_display or args.extended_startup or args.private_diagnostics
                 or args.filesystem_mode != "chroot" or args.report is not None):
             parser.error("bootstrap-readiness permits only --qq-root")
         report = inspect_bootstrap(args.qq_root)
@@ -818,7 +835,7 @@ def main(argv=None):
                                  filesystem_mode=args.filesystem_mode,
                                  pivot_tool=args.pivot_tool, umount_tool=args.umount_tool,
                                   native_load_control=args.native_load_control,
-                                  private_display=args.private_display)
+                                  private_display=args.private_display, extended_startup=args.extended_startup)
         except Exception:
             # Child errors are intentionally fixed and redacted; no host traceback.
             report.update(status="failed", errors=["isolation_setup_or_probe_failed"])
@@ -832,6 +849,8 @@ def main(argv=None):
             kwargs["native_load_control"] = True
         if args.private_display:
             kwargs["private_display"] = True
+        if args.extended_startup:
+            kwargs["extended_startup"] = True
         if args.private_diagnostics is not None:
             kwargs["private_diagnostics"] = args.private_diagnostics
         report = probe(args.qq_root, **kwargs)
