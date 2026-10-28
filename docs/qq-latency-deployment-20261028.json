@@ -1,0 +1,20 @@
+{
+  "date": "2026-10-28",
+  "deployed_code_commit": "7af432c7ada89f1c8727c6cfe3b26934b8d52502",
+  "native_reload_active": true,
+  "changed_plugin_files": ["main.py", "conversation_context.py"],
+  "astrbot_pid_unchanged": true,
+  "qq_transport_start_unchanged": true,
+  "qq_online_and_good": true,
+  "temporary_release_access_revoked": true,
+  "tests": {"full_passed": 2788, "full_skipped": 32, "subtests_passed": 97, "post_paging_targeted_passed": 57},
+  "before_sample": {"paired_requests": 39, "model_seconds_median": 30.887, "model_seconds_max": 121.153, "prompt_tokens_median": 139412},
+  "measured_archive_projection": {"retained_archive_records": 100, "old_observation_bytes": 188735, "new_observation_bytes": 18401, "automatic_prompt_records": 12, "omitted_from_automatic_prompt": 88, "archive_modified": false},
+  "after_single_local_probe": {"model_seconds": 22.686, "prompt_tokens": 79805, "output_recorded": true, "qq_message_sent_for_test": false},
+  "limits": [
+    "The local probe has no prior tool observations and is not a controlled comparison with the busy QQ scope.",
+    "Observation-section byte reduction is not a proven end-to-end response-time reduction.",
+    "Existing shared history, persona, tools, execution FIFO and provider configuration remain unchanged.",
+    "Budgeted working-context selection is not lossless compression; omitted archive records remain available through paginated tool_observations."
+  ]
+}
