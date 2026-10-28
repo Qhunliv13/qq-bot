@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-28",
+  "deployed_plugin_commit": "3b1b7483069da3c3dce9a786d2b5dbb5d238c92e",
+  "previous_plugin_commit": "7201c494cf5ac4548efd74119a308baa60a124b5",
+  "deployment": {
+    "method": "existing controlled release_apply exact-plugin native reload",
+    "changed_files": ["local_runtime.py", "main.py", "task_delivery.py", "task_event.py"],
+    "backup_retained": true,
+    "full_plugin_hash_match": true,
+    "full_plugin_files_verified": 48,
+    "temporary_release_credential_revoked": true,
+    "astrbot_process_unchanged": true,
+    "qq_transport_start_time_unchanged": true,
+    "qq_online": true,
+    "qq_logged_in": true,
+    "existing_state_paths_preserved": true,
+    "static_configuration_hashes_unchanged": 5,
+    "initial_controller_exit": "postcheck_failed_on_mutable_autonomy_file_hash",
+    "reconciliation": "Five static configs unchanged. autonomy.json includes active runtime cursors and changed while running. No before settings-only snapshot exists, so those individual settings are not independently claimed unchanged. No state rollback or second deployment was performed."
+  },
+  "validation": {
+    "windows_full_suite_passed": 2787,
+    "windows_full_suite_skipped": 32,
+    "windows_subtests_passed": 97,
+    "linux_root_socket_tests_passed": 33,
+    "local_health_ok": true,
+    "actual_local_model_turn_ok": true,
+    "actual_local_output_recorded": true,
+    "registered_tools": 106,
+    "production_offline_probes": ["mention policy", "fact/private provenance", "task claims", "message transfer", "explicit publication"],
+    "diagnostic_qq_message_requested": false,
+    "qq_end_to_end_reply_tested": false
+  },
+  "scope": {
+    "same_live_plugin_instance": true,
+    "same_persona_model_tools_memory_tasks_and_execution_lock": true,
+    "foreground_input_requires_qq_event": false,
+    "qq_remains_optional_native_capability": true,
+    "astrbot_lifecycle_dependency_removed": false,
+    "qq_backend_replaced": false,
+    "private_histories_merged_into_public_pool": false,
+    "new_public_network_listener": false,
+    "all_106_tools_executed_against_production": false
+  }
+}
