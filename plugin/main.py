@@ -822,8 +822,17 @@ class HiganPlugin(Star):
                 quote["sender"] = sender
                 record["quote"] = quote
         observations = []
+        observation_window = None
         try:
-            observations = self._tool_evidence().recent(group)
+            # Reuse the archive's existing configurable prompt budget, not its
+            # full retention window. Complete records remain queryable via the
+            # existing tool_observations tool and are never deleted by selection.
+            archive = self._tool_evidence()
+            window = json.loads(archive.prompt(group))
+            observations = window["observations"]
+            observation_window = {"source": "tool_observation_archive", "retained": len(observations),
+                                  "omitted": window["omitted"], "max_chars": archive.max_prompt_chars,
+                                  "detail_tool": "tool_observations"}
         except Exception as exc:
             logger.warning("[higan] 工具观察读取失败：%s", type(exc).__name__)
         from .conversation_state import snapshot as conversation_snapshot
@@ -843,7 +852,7 @@ class HiganPlugin(Star):
             attachment_origins=origins if origins else None,
             anchor_message_id=str(getattr(getattr(event, "message_obj", None), "message_id", "") or ""),
             history_context=turn.get("history_context"), conversation_state=state,
-            deliveries=turn.get("_deliveries", []))
+            deliveries=turn.get("_deliveries", []), observation_window=observation_window)
 
     def _record_visible_reply(self, group: str, text: str, record: dict | None = None) -> None:
         """Retain legacy text history plus optional actual send provenance, never inferred receipts."""
@@ -1767,8 +1776,8 @@ class HiganPlugin(Star):
                {"query": {"type": "string"}}, ["query"]),
             _f("web_fetch", "读取公开 HTTP(S) 网页正文及来源；不访问内网或本机地址。",
                {"url": {"type": "string"}}, ["url"]),
-            _f("tool_observations", "查看本会话此前工具执行结果（含时间和成败），不会自动重新执行动作。",
-               {"limit": {"type": "integer"}}),
+            _f("tool_observations", "查看本会话此前工具执行结果（含时间和成败）；offset 从最新记录向前翻页，不会自动重新执行动作。",
+               {"limit": {"type": "integer"}, "offset": {"type": "integer", "minimum": 0}}),
             _f("vm_shot", "给她自己的虚拟机屏幕截图，返回截图文件路径"),
             _f("vm_browse", "在她的浏览器里打开一个网址", {"url": {"type": "string"}}, ["url"]),
             _f("vm_click_confirm", "确认点击：真点上一次预预览过的那个点（先 preview 再 confirm）"),
@@ -2158,6 +2167,7 @@ class HiganPlugin(Star):
             # Optional diagnostics must never break a model request or change it.
             logger.warning("[higan] prefix_metrics_unavailable type=%s", type(exc).__name__)
         body = json.dumps(payload).encode("utf-8")
+        request_started = time.monotonic()
 
         def _call() -> dict:
             """同步提交模型请求并解析 JSON，由外层在线程执行。"""
@@ -2169,6 +2179,10 @@ class HiganPlugin(Star):
 
         try:
             data = await asyncio.to_thread(_call)
+            # Numeric request timing isolates provider cost from queue/send latency;
+            # no prompt, destination, model credential or user identity is logged.
+            logger.info("[higan] model_latency request_index=%s seconds=%.3f request_bytes=%d",
+                        request_index, time.monotonic() - request_started, len(body))
         except Exception as exc:  # noqa: BLE001
             # 记录服务端错误响应以定位不合法字段。
             _detail = ""
@@ -2431,7 +2445,19 @@ class HiganPlugin(Star):
                     "next_checks": state["next_checks"], "last_run": state["last_run"]}
         if name == "tool_observations":
             limit = max(1, min(20, int(args.get("limit") or 8)))
-            return {"ok": True, "scope": scope, "observations": self._tool_evidence().recent(scope, limit)}
+            offset = args.get("offset", 0)
+            if type(offset) is not int or offset < 0:
+                return {"ok": False, "error": "invalid_observation_offset"}
+            archive_records = self._tool_evidence().recent(scope)
+            end = max(0, len(archive_records) - offset)
+            page = archive_records[max(0, end - limit):end]
+            result = {"ok": True, "scope": scope, "observations": page}
+            if "offset" in args:
+                # Explicit paging exposes all retained records without attaching
+                # the entire archive to every unrelated model request.
+                result.update(offset=offset, total=len(archive_records),
+                              has_more=end > len(page))
+            return result
         if name in ("image_search", "page_images"):
             from .image_search import search, extract_page
             try:

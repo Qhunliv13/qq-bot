@@ -30,6 +30,7 @@ def build_context(
     history_context: Any = None,
     conversation_state: Any = None,
     deliveries: Any = None,
+    observation_window: Any = None,
 ) -> str:
     """Serialize caller-provided JSON data with distinct origins and no I/O.
 
@@ -79,6 +80,9 @@ def build_context(
         envelope["conversation_state"] = conversation_state
     if deliveries is not None:
         envelope["deliveries"] = deliveries
+    if observation_window is not None:
+        # Selection is explicit metadata, not lost archive records or new authority.
+        envelope["observation_window"] = observation_window
     return json.dumps(envelope, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
 
 
