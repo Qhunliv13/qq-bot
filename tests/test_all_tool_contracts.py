@@ -69,7 +69,7 @@ def test_catalog_exposes_unique_neutral_tool_schemas(report):
 
 
 def test_new_native_contracts_use_reviewed_receipts_and_actions(report):
-    """The seven additions execute trusted native routes, not generic success stubs."""
+    """Reviewed additions execute trusted native routes, not generic success stubs."""
     rows = {row["name"]: row for row in report["tools"]}
     for name in {*AUDIT.EXPECTED_SOCIAL_ACTIONS, "autonomy_status", "autonomy_schedule"}:
         assert rows[name]["handler_body_executed"], rows[name]
@@ -78,6 +78,13 @@ def test_new_native_contracts_use_reviewed_receipts_and_actions(report):
     assert rows["qq_set_signature"]["result"]["verification"] == {"state": "matched", "matched": True}
     assert rows["qq_publish_post"]["result"]["outcome"] == "accepted"
     assert rows["qq_publish_post"]["result"]["verification"]["published"] is None
+    inspection = rows["qq_group_inspect"]
+    assert inspection["result"]["info"] == {"group_id": 42, "group_name": "fixture", "member_count": 2}
+    assert [member["user_id"] for member in inspection["result"]["members"]] == [10001, 10002]
+    # Native cards can resemble bot names without proving any bot classification.
+    assert inspection["result"]["bot_count"] is None
+    assert inspection["result"]["bot_classification_complete"] is False
+    assert inspection["onebot_actions"] == []
     assert rows["qq_social_status"]["result"]["runtime_verified"] is False
     assert rows["autonomy_schedule"]["result"]["settings"]["interval_seconds"] == 600
 
@@ -85,7 +92,7 @@ def test_new_native_contracts_use_reviewed_receipts_and_actions(report):
 def test_request_contracts_distinguish_unavailable_from_route_errors(report):
     """All six native handlers execute while exactly three remain honestly unavailable."""
     rows = {row["name"]: row for row in report["tools"]}
-    assert report["result_quality_counts"] == {"acknowledged": 104, "capability_unavailable": 3}
+    assert report["result_quality_counts"] == {"acknowledged": 105, "capability_unavailable": 3}
     for name in AUDIT.REQUEST_NAMES:
         assert rows[name]["handler_body_executed"] and rows[name]["boundary_contract_matches"], rows[name]
         assert rows[name]["result_quality"]["contract_satisfied"] is True
@@ -168,7 +175,7 @@ def test_generic_success_cannot_mask_wrong_transfer_native_action(tmp_path, monk
 def test_imported_workspace_discovery_and_workers_execute_real_contracts(report):
     """All additive classes require native receipts and locally exercised helpers."""
     rows = {row["name"]: row for row in report["tools"]}
-    assert report["effective_schema_count"] == report["canonical_schema_count"] == 107
+    assert report["effective_schema_count"] == report["canonical_schema_count"] == 108
     assert report["workspace_helpers_executed"] >= 20
     assert report["native_worker_calls"]
     assert {row["status"] for row in report["native_worker_receipts"]} == {"completed", "cancelled"}
@@ -419,7 +426,7 @@ def test_native_provider_honors_explicit_worker_schema_snapshot(tmp_path, monkey
     assert requests[0]["tools"] == snapshot
     assert requests[1]["tools"] == parent
     assert len(requests[0]["tools"]) == 1
-    assert len(requests[1]["tools"]) == 107
+    assert len(requests[1]["tools"]) == 108
     assert explicit == snapshot
     assert plugin._tool_schemas() == parent
 

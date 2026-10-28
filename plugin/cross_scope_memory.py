@@ -216,8 +216,16 @@ class CrossScopeMemory:
             more_available = total_count > len(selected)
         else:
             more_available = more_available or len(rows) > limit
+        # Archive discovery and selected evidence are distinct: a busy group may
+        # occupy the whole shared window without erasing another group's store.
+        # These are observed archive IDs, not a joined-group or participant census.
+        archive_scopes = sorted(scopes, key=lambda value: (int(value), value))
+        returned_scopes = {str(row["scope"]) for row in selected}
         coverage = {"returned": len(selected), "limit": limit,
-                    "more_available": more_available, "scope_count": scope_count}
+                    "more_available": more_available, "scope_count": scope_count,
+                    "archive_scopes": archive_scopes,
+                    "returned_scopes": [scope for scope in archive_scopes
+                                        if scope in returned_scopes]}
         if cache_block_size:
             # Coverage follows the record body; changing diagnostics therefore
             # cannot invalidate the immutable history prefix preceding them.
@@ -229,10 +237,15 @@ class CrossScopeMemory:
 
     def search(self, keyword: str, current_scope: str, scope: str = "", limit: int = 10,
                muted=()) -> list[dict]:
-        """Search stored lines and native string values in visible scopes, never a global glob."""
+        """Search visible archives, or read one explicit scope when keyword is empty.
+
+        An omitted keyword never opens an unscoped archive scan. Explicit reads
+        share the same native-private authorization, mute policy and provenance
+        as keyword searches; the selected scope is not inferred from query text.
+        """
         keyword, current_scope, scope = str(keyword or "").strip(), str(current_scope), str(scope)
         muted = tuple(str(value) for value in muted)
-        if not keyword or limit <= 0:
+        if (not keyword and not scope) or limit <= 0:
             return []
         if scope:
             if not visible_scope(scope, current_scope, muted):
@@ -251,7 +264,7 @@ class CrossScopeMemory:
             for row in self.recorder.load_records(candidate, limit=None):
                 # Search intact native values as well as legacy capped display
                 # text; metadata keys themselves are not message content.
-                if keyword in row["line"] or any(
+                if not keyword or keyword in row["line"] or any(
                         keyword in text for text in _record_text_values(row.get("record"))):
                     item = deepcopy(row)
                     item["source"] = deepcopy(SOURCE)

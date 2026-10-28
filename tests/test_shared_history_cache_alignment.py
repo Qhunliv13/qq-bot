@@ -58,7 +58,8 @@ def test_default_remains_exact_and_uses_legacy_reader(memory_module):
     assert len(result["records"]) == 240
     assert result["records"][0]["ts"] == 61
     assert recorder.calls == [("legacy", "1", 241)]
-    assert set(result["coverage"]) == {"returned", "limit", "more_available", "scope_count"}
+    assert set(result["coverage"]) == {"returned", "limit", "more_available", "scope_count",
+                                        "archive_scopes", "returned_scopes"}
     assert memory_module.DEFAULT_SHARED_CACHE_BLOCK == 30
 
 

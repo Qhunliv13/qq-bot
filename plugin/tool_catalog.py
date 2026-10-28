@@ -16,6 +16,7 @@ from .image_search import schema as image_schema
 from .qq_requests import schema as request_schema
 from .message_transfer import schema as transfer_schema
 from .fact_tools import schemas as fact_schema
+from .group_inspection import schemas as group_inspection_schema
 
 
 # Keys follow the distinct names declared by the native schema builders. Values
@@ -81,7 +82,7 @@ TOOL_DESCRIPTIONS = {
     "task_add": "添加后台任务。run_at 为绝对 Unix 秒、delay_s 为相对延迟，不能混用；fixed_rate 保持周期相位且跳过错过轮次。返回状态和实际到期时间，创建不代表已执行或已送达。",
     "read_forward": "根据转发标识读取合并转发消息的内容。",
     "forward_expand": "根据转发标识或消息号展开合并转发消息中的各条内容。",
-    "history_search": "按关键词搜索聊天档案，支持限定会话范围和结果数量。",
+    "history_search": "读取已记录的聊天档案；指定可见群号 scope 时可省略 keyword 读取该群最近记录，否则按关键词搜索。全局最近窗口没出现不代表该群没有记录。",
     "task_list": "按范围和状态列出后台任务。",
     "task_done": "将指定后台任务标记为完成并停止后续调度。",
     "task_cancel": "取消指定后台任务。",
@@ -94,7 +95,7 @@ TOOL_DESCRIPTIONS = {
 
 # Import-owned schemas own their descriptions as well as their argument contracts.
 # This snapshot shares metadata without duplicating tool implementations or prose.
-for schema_builder in (social_schema, workspace_schema, discovery_schema, delegation_schema, planning_schema, interim_schema, image_schema, request_schema, transfer_schema, fact_schema):
+for schema_builder in (social_schema, workspace_schema, discovery_schema, delegation_schema, planning_schema, interim_schema, image_schema, request_schema, transfer_schema, fact_schema, group_inspection_schema):
     TOOL_DESCRIPTIONS.update({item["function"]["name"]: item["function"]["description"]
                               for item in schema_builder()})
 NATIVE_TOOL_COUNT = len(TOOL_DESCRIPTIONS)

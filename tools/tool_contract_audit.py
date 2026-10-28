@@ -83,6 +83,7 @@ CASES = {
     "qq_copy_message": {"source_group_id": 42, "message_id": 82001},
     "qq_paste_message": {"clipboard_id": "SEEDED", "target_group_id": 43,
                          "operation_id": "audit-transfer-paste"},
+    "qq_group_inspect": {"group_id": "42", "offset": 0, "limit": 50},
     "qq_account_info": {},
     "qq_set_signature": {"signature": "contract signature", "operation_id": "audit-signature"},
     "qq_publish_post": {"content": "contract post", "visibility": "private", "operation_id": "audit-post"},
@@ -154,6 +155,7 @@ EXPECTED_UNAVAILABLE = {
 REQUEST_NAMES = {"qq_request_capabilities", "qq_requests", "qq_request_decide", *EXPECTED_UNAVAILABLE}
 # These expectations are independent of the social router and its schema metadata.
 EXPECTED_SOCIAL_ACTIONS = {
+    "qq_group_inspect": ["get_group_info", "get_group_member_list"],
     "qq_account_info": ["get_login_info", "get_stranger_info"],
     "qq_set_signature": ["set_self_longnick", "get_login_info", "get_stranger_info"],
     "qq_publish_post": ["send_qzone_msg"],
@@ -495,7 +497,17 @@ class AuditHarness:
                 "group_id": 42, "message_type": "group", "message_id": params["message_id"],
                 "sender": {"user_id": 10001, "nickname": "Native fixture sender"},
                 "message": [{"type": "text", "data": {"text": "contract source message"}}]}}
+        if action in {"get_group_info", "get_group_member_list"}:
+            # Both native reads must preserve the explicit group and fresh-read flag.
+            if params != {"group_id": 42, "no_cache": True}:
+                self.denied.append("unapproved group inspection payload")
+                raise AssertionError("unexpected group inspection payload")
         social_data = {
+            "get_group_info": {"group_id": 42, "group_name": "fixture", "member_count": 2},
+            # Absent is_bot is intentional: names/cards must never imply bot identity.
+            "get_group_member_list": [
+                {"user_id": 10001, "nickname": "fixture one", "card": "fixture bot"},
+                {"user_id": 10002, "nickname": "fixture two", "card": "fixture member"}],
             "get_login_info": {"user_id": 90001, "nickname": "fixture"},
             "get_stranger_info": {"long_nick": self.signature},
             "set_self_longnick": None, "set_qq_profile": None,
@@ -884,7 +896,21 @@ async def _audit(root, monkeypatch, batch_size):
         elif name in EXPECTED_SOCIAL_ACTIONS:
             native_edges = [edge for edge in entry["stubbed_edges"] if edge["edge"] == "onebot_http"]
             entry["boundary_contract_matches"] = [edge["action"] for edge in native_edges] == EXPECTED_SOCIAL_ACTIONS[name]
-            if name == "qq_set_signature":
+            if name == "qq_group_inspect":
+                # Require real native list provenance, including honest unknown bot coverage.
+                entry["boundary_contract_matches"] = (
+                    entry["boundary_contract_matches"]
+                    and all(edge["params"] == {"group_id": 42, "no_cache": True} for edge in native_edges)
+                    and result.get("info") == {"group_id": 42, "group_name": "fixture", "member_count": 2}
+                    and result.get("members") == [
+                        {"user_id": 10001, "nickname": "fixture one", "card": "fixture bot"},
+                        {"user_id": 10002, "nickname": "fixture two", "card": "fixture member"}]
+                    and result.get("returned") == result.get("total_returned_by_api") == 2
+                    and "bot_count" in result and result["bot_count"] is None
+                    and result.get("bot_classification_complete") is False
+                    and result.get("offset") == 0 and result.get("more_available") is False
+                    and not event.actions and not event.sent)
+            elif name == "qq_set_signature":
                 entry["boundary_contract_matches"] = entry["boundary_contract_matches"] and native_edges[0]["params"] == {"longNick": args["signature"]} and result.get("verification") == {"state": "matched", "matched": True}
             elif name == "qq_publish_post":
                 entry["boundary_contract_matches"] = entry["boundary_contract_matches"] and native_edges[0]["params"] == {"content": args["content"], "ugc_right": 64} and result.get("outcome") == "accepted" and result.get("tid") == "offline-contract-post"

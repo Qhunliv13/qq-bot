@@ -1785,6 +1785,7 @@ class HiganPlugin(Star):
         from .qq_requests import schema as requests_schema
         from .message_transfer import schema as transfer_schema
         from .fact_tools import schemas as fact_schema
+        from .group_inspection import schemas as group_inspection_schema
         return neutralize_schemas([
             _f("web_search", "搜索公开网页，返回来源标题、URL和摘要；按需要调用而非固定触发。",
                {"query": {"type": "string"}}, ["query"]),
@@ -1913,7 +1914,7 @@ class HiganPlugin(Star):
                 "reason": {"type": "string"}, "scopes": {"type": "array", "items": {"type": "string"}}}),
             _f("vm_job_list", "列出机器人虚拟机内受管后台脚本的状态摘要，不读取输出日志。",
                {"offset": {"type": "integer"}, "limit": {"type": "integer"}}),
-        ] + list(self._task_tool_schemas()) + social_schema() + workspace_schema() + discovery_schema() + delegation_schema() + planning_schema() + interim_schema() + image_schema() + requests_schema() + transfer_schema() + fact_schema())
+        ] + list(self._task_tool_schemas()) + social_schema() + workspace_schema() + discovery_schema() + delegation_schema() + planning_schema() + interim_schema() + image_schema() + requests_schema() + transfer_schema() + fact_schema() + group_inspection_schema())
 
     def _as_llm_url(self, ref) -> str:
         """把图片引用转成 LLM 能接受的 URL（data: / http(s)）。
@@ -2282,9 +2283,9 @@ class HiganPlugin(Star):
             _f("forward_expand", "展开一条合并转发，逐条读出谁说了什么"
                "（用上下文里 [转发聊天记录 … id=xxx] 的 id，或直接给消息号）",
                {"id": {"type": "string"}, "msg_id": {"type": "string"}}, []),
-            _f("history_search", "翻**聊天档案**（完整历史，含我已遗忘的部分）：某人以前说过什么、之前发生过的对话都从这里查；可按群限定、按关键词过滤",
+            _f("history_search", "读取已记录的聊天档案；scope 指定可见群号时 keyword 可省略以读取该群最近记录，否则按关键词检索。全局窗口未出现不代表没有历史。",
                {"keyword": {"type": "string"}, "scope": {"type": "string"},
-                "limit": {"type": "integer"}}, ["keyword"]),
+                "limit": {"type": "integer"}}),
             _f("task_list", "查看后台任务及执行状态，可包含已暂停/已完成任务",
                {"scope": {"type": "string"}, "status": {"type": "string"},
                 "only_active": {"type": "boolean"}}),
@@ -2528,6 +2529,12 @@ class HiganPlugin(Star):
             return await resolve(event, forward_id=str(args.get("id") or "").strip() or None,
                                  message_id=str(args.get("msg_id") or "").strip().lstrip("#") or None)
 
+        if name == "qq_group_inspect":
+            from .group_inspection import inspect as inspect_group
+            async def read_group(action, parameters):
+                """Reuse the authenticated, read-only native bridge without changing the event origin."""
+                return await asyncio.to_thread(self._onebot_http, action, parameters)
+            return await inspect_group(args, read_group)
         if name == "history_search":
             try:
                 from .cross_scope_memory import CrossScopeMemory, visible_scope
@@ -2536,12 +2543,24 @@ class HiganPlugin(Star):
                 muted = ()
                 if requested and not visible_scope(requested, str(scope), muted=muted):
                     return {"ok": False, "error": "history_scope_not_visible"}
+                limit = args.get("limit", 10)
+                if type(limit) is not int or not 1 <= limit <= 500:
+                    return {"ok": False, "error": "invalid_history_limit"}
+                keyword = args.get("keyword", "")
+                if not isinstance(keyword, str):
+                    return {"ok": False, "error": "invalid_history_keyword"}
+                if not keyword.strip() and not requested:
+                    return {"ok": False, "error": "history_keyword_or_scope_required"}
                 hits = CrossScopeMemory(self._hist()).search(
-                    str(args.get("keyword") or ""), str(scope), scope=requested,
-                    limit=int(args.get("limit") or 10), muted=muted)
+                    keyword, str(scope), scope=requested, limit=limit + 1, muted=muted)
             except Exception as exc:
                 return {"ok": False, "error": type(exc).__name__}
-            return {"ok": True, "count": len(hits), "hits": hits}
+            more = len(hits) > limit
+            hits = hits[:limit]
+            return {"ok": True, "count": len(hits), "hits": hits,
+                    "coverage": {"scope": requested or None, "returned": len(hits),
+                                 "limit": limit, "more_available": more,
+                                 "source": "recorded_history", "live_membership_verified": False}}
         if name == "self_status":
             # 返回可观察的自身状态，不包含密钥。
             _cfg_path = os.path.join(HIGAN_ROOT, "groups.json")

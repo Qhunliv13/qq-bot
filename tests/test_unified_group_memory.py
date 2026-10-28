@@ -40,7 +40,9 @@ def test_all_public_groups_one_chronological_timeline(modules, tmp_path):
     assert result["source"] == {"name": "unified_group_memory", "trust": "untrusted_data"}
     assert result["mode"] == "one_shared_timeline"
     assert result["coverage"] == {"returned": 3, "limit": 240,
-                                  "more_available": False, "scope_count": 3}
+                                  "more_available": False, "scope_count": 3,
+                                  "archive_scopes": ["1", "2", "3"],
+                                  "returned_scopes": ["1", "2", "3"]}
     assert modules[1].DEFAULT_SHARED_LIMIT == 240
 
 
