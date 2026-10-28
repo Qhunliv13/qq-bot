@@ -405,3 +405,160 @@ def test_userns_control_child_uses_existing_isolation(monkeypatch, tmp_path, ret
     assert "runtime_exit_code" not in report
     assert report["versions"] == {}
     assert report["isolation"]["effective_capabilities_zero"] is True
+
+
+@pytest.mark.parametrize("mode", ["pivot-root", "unknown"])
+def test_filesystem_mode_is_not_execution_consent(monkeypatch, software, mode):
+    """A selected mode cannot run commands, and an unknown enum refuses early."""
+    linux(monkeypatch)
+    runner = Mock(side_effect=AssertionError("execution forbidden"))
+    monkeypatch.setattr(probe.subprocess, "run", runner)
+    report = probe.probe(software, filesystem_mode=mode)
+    assert report["status"] == ("not_executed" if mode == "pivot-root" else "refused")
+    assert report["runtime_executed"] is False
+    assert report["filesystem_mode"] == mode
+    runner.assert_not_called()
+
+
+@pytest.mark.parametrize("missing", ["pivot_root", "umount"])
+def test_missing_pivot_tools_refuse_without_exec(monkeypatch, software, missing):
+    """Both host helpers are required before any helper or diagnostic creation."""
+    linux(monkeypatch)
+    monkeypatch.setattr(probe.os, "geteuid", lambda: 0, raising=False)
+    monkeypatch.setattr(probe.shutil, "which", lambda name, **kwargs: None if name == missing else str(software / name))
+    runner = Mock(side_effect=AssertionError("execution forbidden"))
+    monkeypatch.setattr(probe.subprocess, "run", runner)
+    report = probe.probe(software, True, filesystem_mode="pivot-root")
+    assert report["errors"] == ["pivot_tools_missing_or_untrusted"]
+    runner.assert_not_called()
+
+
+@pytest.mark.parametrize("tool", [None, "relative", "/untrusted/pivot_root"])
+def test_child_untrusted_pivot_tools_refuse_before_mount(monkeypatch, software, tool):
+    """Internal child arguments cannot nominate a non-resolved privileged helper."""
+    monkeypatch.setattr(probe.shutil, "which", lambda name, **kwargs: str(software / name))
+    runner = Mock(side_effect=AssertionError("must not mount"))
+    monkeypatch.setattr(probe, "run_checked", runner)
+    with pytest.raises(probe.ProbeError, match="pivot_tools_missing_or_untrusted"):
+        probe.child_probe(software, software, "nonce", {}, "mount",
+                          filesystem_mode="pivot-root", pivot_tool=tool,
+                          umount_tool=str(software / "umount"))
+    runner.assert_not_called()
+
+
+def test_pivot_parent_injects_tools_and_preserves_private_fd_last(monkeypatch, software):
+    """Only opt-in adds pivot args; private FD transport remains last and private."""
+    linux(monkeypatch)
+    monkeypatch.setattr(probe.os, "geteuid", lambda: 0, raising=False)
+    monkeypatch.setattr(probe.shutil, "which", lambda name, **kwargs: str(software / name))
+    monkeypatch.setattr(probe, "namespace_ids", lambda: {k: k for k in probe.NAMESPACES})
+    monkeypatch.setattr(probe, "open_private_diagnostics", Mock(return_value=91))
+    monkeypatch.setattr(probe.os, "close", Mock())
+    child = probe.base_report(userns_control=True)
+    child.update(status="observed", control_executed=True, user_namespace_creation_verified=True)
+    runner = Mock(return_value=subprocess.CompletedProcess([], 0, json.dumps(child).encode()))
+    monkeypatch.setattr(probe.subprocess, "run", runner)
+    report = probe.probe(software, True, "private", userns_control=True, filesystem_mode="pivot-root")
+    args = runner.call_args.args[0]
+    assert args[args.index("--filesystem-mode") + 1] == "pivot-root"
+    assert args[args.index("--pivot-tool") + 1] == str(software / "pivot_root")
+    assert args[args.index("--umount-tool") + 1] == str(software / "umount")
+    assert args[-2:] == ["--private-diagnostic-fd", "91"]
+    assert report["filesystem_mode"] == "pivot-root"
+    assert report["runtime_executed"] is False
+    assert report["runtime_versions_verified"] is False
+
+
+@pytest.mark.parametrize("failure", [None, "pivot", "identity", "umount"])
+def test_pivot_root_sequence_fails_closed(monkeypatch, failure):
+    """Mock every kernel effect, pinning replacement, identity, detach and removal order."""
+    events = []
+    jail = Mock()
+    jail.stat.return_value = Mock(st_dev=7, st_ino=11)
+    monkeypatch.setattr(probe.os, "chdir", lambda path: events.append(("cwd", path)))
+    monkeypatch.setattr(probe.os, "stat", lambda path: Mock(st_dev=7, st_ino=12 if failure == "identity" else 11))
+    monkeypatch.setattr(probe.os, "rmdir", lambda path: events.append(("remove", path)))
+    monkeypatch.setattr(probe, "Path", lambda path: Mock(exists=lambda: False))
+
+    def setup_command(args):
+        """Represent setup failure before any runtime or privilege hook exists."""
+        events.append(tuple(args))
+        if (failure == "pivot" and args[0] == "pivot") or (failure == "umount" and args[0] == "umount"):
+            raise subprocess.CalledProcessError(1, args)
+
+    monkeypatch.setattr(probe, "run_checked", setup_command)
+    if failure:
+        with pytest.raises((probe.ProbeError, subprocess.CalledProcessError)):
+            probe.enter_filesystem_root(jail, "pivot-root", "pivot", "umount")
+        assert ("remove", "/.old-root") not in events
+    else:
+        probe.enter_filesystem_root(jail, "pivot-root", "pivot", "umount")
+        assert events == [("cwd", jail), ("pivot", ".", ".old-root"), ("cwd", "/"),
+                          ("umount", "--lazy", "--", "/.old-root"), ("remove", "/.old-root")]
+
+
+@pytest.mark.parametrize("detach_failure", [False, True])
+def test_pivot_child_selfbind_before_nested_mounts_and_exec(monkeypatch, tmp_path, detach_failure):
+    """A trusted control follows successful pivot only; failed detach blocks all exec."""
+    import sys
+
+    monkeypatch.setitem(sys.modules, "resource", Mock())
+    ids = {k: k + "-child" for k in probe.NAMESPACES}
+    monkeypatch.setattr(probe, "namespace_ids", lambda: ids)
+    events = []
+    monkeypatch.setattr(probe, "run_checked", lambda args: events.append(args))
+    monkeypatch.setattr(probe, "bind_readonly", lambda *args: events.append(["nested"]))
+    monkeypatch.setattr(probe.shutil, "which", lambda name, **kwargs: str(tmp_path / name))
+    monkeypatch.setattr(probe.os, "chown", Mock(), raising=False)
+    jail = tmp_path / "jail"
+    jail.mkdir()
+
+    def enter_root(root, mode, pivot, umount):
+        """Substitute root replacement without touching this test process root."""
+        assert (root, mode, pivot, umount) == (jail, "pivot-root", str(tmp_path / "pivot_root"), str(tmp_path / "umount"))
+        assert (jail / ".old-root").is_dir()
+        events.append(["entered"])
+        if detach_failure:
+            raise probe.ProbeError("old_root_detach_failed")
+
+    monkeypatch.setattr(probe, "enter_filesystem_root", enter_root)
+    runner = Mock(return_value=subprocess.CompletedProcess([], 0))
+    monkeypatch.setattr(probe.subprocess, "run", runner)
+    kwargs = dict(userns_control=True, filesystem_mode="pivot-root",
+                  pivot_tool=str(tmp_path / "pivot_root"), umount_tool=str(tmp_path / "umount"))
+    if detach_failure:
+        with pytest.raises(probe.ProbeError, match="old_root_detach_failed"):
+            probe.child_probe(tmp_path, jail, "nonce", {k: k for k in ids}, "mount", **kwargs)
+        runner.assert_not_called()
+    else:
+        report = probe.child_probe(tmp_path, jail, "nonce", {k: k for k in ids}, "mount", **kwargs)
+        assert runner.call_args.args[0] == ["/usr/bin/unshare", "--user", "--map-root-user", "/usr/bin/true"]
+        assert runner.call_args.kwargs["preexec_fn"] is probe.drop_runtime_privileges
+        assert report["isolation"]["chroot"] is False
+        assert report["isolation"]["pivotRoot"] is True
+        assert report["isolation"]["oldroot_detached"] is True
+        assert report["runtime_executed"] is False
+        assert report["runtime_versions_verified"] is False
+    assert events[0] == ["mount", "--make-rprivate", "/"]
+    assert events[1] == ["mount", "--bind", str(jail), str(jail)]
+    assert events[2] == ["nested"]
+
+
+def test_pivot_cli_forwards_opt_in_without_execution(monkeypatch, capsys):
+    """CLI mode selection reaches validation without becoming execution consent."""
+    fake = Mock(return_value=probe.base_report(userns_control=True))
+    monkeypatch.setattr(probe, "probe", fake)
+    assert probe.main(["--qq-root", "/explicit/QQ", "--filesystem-mode", "pivot-root",
+                       "--userns-control"]) == 0
+    fake.assert_called_once_with("/explicit/QQ", execute=False, filesystem_mode="pivot-root",
+                                 userns_control=True)
+    assert json.loads(capsys.readouterr().out)["runtime_executed"] is False
+
+
+def test_unknown_child_mode_refuses_before_setup(monkeypatch, software):
+    """Non-CLI callers cannot bypass the filesystem enum and reach a mount."""
+    runner = Mock(side_effect=AssertionError("must not mount"))
+    monkeypatch.setattr(probe, "run_checked", runner)
+    with pytest.raises(probe.ProbeError, match="invalid_filesystem_mode"):
+        probe.child_probe(software, software, "nonce", {}, "mount", filesystem_mode="other")
+    runner.assert_not_called()

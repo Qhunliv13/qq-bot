@@ -101,6 +101,25 @@ It is **not implemented or validated by this control**. Do not infer that chroot
 simply be removed or that setuid/native/login testing is authorized.
 See `qq-userns-control-evidence.json` for the actual command outcomes and limitations.
 
+## Detached-root control and actual runtime follow-up
+
+An explicit `--filesystem-mode pivot-root` now self-binds the fresh jail, replaces the
+mount namespace root, verifies the new root's device/inode, detaches the old root and
+removes its newly created empty marker before any runtime/control exec. Defaults remain
+chroot. Namespace checks, read-only binds, UID/capability/NNP checks and supervisor death
+handling are retained. A source-only independent review found no critical issue under
+the trusted-software assumptions; this is not a security certification.
+
+The actual trusted user-namespace control **succeeded** under pivot-root, with no QQ
+execution. The subsequent real QQ version experiment still **failed by timeout**. Its
+private stderr reached GUI initialization and reported missing system DBus and an X
+server/DISPLAY; it did not emit a verified runtime version record. No production display,
+socket, credentials, account state or network was exposed to repair that failure.
+The intended script is Node-only, but the actual QQ build demonstrably reached a GUI
+path; do not claim the executable accepted generic Node-only mode. A next GUI/native
+experiment needs a separately planned private display, not a borrowed production session.
+See `qq-pivot-root-evidence.json` for outcomes, limits and unchanged cutover requirements.
+
 If this step succeeds, the next separate gate is an independently authored, narrowly
 scoped native-binding experiment in the same account-free and network-isolated lab.
 If it fails, record the exact redacted failure and investigate prerequisites without

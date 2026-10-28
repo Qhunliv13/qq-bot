@@ -290,6 +290,26 @@ old-root-detachment boundary rather than removing account/file isolation, enabli
 setuid or disabling Chromium sandboxing. The existing chroot probe must not be treated
 as evidence that independent QQ is impossible. No native/login/feature gate has passed.
 
+## Detached-root and independent-core work (2026-10-28)
+
+A reviewed opt-in pivot-root mode now replaces the private mount namespace root and
+detaches the old root before any unprivileged command runs. The trusted user-namespace
+control succeeded under this boundary. The actual QQ follow-up reached GUI platform
+initialization rather than yielding process.versions, reported missing X/DISPLAY and
+system DBus, and timed out. No login, native API or full runtime initialization was
+verified. No host graphical/session socket was exposed and no protection was disabled.
+See `qq-pivot-root-evidence.json`.
+
+Separately, `BOT_CORE_DECOUPLING.md` designs a bot core that owns identity, memory,
+goals/tasks, model/tool orchestration and output evidence while QQ becomes one connector.
+The new `bot_core` contracts are an offline provenance/routing prototype only; the
+existing engine has not yet been extracted. Decoupling does not require waiting for
+a finished native QQ backend and is not equivalent to replacing that backend.
+
+**Cutover rule strengthened by direct user instruction:** even if every new backend
+and core validation eventually succeeds, do not switch, uninstall, stop or replace the
+existing production transport until the user separately and explicitly instructs it.
+
 ## Next validation gates
 
 1. Complete the installed backend API/event inventory and preserve configuration mappings.

@@ -45,6 +45,10 @@ python -m compileall -q plugin
 
 目标是保留现有个人 QQ、全部功能与数据，完全移除 NapCat 运行依赖；当前已建立依赖清单、离线覆盖检查，以及独立的[事务／事件传输基础模块](qq_transport/README.md)；**尚无可替换的独立原生 QQ 后端**。详见 [实施边界与验收计划](docs/QQ_TRANSPORT_REWRITE.md) 和 [最小已观察契约](docs/qq-transport-required.json)。运行 `python tools/qq_transport_parity_audit.py` 可审查声明覆盖，结果不授权生产切换；现有接入保持不变。
 
+## QQ 作为能力，而非 bot 的生命线（设计中）
+
+[核心解耦设计](docs/BOT_CORE_DECOUPLING.md)将身份、记忆、任务／目标、工具和执行协调归入独立核心，让 QQ 成为接入能力之一。`bot_core/` 当前仅有平台中立的端点、主体和事件契约原型；**没有宣称已抽离运行引擎或实现 QQ 离线任务主机**。旧数据、权限、公共／私密边界和单一执行顺序必须保留；无论新实现测试结果如何，切换生产都要等用户另行明确通知。
+
 ## 版本与档案
 
 当前源码以所检出的 Git 提交及其 tag 为准。历史发布记录、现场报告、本机整理资料与旧补丁脚本集中保存在 [`trash/`](trash/README.md)，原始内容保留以便追溯。档案不代表当前版本、部署事实或操作授权，不据旧记录直接执行补丁。

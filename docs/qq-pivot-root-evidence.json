@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "sample_date": "2026-10-28",
+  "scope": "Local account-free detached-root controls and runtime experiment only; no production access or cutover.",
+  "trusted_control": {
+    "filesystem_mode": "pivot-root",
+    "control_status": "control_succeeded",
+    "control_exit_code": 0,
+    "user_namespace_creation_verified": true,
+    "runtime_executed": false,
+    "runtime_versions_verified": false,
+    "isolation": {
+      "network": true, "mount": true, "pid": true, "pivotRoot": true,
+      "oldroot_detached": true, "unprivileged": true,
+      "no_new_privileges": true, "effective_capabilities_zero": true
+    }
+  },
+  "runtime_attempt": {
+    "filesystem_mode": "pivot-root",
+    "status": "failed",
+    "errors": ["runtime_timeout"],
+    "runtime_executed": true,
+    "runtime_versions_verified": false,
+    "versions": {},
+    "private_diagnostics_written": true,
+    "stderr_observations": {
+      "missing_system_dbus_socket": true,
+      "missing_x_server_or_display": true,
+      "platform_failed_to_initialize": true,
+      "crash_reporter_attempted_network_resolution_and_failed": true,
+      "suid_sandbox_configuration_fatal_observed": false
+    },
+    "limits": [
+      "The requested script only reads process.versions; the observed QQ build instead reached GUI platform initialization, so no assertion is made that the real process stayed in a generic Node-only path.",
+      "Missing display is an observed prerequisite, not proof that adding a display completes native initialization.",
+      "No host display socket, system DBus, production account data, network route or sandbox-disabling flag was added.",
+      "Timeout cleanup and private PID-namespace exit are part of the probe; this report does not claim a running independent client."
+    ]
+  },
+  "conclusions": [
+    "Detached root replacement resolves the trusted control's user-namespace failure under this tested boundary; no-namespaces or setuid fallback is unnecessary for that control.",
+    "The QQ runtime still has not produced a verified version record, logged in or exposed independent native APIs.",
+    "Future GUI/native experiments need a separate account-free private display and an explicit initialization plan, not the production desktop or relaxed isolation."
+  ],
+  "production_modified": false,
+  "account_credentials_copied": false,
+  "login_verified": false,
+  "native_binding_verified": false,
+  "full_feature_parity_verified": false,
+  "production_cutover_authorized": false,
+  "cutover_requires_new_explicit_user_instruction": true
+}

@@ -220,13 +220,50 @@ def copy_private_stderr(errors, fd):
     return bool(data)
 
 
-def child_probe(root, jail, nonce, parent_ids, mount, diagnostic_fd=None, *, userns_control=False):
+def enter_filesystem_root(jail, filesystem_mode, pivot_tool=None, umount_tool=None):
+    """Replace the root once; pivot mode must detach its freshly created old root.
+
+    The util-linux pivot_root syscall updates processes sharing the mount namespace
+    whose root refers to the old root. Verify this supervisor's root before exec;
+    never continue with an attached old root or an unchanged filesystem root.
+    """
+    if filesystem_mode == "chroot":
+        os.chroot(jail)
+        os.chdir("/")
+        return
+    if filesystem_mode != "pivot-root":
+        raise ProbeError("invalid_filesystem_mode")
+    expected = jail.stat()
+    os.chdir(jail)
+    run_checked([pivot_tool, ".", ".old-root"])
+    os.chdir("/")
+    actual = os.stat("/")
+    if (actual.st_dev, actual.st_ino) != (expected.st_dev, expected.st_ino):
+        raise ProbeError("filesystem_root_replacement_failed")
+    run_checked([umount_tool, "--lazy", "--", "/.old-root"])
+    # Only the empty put_old directory created by this invocation is removed.
+    # EBUSY/nonempty/missing errors fail closed before privilege drop or exec.
+    os.rmdir("/.old-root")
+    if Path("/.old-root").exists():
+        raise ProbeError("old_root_detach_failed")
+
+
+def child_probe(root, jail, nonce, parent_ids, mount, diagnostic_fd=None, *, userns_control=False,
+                filesystem_mode="chroot", pivot_tool=None, umount_tool=None):
     """Build the shared isolation, then probe QQ or a trusted namespace control.
 
     This helper is PID 1 in its new namespace. On exit the kernel kills remaining
     descendants. No QQ process starts unless all isolation setup has succeeded.
     """
+    if filesystem_mode not in ("chroot", "pivot-root"):
+        raise ProbeError("invalid_filesystem_mode")
+    if filesystem_mode == "pivot-root":
+        # Internal CLI arguments cannot nominate arbitrary root-executed helpers.
+        for name, tool in (("pivot_root", pivot_tool), ("umount", umount_tool)):
+            if not tool or not Path(tool).is_absolute() or tool != shutil.which(name, path="/usr/sbin:/usr/bin:/sbin:/bin"):
+                raise ProbeError("pivot_tools_missing_or_untrusted")
     report = base_report(userns_control=userns_control)
+    report["filesystem_mode"] = filesystem_mode
     if diagnostic_fd is not None:
         validate_diagnostic_fd(diagnostic_fd)
     observed = namespace_ids()
@@ -239,6 +276,10 @@ def child_probe(root, jail, nonce, parent_ids, mount, diagnostic_fd=None, *, use
     if not jail.is_dir() or any(jail.iterdir()) or jail.is_symlink():
         raise ProbeError("jail_not_empty")
     jail.chmod(0o755)
+    if filesystem_mode == "pivot-root":
+        # Establish the new root mount before any nested mount; put_old is new.
+        run_checked([mount, "--bind", str(jail), str(jail)])
+        (jail / ".old-root").mkdir()
     for directory in ("opt/QQ", "tmp", "run", "proc", "dev"):
         (jail / directory).mkdir(parents=True, exist_ok=True)
     bind_readonly(root, jail / "opt/QQ", mount)
@@ -263,13 +304,15 @@ def child_probe(root, jail, nonce, parent_ids, mount, diagnostic_fd=None, *, use
     (jail / "probe.js").write_text(node_script(nonce), encoding="utf-8")
     # File capture + RLIMIT_FSIZE bounds output before parsing, unlike PIPE capture.
     with (jail / "tmp" / "stdout").open("w+b") as output, (jail / "tmp" / "stderr").open("w+b") as errors:
-        os.chroot(jail)
-        os.chdir("/")
+        enter_filesystem_root(jail, filesystem_mode, pivot_tool, umount_tool)
         if namespace_ids() != observed:
             raise ProbeError("private_proc_identity_failed")
         # Keep this PID 1 supervisor root: changing its credentials would clear
         # unshare --kill-child's PDEATHSIG. Only QQ's child drops privileges.
-        report["isolation"] = {"network": True, "mount": True, "pid": True, "chroot": True}
+        report["isolation"] = {"network": True, "mount": True, "pid": True,
+                               "chroot": filesystem_mode == "chroot",
+                               "pivotRoot": filesystem_mode == "pivot-root",
+                               "oldroot_detached": filesystem_mode == "pivot-root"}
         resource.setrlimit(resource.RLIMIT_CPU, (10, 10))
         resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
         resource.setrlimit(resource.RLIMIT_FSIZE, (OUTPUT_LIMIT, OUTPUT_LIMIT))
@@ -330,9 +373,14 @@ def child_probe(root, jail, nonce, parent_ids, mount, diagnostic_fd=None, *, use
     return report
 
 
-def probe(qq_root, execute=False, private_diagnostics=None, *, userns_control=False):
-    """Validate by default; only consented Linux-root execution creates diagnostics."""
+def probe(qq_root, execute=False, private_diagnostics=None, *, userns_control=False,
+          filesystem_mode="chroot"):
+    """Validate by default; explicit pivot mode never changes execution consent."""
     report = base_report(userns_control=userns_control)
+    report["filesystem_mode"] = filesystem_mode
+    if filesystem_mode not in ("chroot", "pivot-root"):
+        report.update(status="refused", errors=["invalid_filesystem_mode"])
+        return report
     diagnostic_fd = None
     if sys.platform != "linux":
         report.update(status="refused", errors=["linux_required"])
@@ -346,6 +394,14 @@ def probe(qq_root, execute=False, private_diagnostics=None, *, userns_control=Fa
         unshare, mount = shutil.which("unshare"), shutil.which("mount")
         if not unshare or not mount:
             raise ProbeError("isolation_tools_missing")
+        pivot_tool, umount_tool = None, None
+        if filesystem_mode == "pivot-root":
+            # Resolve on the host before entry, never from the QQ software tree.
+            pivot_tool = shutil.which("pivot_root", path="/usr/sbin:/usr/bin:/sbin:/bin")
+            umount_tool = shutil.which("umount", path="/usr/sbin:/usr/bin:/sbin:/bin")
+            if any(not tool or not Path(tool).is_absolute()
+                   for tool in (pivot_tool, umount_tool)):
+                raise ProbeError("pivot_tools_missing_or_untrusted")
         if private_diagnostics is not None:
             diagnostic_fd = open_private_diagnostics(private_diagnostics)
         parent_ids = namespace_ids()
@@ -360,6 +416,9 @@ def probe(qq_root, execute=False, private_diagnostics=None, *, userns_control=Fa
                     "--mount-proc", sys.executable, str(helper), "--child",
                     "--qq-root", str(root), "--jail", str(jail), "--nonce", nonce,
                     "--parent-ns", json.dumps(parent_ids), "--mount-tool", mount]
+            if filesystem_mode == "pivot-root":
+                args.extend(["--filesystem-mode", filesystem_mode,
+                             "--pivot-tool", pivot_tool, "--umount-tool", umount_tool])
             if userns_control:
                 args.append("--userns-control")
             private_kwargs = {}
@@ -399,6 +458,10 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--qq-root", required=True)
     parser.add_argument("--execute", action="store_true")
+    parser.add_argument("--filesystem-mode", choices=("chroot", "pivot-root"), default="chroot",
+                        help="Opt-in detached pivot root; default keeps existing chroot isolation")
+    parser.add_argument("--pivot-tool", help=argparse.SUPPRESS)
+    parser.add_argument("--umount-tool", help=argparse.SUPPRESS)
     parser.add_argument("--userns-control", action="store_true",
                         help="Run trusted user-namespace control instead of QQ; still needs --execute")
     parser.add_argument("--report", type=Path)
@@ -417,12 +480,16 @@ def main(argv=None):
             report = child_probe(validate_root(args.qq_root), args.jail, args.nonce,
                                  json.loads(args.parent_ns), args.mount_tool,
                                  diagnostic_fd=args.private_diagnostic_fd,
-                                 userns_control=args.userns_control)
+                                 userns_control=args.userns_control,
+                                 filesystem_mode=args.filesystem_mode,
+                                 pivot_tool=args.pivot_tool, umount_tool=args.umount_tool)
         except Exception:
             # Child errors are intentionally fixed and redacted; no host traceback.
             report.update(status="failed", errors=["isolation_setup_or_probe_failed"])
     else:
         kwargs = {"execute": args.execute}
+        if args.filesystem_mode != "chroot":
+            kwargs["filesystem_mode"] = args.filesystem_mode
         if args.userns_control:
             kwargs["userns_control"] = True
         if args.private_diagnostics is not None:
