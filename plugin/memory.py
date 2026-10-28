@@ -350,8 +350,10 @@ class Memory:
 
         Text and canonical images deduplicate within the same privacy partition.
         Explicit structure also participates; omitted structure preserves legacy
-        duplicate behavior. Never replace the first origin, labels or ID, and never
-        evict older records. Validate inputs before allocating IDs or changing data.
+        duplicate behavior. Each genuinely new item appends at the end with its
+        normalized structure, even when its kind remains unspecified. Never
+        replace the first origin, labels or ID, and never evict older records.
+        Validate inputs before allocating IDs or changing data.
         """
         labels = _categories(categories)
         normalized = normalize_images(images)
@@ -391,8 +393,11 @@ class Memory:
                         "images": normalized}
                 if snapshot is not None:
                     fact["source"] = snapshot
-                if metadata is not None:
-                    fact["structure"] = metadata
+                # Every newly appended entry has a durable explicit shape even
+                # when its meaning remains unspecified. Existing legacy entries
+                # and deduplicated first origins are never rewritten.
+                fact["structure"] = (metadata if metadata is not None
+                                     else normalize_structure())
                 # Facts are user records, not a cache: adding one must not erase another.
                 bucket.append(fact)
             self.save_checked()

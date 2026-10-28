@@ -48,6 +48,7 @@ def test_saved_instruction_present_in_next_request_and_external_edit_reread(memo
     saved = _dispatch(memory_host, "remember", {
         "text": "Use brief numbered summaries", "structure": {"kind": "instruction"}}, Event())
     assert saved["ok"] and saved["persisted"] and saved["created"]
+    assert saved["append_position"] == 1 and saved["appended_at_end"] is True
     first = _context(memory_host)["memory"]
     assert first["instructions"][0]["id"] == saved["id"]
     assert first["instructions"][0]["text"] == "Use brief numbered summaries"
@@ -163,10 +164,12 @@ def test_duplicate_receipt_keeps_actual_first_source_and_metadata(memory_host, t
     saved = _dispatch(memory_host, "remember", {"text": "same summary",
         "categories": ["original"], "structure": {"kind": "instruction"}}, first)
     assert saved["ok"] and saved["created"]
+    assert saved["append_position"] == 1 and saved["appended_at_end"] is True
     second = Event("later duplicate request", message_id="second-source", sender_id="10022")
     duplicate = _dispatch(memory_host, "remember", {
         "text": "same summary", "categories": ["replacement"]}, second)
     assert duplicate["ok"] and duplicate["persisted"] and duplicate["created"] is False
+    assert duplicate["append_position"] == 1 and duplicate["appended_at_end"] is False
     assert duplicate["id"] == saved["id"]
     assert duplicate["structure"]["kind"] == "instruction"
     actual = _memory(tmp_path).list_facts(None, current_scope="42")[0]

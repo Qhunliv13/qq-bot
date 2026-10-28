@@ -3003,12 +3003,17 @@ class HiganPlugin(Star):
                 _fact_id = _m.add_fact(_txt, str(scope), source=_source, categories=args.get("categories"),
                                        images=_images, structure=args.get("structure"))
                 _n = len((_m.data.get("global") or {}).get("facts") or [])
+                _created = _fact_id not in _before_ids
+                _position = (next((index for index, item in enumerate(
+                    (_m.data.get("global") or {}).get("facts") or [], start=1)
+                    if str(item.get("id")) == str(_fact_id)), None))
                 logger.info("[higan] remember_persisted kind=%s created=%s facts_total=%d",
                             (args.get("structure") or {}).get("kind", "unspecified"),
-                            _fact_id not in _before_ids, _n)
+                            _created, _n)
                 _stored = next(row for row in _m.list_facts(None, current_scope=str(scope))
                                if str(row["id"]) == str(_fact_id))
-                return {"ok": True, "persisted": True, "created": _fact_id not in _before_ids,
+                return {"ok": True, "persisted": True, "created": _created,
+                        "append_position": _position, "appended_at_end": _created and _position == _n,
                         "id": _fact_id, "saved": _stored["text"], "facts_total": _n,
                         "source_scope": _stored["source_scope"], "images": _stored["images"],
                         "structure": _stored["structure"], "fact": _stored,

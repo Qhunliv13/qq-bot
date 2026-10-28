@@ -10,8 +10,13 @@
 
 ## 兼容增量
 
+- 新条目按现有 `global.facts` 数组尾部追加，并把规范化的 `structure` 持久写入，
+  即使没有指定类型也保存 `unspecified` / `active` / `subject=null`。同一作用域
+  的重复内容返回原有位置和 ID，不生成新条目；编辑在原位置更新，不重新排序。
+  成功回执返回 `created`、`append_position` 和 `appended_at_end`，不能把去重说成追加。
+  存储仍以临时文件原子替换完整 JSON 文件，并非逐行追加 JSONL 或原地追加文件字节。
 - 唯一存储仍为现有 `memory/memory.json`，不迁移、不覆盖、不断开原来的历史与图片。
-- 可选 `structure` 明确类型：`fact`、`preference`、`instruction`、`note`、
+- `structure` 明确类型：`fact`、`preference`、`instruction`、`note`、
   `unspecified`；状态 `active` / `superseded`；主体是显式 ID 和可选昵称。
   旧记录只在读取时投影为 `unspecified`，不自动改写或猜类别。
 - 每轮从持久文件读取当前可见条目，按类型在用户数据层单独归类；已 superseded

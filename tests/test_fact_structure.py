@@ -82,7 +82,7 @@ def test_edits_preserve_or_explicitly_replace_structure(tmp_path):
     assert Memory(memory.path).load().list_facts()[0]["structure"] == normalize_structure()
     legacy = memory.add_fact("legacy", "123")
     assert memory.edit_fact(legacy, "legacy edited")
-    assert "structure" not in memory.data["global"]["facts"][-1]
+    assert memory.data["global"]["facts"][-1]["structure"] == normalize_structure()
 
 
 def test_structure_dedup_only_when_explicit_and_preserves_first_origin(tmp_path):
@@ -98,7 +98,7 @@ def test_structure_dedup_only_when_explicit_and_preserves_first_origin(tmp_path)
     assert memory.list_facts()[0]["source_scope"] == "123"
     legacy = memory.add_fact("legacy", "123")
     assert memory.add_fact("legacy", "456", structure={}) == legacy
-    assert "structure" not in memory.data["global"]["facts"][-1]
+    assert memory.data["global"]["facts"][-1]["structure"] == normalize_structure()
 
 
 def test_private_dedup_isolated_by_canonical_provenance(tmp_path):
@@ -135,6 +135,25 @@ def test_structure_failed_persistence_rolls_back(tmp_path, monkeypatch, operatio
             memory.edit_fact(fid, "changed", structure={"kind": "preference"})
     assert memory.data == before == Memory(memory.path).load().data
     assert len(list(tmp_path.iterdir())) == 1
+
+
+def test_new_facts_append_normalized_structure_at_end_without_reordering_legacy(tmp_path):
+    """New entries have a durable shape; old entries and duplicates keep position."""
+    memory = Memory(str(tmp_path / "memory.json"))
+    memory.data["global"]["facts"] = [
+        {"id": "f001", "text": "legacy", "source_scope": "123", "custom": {"keep": 1}}]
+    memory.save_checked()
+    original = copy.deepcopy(memory.data["global"]["facts"][0])
+    first = memory.add_fact("new generic", "123")
+    second = memory.add_fact("second structured", "456",
+                             structure={"kind": "instruction"})
+    loaded = Memory(memory.path).load().data["global"]["facts"]
+    assert loaded[0] == original
+    assert [item["id"] for item in loaded] == ["f001", first, second]
+    assert loaded[1]["structure"] == normalize_structure()
+    assert loaded[2]["structure"] == normalize_structure({"kind": "instruction"})
+    assert memory.add_fact("new generic", "456") == first
+    assert Memory(memory.path).load().data["global"]["facts"] == loaded
 
 
 def test_capacity_never_evicts_user_records(tmp_path):
