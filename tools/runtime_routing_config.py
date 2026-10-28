@@ -70,7 +70,14 @@ def request(method: str, api_key: str, payload: dict | None = None) -> dict:
     )
     opener = build_opener(ProxyHandler({}), NoRedirect())
     with opener.open(req, timeout=30) as response:
-        result = json.load(response)
+        raw = response.read()
+        try:
+            result = json.loads(raw)
+        except (ValueError, UnicodeError):
+            print(json.dumps({"diagnostic": "non_json_dashboard_response", "method": method,
+                              "status": response.status, "bytes": len(raw),
+                              "content_type": response.headers.get("Content-Type", "")}), flush=True)
+            raise RuntimeError("Native dashboard returned non-JSON") from None
     if not isinstance(result, dict) or result.get("status") != "ok":
         raise RuntimeError("Native dashboard request failed")
     data = result.get("data")
