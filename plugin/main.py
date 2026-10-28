@@ -178,6 +178,8 @@ class HiganPlugin(Star):
         self._ready = asyncio.Event()
         self._background_tasks: set = set()
         self._stopping = False
+        # The local acceptor belongs to this exact plugin and shares its execution lock.
+        self._local_runtime = None
         # 独立调用模型时显式拼接人设，不依赖框架注入。
 
         self.persona: str = self._load_persona()
@@ -207,6 +209,13 @@ class HiganPlugin(Star):
         except Exception as _pexc:  # noqa: BLE001
             logger.warning("[higan] 定时查看循环启动失败：%r", str(_pexc)[:120])
         self._ensure_task_loop()
+        # Start after old-instance admission closes; failure must not disable QQ.
+        from .local_runtime import LocalRuntime
+        self._local_runtime = LocalRuntime(self, root=Path(HIGAN_ROOT))
+        try:
+            await self._local_runtime.start()
+        except Exception as exc:
+            logger.error("[higan] local entry unavailable: %s", type(exc).__name__)
         self._ready.set()
         logger.info("[higan] 已启动群成员变动监听（每 %ds 一次，群=%s）"
                     % (MEMBER_WATCH_INTERVAL,
@@ -266,11 +275,15 @@ class HiganPlugin(Star):
                 waiting = False
                 for owner in owners:
                     owner._stopping = True
+                    # Closing admission never cancels a local turn already accepted.
+                    runtime = getattr(owner, "_local_runtime", None)
+                    if runtime is not None:
+                        await runtime.close_acceptor()
                     if any(getattr(owner, "_busy", {}).values()) or getattr(owner, "_task_executing", False):
                         waiting = True
                     for task, nodes in current.get(owner, {}).items():
                         # Handler precedence protects nested sleeps during model/send work.
-                        if any(code is not None and code.co_name in {"on_message", "_drain_pending"}
+                        if any(code is not None and code.co_name in {"on_message", "_drain_pending", "_local_handle"}
                                for _, code in nodes):
                             waiting = True
                             continue
@@ -301,6 +314,46 @@ class HiganPlugin(Star):
                 if isinstance(old, dict):
                     setattr(self, field, old.copy())
         logger.info("[higan] 旧插件实例已排空并清理 %d 个后台任务", len(canceled))
+
+    async def _local_handle(self, event, prompt: str) -> dict:
+        """Run an authenticated local turn on the live plugin's unchanged core."""
+        from .local_runtime import LOCAL_SCOPE, is_local_event
+        # Capability validation precedes history writes, role promotion and tools.
+        if not is_local_event(event, self):
+            raise PermissionError("local_event_untrusted")
+        await self._ready.wait()
+        if self._stopping:
+            raise RuntimeError("local_entry_stopping")
+        async with self._execution_lock:
+            # Already admitted turns finish even if reload closes intake while queued.
+            from .history_window import append_history, history_snapshot
+            from .message_batch import message_record
+            from .reply_selection import decode_reply
+            group = LOCAL_SCOPE
+            self._history_origins = getattr(self, "_history_origins", {})
+            history = self._recent.setdefault(group, [])
+            if not history:
+                history.extend(self._hist().load(group, 200))
+            prior = history_snapshot(history, self._history_origins.get(group, 0))
+            # Native stored records retain timestamps and source scopes when merged.
+            prior_records = self._hist().load_records(group, limit=200)
+            record = message_record(event, prompt)
+            line = "%s：%s" % (event.get_sender_name(), prompt)
+            self._hist().append(group, line, record=record)
+            append_history(self._recent, self._history_origins, group, line)
+            self._turn_context = getattr(self, "_turn_context", {})
+            self._turn_context[group] = {"history": prior, "local_history": prior_records,
+                                         "messages": [record], "clock": self._clock_context()}
+            # Same model/persona/tools/memory call as foreground QQ, not a new engine.
+            reply = await self._decide_tools_first(event, group, prompt, False)
+            selection = decode_reply(reply, [record])
+            if not selection["error"] and selection["text"]:
+                await self._send(event, group, selection["text"],
+                                 quote_id=selection.get("quote_id"), decoded=True)
+            return {"text": selection["text"] if not selection["error"] else "",
+                    "outputs": list(event.outputs), "transport": "local",
+                    "status": "local_recorded" if event.outputs else "local_no_output",
+                    "recorded": bool(event.outputs), "client_received": False}
 
     # ------------------------------------------------------------------ 工具
 
@@ -621,6 +674,11 @@ class HiganPlugin(Star):
 
     def _policy_allows(self, event, group: str) -> bool:
         """Recheck persisted restrictions at dequeue and send, so stale queued replies cannot leak."""
+        from .local_runtime import is_local_event, local_route
+        from .task_event import TaskEvent
+        if local_route(group, getattr(event, "unified_msg_origin", None)):
+            # Stored local tasks can publish, but are never authenticated humans.
+            return is_local_event(event, self) or (isinstance(event, TaskEvent) and event.plugin is self)
         if str(group).startswith("private:"):
             return True
         try:
@@ -737,8 +795,10 @@ class HiganPlugin(Star):
         from .message_batch import message_record
         from .conversation_context import build_context
         records = turn["messages"] if "messages" in turn else [message_record(event, text)]
+        from .local_runtime import is_local_event
+        local_owner = is_local_event(event, self)
         records = [dict(record, sender=dict(record["sender"],
-            role="owner" if str(record["sender"].get("id")) in OWNER_QQS else "member"))
+            role="owner" if (local_owner or str(record["sender"].get("id")) in OWNER_QQS) else "member"))
             for record in records]
         from .attachment_sources import collect_sources
         sources = turn.get("image_sources")
@@ -2222,7 +2282,7 @@ class HiganPlugin(Star):
         from .autonomous_turn import AutonomyEvent
         from .qq_social import dispatch as social_dispatch, schema as social_schema
         autonomous = isinstance(event, AutonomyEvent)
-        owner = str(event.get_sender_id() or "") in OWNER_QQS if event is not None else False
+        owner = self._is_owner(event) if event is not None else False
         # Account-wide effects are owner-authorized or originate from our own
         # typed autonomous turn, not a nickname, quoted text, JSON flag or tool result.
         can_manage = owner or (autonomous and bool(event.unified_msg_origin)
@@ -2292,6 +2352,10 @@ class HiganPlugin(Star):
                     if delivery["status"] == "native_confirmed":
                         from copy import deepcopy
                         result["delivery"] = deepcopy(delivery)
+                    elif delivery.get("transport") == "local" and delivery.get("recorded") is True:
+                        # Preserve successful local publication without claiming QQ receipt.
+                        result.update(delivery)
+                        result["delivery"] = dict(delivery)
             return result
         from .workspace_tools import dispatch as workspace_dispatch, schema as workspace_schema
         from .tool_discovery import dispatch as discovery_dispatch, schema as discovery_schema
@@ -3065,7 +3129,9 @@ class HiganPlugin(Star):
                                 from .task_delivery import fresh, observe
                                 outcome = task.setdefault("_delivery_outcome", fresh())
                                 receipt = getattr(final_event, "last_delivery_receipt", None)
-                                observe(outcome, "qq_send", receipt or {"ok": False, "error": "delivery_not_confirmed"})
+                                from .local_runtime import local_route
+                                channel = "local_record" if local_route(task.get("scope"), task.get("origin")) else "qq_send"
+                                observe(outcome, channel, receipt or {"ok": False, "error": "delivery_not_confirmed"})
                                 if not delivered:
                                     raise RuntimeError("task_reply_delivery_failed")
                             from .task_delivery import completion_failure
@@ -3267,7 +3333,11 @@ class HiganPlugin(Star):
         self._turn_context = getattr(self, "_turn_context", {})
         self._turn_context[group] = turn
         turn["other_scopes"] = []
-        if str(group).isascii() and str(group).isdigit() and int(group) > 0:
+        from .local_runtime import is_local_event, local_route
+        from .task_event import TaskEvent
+        local_context = local_route(group, getattr(event, "unified_msg_origin", None)) and (
+            is_local_event(event, self) or (isinstance(event, TaskEvent) and event.plugin is self))
+        if local_context or (str(group).isascii() and str(group).isdigit() and int(group) > 0):
             from .cross_scope_memory import CrossScopeMemory, DEFAULT_SHARED_CACHE_BLOCK
             current_records = turn.get("messages") or []
             excluded = [(str(group), str(record["id"])) for record in current_records
@@ -3275,11 +3345,19 @@ class HiganPlugin(Star):
             try:
                 shared = CrossScopeMemory(self._hist()).unified_snapshot(
                     exclude_messages=excluded, cache_block_size=DEFAULT_SHARED_CACHE_BLOCK)
-                turn["history"] = shared["records"]
+                # Public QQ history stays read-only; local history never joins its pool.
+                turn["history"] = list(shared["records"])
+                if local_context:
+                    local_history = turn.get("local_history")
+                    if local_history is None:
+                        local_history = self._hist().load_records(str(group), limit=200)
+                    turn["history"].extend(dict(row, origin_scope=str(group)) for row in local_history)
+                    # Preserve native timestamps; never recast local input as a QQ group.
+                    turn["history"].sort(key=lambda row: row.get("ts", 0) if isinstance(row.get("ts"), (int, float)) else 0)
                 turn["history_context"] = {key: shared[key] for key in ("mode", "source", "coverage")}
             except Exception as exc:
                 # Do not silently fall back to separate current/other group silos.
-                turn["history"] = []
+                turn["history"] = list(turn.get("local_history") or []) if local_context else []
                 turn["history_context"] = {"mode": "one_shared_timeline", "available": False,
                                            "error": type(exc).__name__}
                 logger.warning("[higan] 统一群记忆读取失败：%s", type(exc).__name__)
@@ -3451,7 +3529,10 @@ class HiganPlugin(Star):
                     return True
             return (name == "reply_now" and isinstance(arguments, dict)
                     and arguments.get("finish") is True and isinstance(result, dict)
-                    and result.get("ok") is True and result.get("delivered") is True
+                    and result.get("ok") is True
+                    and (result.get("delivered") is True or (local_context
+                         and result.get("transport") == "local"
+                         and result.get("status") == "local_recorded" and result.get("recorded") is True))
                     and result.get("finish") is True)
 
         try:
@@ -3504,7 +3585,7 @@ class HiganPlugin(Star):
         # regardless of whether text or media tools produced it; repeated tools stay independent.
         if turn.get("_interim_replies") or any(
                 isinstance(item, dict) and isinstance(item.get("delivery"), dict)
-                and item["delivery"].get("status") in ("native_confirmed", "observed_send_return")
+                and item["delivery"].get("status") in ("native_confirmed", "observed_send_return", "local_recorded")
                 and item["delivery"].get("destination_scope") == str(group)
                 for item in turn.get("_deliveries", [])):
             from .final_publication import select as select_publication
@@ -3767,6 +3848,22 @@ class HiganPlugin(Star):
             logger.error("[higan] 发送失败：%s", type(exc).__name__)
             return None
         visible = text + (" [图片]" if has_image_output else "")
+        from .local_runtime import is_local_event, local_route
+        from .task_event import TaskEvent
+        if local_route(group, getattr(event, "unified_msg_origin", None)) and (
+                is_local_event(event, self) or (isinstance(event, TaskEvent) and event.plugin is self)):
+            # LocalEvent/TaskEvent already persisted exactly once through the runtime.
+            if not (isinstance(_sent, dict) and _sent.get("transport") == "local"
+                    and _sent.get("status") == "local_recorded" and _sent.get("recorded") is True):
+                return None
+            delivery = dict(_sent, ok=True, delivered=False, destination_scope=str(group))
+            turn = getattr(self, "_turn_context", {}).get(group, {})
+            turn.setdefault("_deliveries", []).append({"kind": "assistant_delivery", "body": visible,
+                                                       "delivery": delivery})
+            from .history_window import append_history
+            self._history_origins = getattr(self, "_history_origins", {})
+            append_history(self._recent, self._history_origins, group, "彼岸酱：" + visible.strip())
+            return visible.strip()
         from .qq_delivery import _mention
         from .autonomous_turn import AutonomyEvent
         from .task_event import TaskEvent
@@ -4201,10 +4298,10 @@ class HiganPlugin(Star):
         event.set_result(MessageEventResult().message(
             "已移出索引（文件保留）：%s" % item["file"]))
 
-    @staticmethod
-    def _is_owner(event: AstrMessageEvent) -> bool:
-        """命令是否来自主人（群主 / 管理员）。非主人一律静默忽略。"""
-        return str(event.get_sender_id() or "") in OWNER_QQS
+    def _is_owner(self, event: AstrMessageEvent) -> bool:
+        """Authenticate a native owner or this instance's private local capability."""
+        from .local_runtime import is_local_event
+        return is_local_event(event, self) or str(event.get_sender_id() or "") in OWNER_QQS
 
     # --------------------------------------------------------- 表情包收集
 
@@ -4384,5 +4481,10 @@ class HiganPlugin(Star):
         here races new admission; the replacement initialize observes exact old
         owners after unbind and drains every active handler/background operation.
         """
+        # Stop admission now; the replacement drains existing local handlers too.
+        self._stopping = True
+        runtime = getattr(self, "_local_runtime", None)
+        if runtime is not None:
+            await runtime.close_acceptor()
         self._save_manifest()
         logger.info("[higan] 插件已卸载，表情包库 %d 张" % len(self.manifest))

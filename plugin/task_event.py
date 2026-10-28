@@ -53,6 +53,15 @@ class TaskEvent:
         if not self.unified_msg_origin:
             raise RuntimeError("task_origin_missing")
         scope = str(self.task.get("scope") or "")
+        from .local_runtime import local_route
+        if local_route(scope, self.unified_msg_origin):
+            # Local tasks keep their stored destination and never acquire human authority.
+            runtime = getattr(self.plugin, "_local_runtime", None)
+            if runtime is None:
+                raise RuntimeError("local_runtime_unavailable")
+            result = await runtime.record_output(chain)
+            self.last_delivery_receipt = result
+            return result
         private = scope.startswith("private:")
         destination = scope.removeprefix("private:") if private else scope
         # Bind the authenticated stored origin to the same explicit destination;

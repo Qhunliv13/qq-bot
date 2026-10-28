@@ -131,7 +131,7 @@ def _load_production(root):
         "_handle_one", "_is_woken", "_who", "_clock_context", "_request_context", "_tool_evidence",
         "_quoted_text", "_ref_of", "_image_refs", "_record_visible_reply", "_mark_replied",
         "_to_plain", "_strip_tool_syntax", "_strip_internal", "_tool_schemas",
-        "_task_tool_schemas", "_llm_tools", "_dispatch_tool", "_decide_tools_first",
+        "_task_tool_schemas", "_llm_tools", "_dispatch_tool", "_decide_tools_first", "_is_owner",
         "_send", "_deliver_media", "_at_components", "on_message", "_drain_previous_instances",
         "_drain_pending", "_start_background",
         "_web_search", "_search_queries", "_run_task_once", "_task_loop", "_ensure_task_loop", "_vm_tool", "_qq_send",

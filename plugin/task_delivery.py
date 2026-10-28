@@ -85,9 +85,20 @@ def observe(outcome: dict, name: str, result) -> None:
     failure or ambiguity. Caller-owned last_tools is deliberately not appended
     here, preventing duplicate history when _execute_tool records all names.
     """
-    if not isinstance(name, str) or name not in _OUTBOUND_TOOLS:
+    if not isinstance(name, str):
         return
     payload = result if isinstance(result, dict) else {}
+    if name == "local_record" or (name in _OUTBOUND_TOOLS and payload.get("transport") == "local"):
+        # Local persistence is useful output, but proves no QQ/client delivery.
+        outcome["local_output_attempted"] = True
+        if (payload.get("transport") == "local" and payload.get("status") == "local_recorded"
+                and payload.get("recorded") is True and not payload.get("error")):
+            outcome["local_output_recorded"] = True
+        else:
+            outcome["local_output_failed"] = True
+        return
+    if not isinstance(name, str) or name not in _OUTBOUND_TOOLS:
+        return
     error = payload.get("error")
     if (name == "reply_now" and payload.get("ok") is True
             and payload.get("delivered") is False and not error):
@@ -130,6 +141,8 @@ def observe(outcome: dict, name: str, result) -> None:
 
 def can_finish(outcome: dict) -> bool:
     """Allow quiet tasks or fully confirmed attempts, never mixed partial success."""
+    if outcome.get("local_output_failed") is True:
+        return False
     if outcome.get("delivery_attempted") is False:
         return True
     return (outcome.get("delivery_attempted") is True
@@ -144,4 +157,6 @@ def completion_failure(outcome: dict) -> str | None:
         return "task_delivery_unknown"
     if outcome.get("delivery_failed") is True:
         return "task_delivery_failed"
+    if outcome.get("local_output_failed") is True:
+        return "task_local_output_failed"
     return None

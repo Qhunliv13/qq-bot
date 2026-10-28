@@ -45,9 +45,9 @@ python -m compileall -q plugin
 
 目标是保留现有个人 QQ、全部功能与数据，完全移除 NapCat 运行依赖；当前已建立依赖清单、离线覆盖检查，以及独立的[事务／事件传输基础模块](qq_transport/README.md)；**尚无可替换的独立原生 QQ 后端**。详见 [实施边界与验收计划](docs/QQ_TRANSPORT_REWRITE.md) 和 [最小已观察契约](docs/qq-transport-required.json)。运行 `python tools/qq_transport_parity_audit.py` 可审查声明覆盖，结果不授权生产切换；现有接入保持不变。
 
-## QQ 作为能力，而非 bot 的生命线（设计中）
+## QQ 作为能力，而非唯一入口
 
-按最新要求先落地[简单独立 harness](docs/BOT_HARNESS.md)：`bot_core.Harness` 直接复用现有 `plugin.agent_loop.run`，通过回调注入模型和工具；`python -m bot_core --help` 提供本地入口，不导入 AstrBot、不连接或迁移 QQ 登录。默认不会自动搬动现有记忆、任务或 106 项生产工具。更大的[核心解耦设计](docs/BOT_CORE_DECOUPLING.md)仅作未来参考，不作为本次 harness 的运行复杂度。现有登录与生产保持不变，切换仍须用户另行明确通知。
+[原完整实例的本地入口](docs/LOCAL_FULL_CORE.md)在同一个现有 bot 上接入 root-only Unix socket，复用人设、模型、工具、记忆、任务和全局队列；不再要求请求先来自 QQ。QQ 登录和全部旧状态不迁移，QQ 仍作为原生能力保留；当前宿主仍是 AstrBot，不宣称已移除其生命周期。[简单独立 harness](docs/BOT_HARNESS.md)继续供显式嵌入使用，不另建第二套生产状态。[核心解耦设计](docs/BOT_CORE_DECOUPLING.md)仅保留为后续参考。
 
 ## 版本与档案
 
