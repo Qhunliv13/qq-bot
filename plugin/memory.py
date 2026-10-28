@@ -19,6 +19,12 @@ import tempfile
 import time
 from typing import Iterable, Optional
 
+# Preserve the existing direct-script self-test as well as normal package imports.
+if __package__:
+    from .fact_images import images_metadata, normalize_images
+else:
+    from fact_images import images_metadata, normalize_images
+
 #: 每条摘要的长度上限（字符）：防止摘要膨胀成第二份全文
 MAX_SUMMARY_CHARS = 100000
 #: 全局事实数量上限；超出时按插入顺序移除最早的条目。
@@ -187,7 +193,8 @@ class Memory:
             row = {"id": it.get("id") or "", "text": it.get("text") or "",
                    "at": it.get("at") or 0, "source": it.get("source_scope") or "",
                    "source_scope": it.get("source_scope") or "",
-                   "categories": _categories(it.get("categories"))}
+                   "categories": _categories(it.get("categories")),
+                   "images": images_metadata(it.get("images"))}
             if "source" in it:
                 row["provenance"] = json.loads(json.dumps(it["source"], ensure_ascii=False,
                                                           allow_nan=False))
@@ -238,14 +245,53 @@ class Memory:
         return {"ok": True, "updated": updated, "ids": ids,
                 "categories": list(labels), "missing": []}
 
-    def edit_fact(self, fact_id: str, text: str) -> bool:
-        """按 id 改一条事实（返回是否找到）。"""
+    def get_fact_image(self, fact_id: str, index: int, *, current_scope=None,
+                       muted=()) -> Optional[dict]:
+        """Read one visible image; hidden facts and missing zero-based indices return None."""
+        if isinstance(index, bool) or not isinstance(index, int) or index < 0:
+            raise ValueError("image index must be a nonnegative integer")
+        bucket = ((self.data.get("global") or {}).get("facts") or []
+                  if current_scope is None else self.facts_for_scope(current_scope, muted=muted))
+        for item in bucket:
+            if str(item.get("id") or "") == str(fact_id):
+                refs = normalize_images(item.get("images"))
+                if index >= len(refs):
+                    return None
+                metadata = images_metadata(refs)[index]
+                return {"ref": refs[index], **metadata}
+        return None
+
+    def edit_fact(self, fact_id: str, text: str, *, images=None,
+                  current_scope=None, muted=()) -> bool:
+        """Atomically edit visible facts, preserving images unless explicitly replaced.
+
+        An explicit empty list clears attachments, but a fact must retain text or
+        images. Keep the existing edit timestamp convention and original provenance.
+        """
+        normalized = normalize_images(images) if images is not None else None
+        clean = (text or "").strip()
+        visible = {str(row["id"]) for row in self.list_facts(
+            None, current_scope=current_scope, muted=muted)}
+        if str(fact_id) not in visible:
+            return False
         bucket = (self.data.get("global") or {}).get("facts") or []
-        for it in bucket:
-            if str(it.get("id") or "") == str(fact_id):
-                it["text"] = (text or "").strip()
-                it["at"] = int(time.time())
-                self.save()
+        for item in bucket:
+            if str(item.get("id") or "") == str(fact_id):
+                retained = (normalize_images(item.get("images"))
+                            if normalized is None else normalized)
+                if not clean and not retained:
+                    raise ValueError("a fact must contain text or images")
+                previous = copy.deepcopy(self.data)
+                item["text"] = clean
+                if normalized is not None:
+                    item["images"] = retained
+                item["at"] = int(time.time())
+                try:
+                    self.save_checked()
+                except Exception:
+                    # A failed write must leave the visible and durable fact unchanged.
+                    self.data = previous
+                    raise
                 return True
         return False
 
@@ -279,36 +325,54 @@ class Memory:
         return removed
 
     def add_fact(self, text: str, source_scope: str = "", *, source=None,
-                 categories=None) -> str:
-        """Store a fact and optional detached JSON provenance, never inferred trust.
+                 categories=None, images=None) -> str:
+        """Store detached provenance and persistent images with checked atomic writes.
 
-        Text deduplication preserves the first source, including legacy labels;
-        repeating private text in a public group must not publish its provenance.
-        Invalid source data fails before any in-memory or on-disk mutation.
+        Text plus canonical images deduplicate while preserving the first origin,
+        categories and ID. Legacy text-only records compare as an empty image list.
+        Validate all inputs before assigning IDs or changing any stored record.
         """
         labels = _categories(categories)
+        normalized = normalize_images(images)
         if source is not None and not isinstance(source, dict):
             raise TypeError("source must be a dictionary or None")
         snapshot = (json.loads(json.dumps(source, ensure_ascii=False, allow_nan=False))
                     if source is not None else None)
         clean = (text or "").strip()
-        if not clean:
+        if not clean and not normalized:
             return
-        bucket = self.data.setdefault("global", {}).setdefault("facts", [])
-        for item in bucket:
-            if not item.get("id"):
-                item["id"] = self._next_fact_id()
-            if clean == str(item.get("text") or ""):
-                return str(item.get("id") or "")
-        fid = self._next_fact_id()
-        fact = {"id": fid, "text": clean, "source_scope": source_scope,
-                "at": int(time.time()), "categories": labels}
-        if snapshot is not None:
-            fact["source"] = snapshot
-        bucket.append(fact)
-        if len(bucket) > MAX_FACTS:
-            del bucket[0:len(bucket) - MAX_FACTS]
-        self.save()
+        bucket = (self.data.get("global") or {}).get("facts") or []
+        # Resolve the duplicate before mutation so invalid legacy images cannot
+        # partially allocate IDs or create a global container.
+        duplicate = next((item for item in bucket
+                          if clean == str(item.get("text") or "")
+                          and normalized == normalize_images(item.get("images"))), None)
+        if duplicate is not None and duplicate.get("id"):
+            return str(duplicate["id"])
+        previous = copy.deepcopy(self.data)
+        try:
+            bucket = self.data.setdefault("global", {}).setdefault("facts", [])
+            # Preserve the established backfill convention for legacy missing IDs.
+            for item in bucket:
+                if not item.get("id"):
+                    item["id"] = self._next_fact_id()
+            if duplicate is not None:
+                fid = str(duplicate["id"])
+            else:
+                fid = self._next_fact_id()
+                fact = {"id": fid, "text": clean, "source_scope": source_scope,
+                        "at": int(time.time()), "categories": labels,
+                        "images": normalized}
+                if snapshot is not None:
+                    fact["source"] = snapshot
+                bucket.append(fact)
+                if len(bucket) > MAX_FACTS:
+                    del bucket[0:len(bucket) - MAX_FACTS]
+            self.save_checked()
+        except Exception:
+            # Restore IDs, evicted facts and counters as well as the new record.
+            self.data = previous
+            raise
         return fid
 
     def search_facts(self, query: str, limit: int = 500, *,

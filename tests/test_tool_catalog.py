@@ -62,7 +62,7 @@ def native_schemas():
 def test_exact_coverage_of_all_native_tool_names(native_schemas):
     """A new or removed native tool requires an explicit metadata review."""
     names = {schema["function"]["name"] for schema in native_schemas}
-    assert len(names) == NATIVE_TOOL_COUNT == 106
+    assert len(names) == NATIVE_TOOL_COUNT == 107
     assert len(TOOL_DESCRIPTIONS) == NATIVE_TOOL_COUNT
     assert set(TOOL_DESCRIPTIONS) == names
     assert all(isinstance(text, str) and text.strip() for text in TOOL_DESCRIPTIONS.values())

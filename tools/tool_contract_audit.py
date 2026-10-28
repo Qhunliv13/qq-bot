@@ -129,6 +129,7 @@ CASES = {
     "facts_classify": {"ids": ["SEEDED"], "categories": ["contract arbitrary label"]},
     "facts_categories": {},
     "facts_edit": {"id": "SEEDED", "text": "contract edited fact"},
+    "facts_read_image": {"id": "SEEDED", "index": 0},
     "facts_delete": {"keyword": "contract"}, "remember": {"text": "contract remembered fact"},
     "vm_fetch": {"url": "https://audit.invalid/file", "name": "contract.txt"},
     "send_shot": {}, "qq_send": {"kind": "group", "text": "contract", "group_id": 42},
@@ -613,6 +614,11 @@ class AuditHarness:
         memory.WakePersonFacts(str(self.person_path)).load().add("10001", "contract seeded person")
         if name in {"facts_edit", "wp_fact_move"}:
             args["id"] = str(fact_id)
+        if name == "facts_read_image":
+            # Exercise the native image lookup against a real persisted fixture,
+            # not a prebuilt success envelope or a live/private QQ attachment.
+            fixture = "data:image/png;base64," + base64.b64encode(b"\x89PNG\r\n\x1a\ncontract-image").decode("ascii")
+            args["id"] = store.add_fact("contract image fact", "audit", images=[fixture])
         if name == "facts_classify":
             args["ids"] = [str(fact_id)]
         if name == "facts_categories":
