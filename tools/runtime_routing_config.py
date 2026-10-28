@@ -150,7 +150,11 @@ async def run(args: argparse.Namespace) -> dict:
             created_by="root-ssh-config-release",
         )
         created_id = result["key_id"]
-        if result.get("scopes") != ["config"]:
+        # The native service expands config to its documented bot/provider
+        # dependency scopes. Reject unrelated privileges, not native expansion.
+        scopes = result.get("scopes")
+        if (not isinstance(scopes, list) or any(not isinstance(scope, str) for scope in scopes)
+                or "config" not in scopes or not set(scopes) <= {"config", "bot", "provider"}):
             raise RuntimeError("Temporary key scope differs")
         api_key = result["api_key"]
         current = await asyncio.to_thread(request, "GET", api_key)
