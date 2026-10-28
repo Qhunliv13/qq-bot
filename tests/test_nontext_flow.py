@@ -219,14 +219,14 @@ def test_raw_at_only_does_not_grant_wake_or_mention_authorization(nontext_plugin
 
 
 @pytest.mark.parametrize("with_component", [False, True])
-def test_commands_still_bypass_plugin_decision(nontext_plugin, monkeypatch, with_component):
-    """Appending source metadata must not consume commands or stop framework propagation."""
+def test_disabled_commands_are_consumed_without_plugin_decision(nontext_plugin, monkeypatch, with_component):
+    """Metadata must not turn disabled commands into a model call or framework fallback."""
     plugin, converted, batches = nontext_plugin
     components = [SimpleNamespace(type="Face", id=178)] if with_component else []
     event = _event(text="/help", components=components)
     requests = _provider(monkeypatch, [])
     asyncio.run(plugin.on_message(event))
-    assert event.stopped is False
+    assert event.stopped is True
     assert requests == batches == converted == []
     assert event.actions == event.sent == []
     assert plugin._recent == {}

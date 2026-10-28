@@ -1216,8 +1216,10 @@ class HiganPlugin(Star):
                     logger.warning("[higan] 归档图片失败（忽略）：%r", _exc)
                 asyncio.create_task(self._collect_images(event, group, images))
 
-            # ② 命令（以唤醒前缀开头）交给 AstrBot 自己处理，插件不插手、也不拦事件
+            # Chat commands are disabled; never hand slash input back to
+            # the framework greeting/default-model pipeline. Tools remain callable.
             if text.startswith("/"):
+                event.stop_event()
                 return
 
             _woken_flag = self._is_woken(event)
@@ -1409,9 +1411,10 @@ class HiganPlugin(Star):
 
     @staticmethod
     def _is_woken(event: AstrMessageEvent) -> bool:
-        """该消息是否已经唤醒机器人（被 @ 或以唤醒前缀开头）。
+        """Recognize direct private input or a native self At, never prefix flags.
 
-        这类消息由 AstrBot 默认流程回复（带人设），插件不再插手，避免一次消息两条回复。
+        Framework wake flags also cover slash commands and must not be treated
+        as evidence that a user addressed this bot. The plugin owns its replies.
         """
         # 私聊消息视为对机器人的直接唤醒。
 
@@ -1420,10 +1423,6 @@ class HiganPlugin(Star):
                 return True
         except Exception:
             pass
-        for attr in ("is_at_or_wake_command", "is_wake_command", "is_at_command"):
-            value = getattr(event, attr, None)
-            if isinstance(value, bool) and value:
-                return True
         # 从 OneBot 原始消息段检查针对机器人的 At。
         self_id = ""
         for name in ("get_self_id", "self_id", "selfId"):
@@ -1437,20 +1436,11 @@ class HiganPlugin(Star):
                 self_id = str(event.message_obj.self_id or "")
             except Exception:
                 self_id = ""
-        try:
-            segments = getattr(getattr(event, "message_obj", None), "message", None) or []
-        except Exception:
-            segments = []
-        for seg in segments:
-            if str(getattr(seg, "type", "") or "") != "at":
-                continue
-            qq = (getattr(seg, "qq", None) or getattr(seg, "user_id", None)
-                  or getattr(seg, "target", None))
-            if qq is None:
-                continue
-            # 严格匹配自身 QQ；缺失 self_id 时不判定为 At 唤醒。
-            if self_id and str(qq) == self_id:
-                return True
+        from .message_batch import at_targets
+        # Reuse canonical top-level segment parsing for dicts, enums and native
+        # components. Quoted At segments and broad framework flags are not wake.
+        if self_id and self_id in at_targets(event):
+            return True
         if self_id is None or self_id == "":
             # 无法读取自身 QQ 时记录诊断，不推断为唤醒。
             try:
@@ -2285,7 +2275,7 @@ class HiganPlugin(Star):
                {"id": {"type": "string"}, "msg_id": {"type": "string"}}, []),
             _f("history_search", "读取已记录的聊天档案；scope 指定可见群号时 keyword 可省略以读取该群最近记录，否则按关键词检索。全局窗口未出现不代表没有历史。",
                {"keyword": {"type": "string"}, "scope": {"type": "string"},
-                "limit": {"type": "integer"}}),
+                "limit": {"type": "integer"}, "offset": {"type": "integer", "minimum": 0}}),
             _f("task_list", "查看后台任务及执行状态，可包含已暂停/已完成任务",
                {"scope": {"type": "string"}, "status": {"type": "string"},
                 "only_active": {"type": "boolean"}}),
@@ -2551,16 +2541,22 @@ class HiganPlugin(Star):
                     return {"ok": False, "error": "invalid_history_keyword"}
                 if not keyword.strip() and not requested:
                     return {"ok": False, "error": "history_keyword_or_scope_required"}
+                offset = args.get("offset", 0)
+                if type(offset) is not int or offset < 0:
+                    return {"ok": False, "error": "invalid_history_offset"}
                 hits = CrossScopeMemory(self._hist()).search(
-                    keyword, str(scope), scope=requested, limit=limit + 1, muted=muted)
+                    keyword, str(scope), scope=requested, limit=limit + 1, muted=muted, offset=offset)
             except Exception as exc:
                 return {"ok": False, "error": type(exc).__name__}
             more = len(hits) > limit
             hits = hits[:limit]
             return {"ok": True, "count": len(hits), "hits": hits,
                     "coverage": {"scope": requested or None, "returned": len(hits),
-                                 "limit": limit, "more_available": more,
-                                 "source": "recorded_history", "live_membership_verified": False}}
+                                 "limit": limit, "offset": offset, "more_available": more,
+                                 "next_offset": offset + len(hits) if more else None,
+                                 "source": "recorded_history", "live_membership_verified": False,
+                                 "ts_meaning": "archive_ingestion_time",
+                                 "matching_records_are_not_identical_forward_counts": True}}
         if name == "self_status":
             # 返回可观察的自身状态，不包含密钥。
             _cfg_path = os.path.join(HIGAN_ROOT, "groups.json")
@@ -4322,7 +4318,6 @@ class HiganPlugin(Star):
 
     # ------------------------------------------------- 管理员命令（改关键词）
 
-    @filter.command("表情列表")
     async def cmd_list_stickers(self, event: AstrMessageEvent) -> None:
         """列出表情包与序号（只有主人可用）。用法：`/表情列表 [页码]`。"""
         if not self._is_owner(event):
@@ -4343,7 +4338,6 @@ class HiganPlugin(Star):
         lines.append("删除：/表情删 <序号>")
         event.set_result(MessageEventResult().message("\n".join(lines)))
 
-    @filter.command("表情改")
     async def cmd_edit_sticker(self, event: AstrMessageEvent) -> None:
         """修改某张表情包的关键词（只有主人可用）。用法：`/表情改 <序号> <关键词>`。
 
@@ -4374,7 +4368,6 @@ class HiganPlugin(Star):
         event.set_result(MessageEventResult().message(
             "改好了喵～\n%s\n旧：%s\n新：%s" % (item["file"], old[:30], item["desc"])))
 
-    @filter.command("表情删")
     async def cmd_del_sticker(self, event: AstrMessageEvent) -> None:
         """把某张表情包移出索引（只有主人可用）。用法：`/表情删 <序号>`。
 

@@ -41,6 +41,17 @@ def _record_text_values(value):
             yield from _record_text_values(child)
 
 
+def _chronological_key(row):
+    """Order finite stored timestamps only, leaving unknown dates explicitly unknown."""
+    timestamp = row.get("ts")
+    valid = (not isinstance(timestamp, bool)
+             and (isinstance(timestamp, int)
+                  or isinstance(timestamp, float) and math.isfinite(timestamp)))
+    # Stable sorting retains archive order for ties and unknown dates; zero is
+    # not a replacement timestamp, since the leading flag distinguishes it.
+    return (1, timestamp) if valid else (0, 0)
+
+
 def visible_scope(candidate: str, current_scope: str, muted=()) -> bool:
     """Allow unmuted groups and only the caller's exact native private scope."""
     candidate, current_scope = str(candidate), str(current_scope)
@@ -195,17 +206,7 @@ class CrossScopeMemory:
                 row["origin_scope"] = origin
                 rows.append(row)
 
-        def chronological_key(row):
-            """Sort only finite native numbers; retain stable source order for unknown dates."""
-            timestamp = row.get("ts")
-            valid = (not isinstance(timestamp, bool)
-                     and (isinstance(timestamp, int)
-                          or isinstance(timestamp, float) and math.isfinite(timestamp)))
-            # Unknown dates precede dated evidence without assigning a fake date;
-            # Python's stable sort preserves source order and timestamp ties.
-            return (1, timestamp) if valid else (0, 0)
-
-        rows.sort(key=chronological_key)
+        rows.sort(key=_chronological_key)
         width = limit
         if alignment_available and total_count >= limit:
             # Absolute eligible row count fixes the head until the next block;
@@ -236,13 +237,19 @@ class CrossScopeMemory:
                 "records": selected, "coverage": coverage}
 
     def search(self, keyword: str, current_scope: str, scope: str = "", limit: int = 10,
-               muted=()) -> list[dict]:
-        """Search visible archives, or read one explicit scope when keyword is empty.
+               muted=(), offset: int = 0) -> list[dict]:
+        """Search visible archives or page one explicitly selected scope, newest first.
 
         An omitted keyword never opens an unscoped archive scan. Explicit reads
         share the same native-private authorization, mute policy and provenance
         as keyword searches; the selected scope is not inferred from query text.
+        Exact native message IDs are searchable even when stored as numbers.
+        Only repeated nonempty native IDs within the same scope establish a
+        duplicate occurrence; text, quote IDs and forward contents never do.
+        Offset applies after matching, identity deduplication and stable sorting.
         """
+        if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+            raise ValueError("offset must be a nonnegative integer")
         keyword, current_scope, scope = str(keyword or "").strip(), str(current_scope), str(scope)
         muted = tuple(str(value) for value in muted)
         if (not keyword and not scope) or limit <= 0:
@@ -258,19 +265,32 @@ class CrossScopeMemory:
                 # are neither discovered nor filename-decoded.
                 scopes.append(current_scope)
         results = []
+        seen = set()
         for candidate in scopes:
             if not visible_scope(candidate, current_scope, muted):
                 continue
             for row in self.recorder.load_records(candidate, limit=None):
-                # Search intact native values as well as legacy capped display
-                # text; metadata keys themselves are not message content.
-                if not keyword or keyword in row["line"] or any(
-                        keyword in text for text in _record_text_values(row.get("record"))):
+                record = row.get("record")
+                message_id = record.get("id") if isinstance(record, dict) else None
+                native_id = (isinstance(message_id, str) and bool(message_id.strip())
+                             or isinstance(message_id, int) and not isinstance(message_id, bool))
+                if native_id:
+                    # First stored occurrence wins, even if a later duplicate
+                    # has different text. Missing IDs never merge legacy rows.
+                    identity = (str(candidate), type(message_id), message_id)
+                    if identity in seen:
+                        continue
+                    seen.add(identity)
+                # A numeric native message ID has no string leaf, so support its
+                # exact lookup explicitly without treating numeric times as text.
+                # Quote/body hits remain their own parent records, not new forwards.
+                if (not keyword or native_id and keyword == str(message_id)
+                        or keyword in row["line"] or any(
+                            keyword in text for text in _record_text_values(record))):
                     item = deepcopy(row)
                     item["source"] = deepcopy(SOURCE)
                     results.append(item)
-        # Legacy timestamps may be absent or malformed; do not coerce arbitrary
-        # source strings into dates. Python's stable sort keeps ties deterministic.
-        results.sort(key=lambda row: row["ts"] if isinstance(row.get("ts"), (int, float)) else 0,
-                     reverse=True)
-        return results[:limit]
+        # Use the timeline's finite timestamp rule, not ingestion strings, bools
+        # or non-finite numbers. Original timestamps and metadata remain intact.
+        results.sort(key=_chronological_key, reverse=True)
+        return results[offset:offset + limit]

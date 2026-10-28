@@ -6,6 +6,7 @@ and policy enforcement while this module preserves every queued utterance.
 
 from dataclasses import dataclass
 import json
+import math
 import re
 from typing import Any
 
@@ -157,6 +158,47 @@ def _body(event, text, segments, mentions) -> str:
     return body.strip()
 
 
+def _native_evidence(obj, segments) -> dict:
+    """Extract additive native evidence only; pure parsing performs no I/O.
+
+    Never inspect quoted chains, interpret prose, or retain the full raw payload:
+    cards and private URLs are not needed to identify this message's forwards.
+    """
+    raw = _field(obj, "raw_message")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (ValueError, RecursionError):
+            # Ordinary message text and malformed JSON provide no native metadata.
+            raw = None
+    raw = raw if isinstance(raw, dict) else {}
+    evidence = {}
+    candidates = ((raw.get("time"), "onebot.time"),
+                  (_field(obj, "timestamp"), "message_obj.timestamp"),
+                  (_field(obj, "time"), "message_obj.time"))
+    for value, source in candidates:
+        # bool is an int subclass; integers are finite without float conversion.
+        if type(value) is int or (type(value) is float and math.isfinite(value)):
+            evidence.update(native_time=value, time_source=source)
+            break
+    forward_ids, seen = [], set()
+    native_segments = raw.get("message")
+    # Native and canonical streams can mirror each other; deduplicate only here.
+    for segment in list(native_segments if isinstance(native_segments, list) else ()) + segments:
+        if _kind(segment) != "forward":
+            continue
+        ident = _field(_data(segment), "id")
+        if not ((isinstance(ident, str) and ident) or type(ident) is int):
+            continue
+        key = (type(ident), ident)
+        if key not in seen:
+            seen.add(key)
+            forward_ids.append(ident)
+    if forward_ids:
+        evidence["forward_ids"] = forward_ids
+    return evidence
+
+
 def message_record(event, text: str, who: str = "") -> dict:
     """Build an unambiguous record, removing only metadata-proven rendered mentions.
 
@@ -175,9 +217,12 @@ def message_record(event, text: str, who: str = "") -> dict:
     segments = message_segments(event)
     mentions = _mentions(segments)
     body = _body(event, text, segments, mentions)
-    return {"id": str(_field(obj, "message_id") or _field(event, "message_id") or ""),
-            "sender": sender, "body": body, "mentions": mentions,
-            "quote": _quote(segments)}
+    record = {"id": str(_field(obj, "message_id") or _field(event, "message_id") or ""),
+              "sender": sender, "body": body, "mentions": mentions,
+              "quote": _quote(segments)}
+    # Keep the exact legacy shape when no native evidence is actually available.
+    record.update(_native_evidence(obj, segments))
+    return record
 
 
 # Keep the originally requested spelling as an alias, not a duplicate implementation.

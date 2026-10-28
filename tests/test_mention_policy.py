@@ -64,7 +64,7 @@ def test_wake_quote_and_other_mention_never_authorize_entry(production, tmp_path
         handled.append(args)
 
     plugin._handle_one = handle
-    assert plugin._is_woken(event) is True
+    assert plugin._is_woken(event) is False
     assert plugin._directly_mentioned(event) is False
     assert plugin._policy_allows(event, "42") is False
     asyncio.run(plugin.on_message(event))
