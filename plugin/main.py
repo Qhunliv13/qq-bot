@@ -1805,14 +1805,17 @@ class HiganPlugin(Star):
                {"limit": {"type": "integer"}, "offset": {"type": "integer", "minimum": 0}}),
             _f("vm_shot", "给她自己的虚拟机屏幕截图，返回截图文件路径"),
             _f("vm_browse", "在她的浏览器里打开一个网址", {"url": {"type": "string"}}, ["url"]),
-            _f("vm_click_confirm", "确认点击：真点上一次预预览过的那个点（先 preview 再 confirm）"),
-            _f("vm_click_preview", "预点击预览：截屏并在 (x,y) 画十字标记（不满意就再 preview 改点，满意就 confirm）",
+            _f("vm_click_confirm", "第二步：看过预点击标点截图后，提供同一 ticket、x、y、screen_sha256，viewed=true 才确认鼠标点击；屏幕变动则拒绝，请重新预览。不能保证像素绝对对正，须自行视觉核对。",
+               {"ticket": {"type": "string"}, "x": {"type": "integer"}, "y": {"type": "integer"},
+                "screen_sha256": {"type": "string"}, "viewed": {"type": "boolean"}},
+               ["ticket", "x", "y", "screen_sha256", "viewed"]),
+            _f("vm_click_preview", "第一步：屏幕截图在坐标处画预点击标点并送视觉模型复核；不满意再预览，满意再带 ticket、坐标、hash 及 viewed=true 调确认。屏幕变化/过期重做。",
                {"x": {"type": "integer"}, "y": {"type": "integer"},
                 "label": {"type": "string"}}, ["x", "y"]),
-            _f("vm_click_text", "按文字点击页面元素（比坐标稳：'立即登录'/'下一集'/'搜索'）",
+            _f("vm_click_text", "按文字查找元素但禁止绕过预览直接点击；若支持将先返回待确认坐标，否则请改用屏幕预览。",
                {"text": {"type": "string"}, "exact": {"type": "boolean"},
                 "index": {"type": "integer"}}, ["text"]),
-            _f("vm_click", "在虚拟机屏幕上点击坐标",
+            _f("vm_click", "旧直接坐标点击已停用：必须 vm_click_preview 标点、模型看图核对后用 vm_click_confirm 第二步确认。",
                {"x": {"type": "integer"}, "y": {"type": "integer"}}, ["x", "y"]),
             _f("vm_type", "在虚拟机里输入文本", {"text": {"type": "string"}}, ["text"]),
             _f("vm_key", "在虚拟机里按键（如 Return）", {"key": {"type": "string"}}, ["key"]),
@@ -3335,8 +3338,13 @@ class HiganPlugin(Star):
 
 
 
-    async def _vm_tool(self, name: str, args: dict) -> dict:
+    async def _vm_tool(self, name: str, args: dict, *, verified_click: bool = False) -> dict:
         """调用机器人虚拟机的工具 API，保持显式工具映射、超时和错误处理。"""
+        # Direct clicks and text-based clicks bypass visual verification. Only the
+        # turn-local gate's validated callback may reach the native mouse route.
+        if name in ("vm_click", "vm_click_text", "vm_click_preview", "vm_click_confirm"):
+            if name != "vm_click" or verified_click is not True:
+                return {"ok": False, "error": "preview_and_confirm_required"}
         import asyncio
         import urllib.request
 
@@ -3462,6 +3470,8 @@ class HiganPlugin(Star):
             refs, _desc = await self._refs_for(event, group, text, has_image)
         except Exception:  # noqa: BLE001
             refs = []
+        from .vm_click_gate import ClickGate
+        click_gate = ClickGate(Path(HIGAN_ROOT) / "images")
         initial_refs = list(refs or [])       # Initial user attachments freeze before any tool runs.
         live_refs = list(initial_refs)        # Screenshots append here until the next model request.
         submitted_ref_count = len(initial_refs)  # A later screenshot may overwrite the same path.
@@ -3550,11 +3560,22 @@ class HiganPlugin(Star):
                     task_context, self._tasks_mod().listing(only_active=False)):
                 return "", []
             from .image_transcript import with_images
+            pending_marker_submitted = None
+            observed_url = {}
+            marker_path = click_gate.pending_marker_path
+
+            def convert_observed(ref):
+                """Record only this checkpoint's successfully converted pixel URL."""
+                url = self._as_llm_url(ref)
+                if marker_path and str(ref) == marker_path and url:
+                    observed_url["url"] = url
+                return url
+
             images_started = time.monotonic()
             if not images_initialized:
                 # Enrich the loop's original user exactly once, before its first request.
                 converted = await asyncio.to_thread(
-                    with_images, list(messages), list(initial_refs), self._as_llm_url,
+                    with_images, list(messages), list(initial_refs), convert_observed,
                     MAX_IMAGES_PER_CALL, initial=True,
                     source_records=turn.get("image_sources", []))
                 messages[:] = converted
@@ -3565,13 +3586,29 @@ class HiganPlugin(Star):
                 # the same path with different bytes. Old data URLs stay immutable.
                 new_refs = live_refs[submitted_ref_count:]
                 converted = await asyncio.to_thread(
-                    with_images, list(messages), list(new_refs), self._as_llm_url,
+                    with_images, list(messages), list(new_refs), convert_observed,
                     MAX_IMAGES_PER_CALL)
                 messages[:] = converted
                 submitted_ref_count = len(live_refs)
+            if observed_url:
+                # Check the actual image URL in the outgoing request, not just a
+                # path listed in metadata or a preview tool JSON response.
+                for message in converted:
+                    content = message.get("content")
+                    if isinstance(content, list) and any(
+                            isinstance(part, dict) and part.get("type") == "image_url"
+                            and (part.get("image_url") or {}).get("url") == observed_url["url"]
+                            for part in content):
+                        pending_marker_submitted = marker_path
+                        break
             logger.info("[higan] reply_phase phase=image_prepare seconds=%.3f",
                         time.monotonic() - images_started)
-            return await self._llm_tools(system, prompt, [], messages, allow_tools)
+            result = await self._llm_tools(system, prompt, [], messages, allow_tools)
+            if pending_marker_submitted:
+                # A successful provider response proves the marked image was in
+                # that model request; mere preview output never establishes this.
+                await click_gate.mark_observed(pending_marker_submitted)
+            return result
 
         async def _execute_tool(name, args):
             # 群文件通过 AstrBot 的 OneBot 客户端读取。
@@ -3602,7 +3639,30 @@ class HiganPlugin(Star):
                     return {"ok": True, "url": (_r or {}).get("url")}
                 except Exception as exc:  # noqa: BLE001
                     return {"ok": False, "error": repr(exc)[:200]}
-            res = await self._dispatch_tool(name, args, group, event=event)
+            if name in ("vm_click_preview", "vm_click_confirm"):
+                if not isinstance(args, dict):
+                    return {"ok": False, "error": "invalid_click_arguments"}
+                async def screenshot_for_checkpoint():
+                    """Capture the real current screen, not an earlier tool path."""
+                    return await self._vm_tool("vm_shot", {})
+
+                if name == "vm_click_preview":
+                    res = await click_gate.preview(args.get("x"), args.get("y"),
+                        args.get("label", ""), screenshot_for_checkpoint)
+                    if res.get("ok") is True and res.get("path"):
+                        live_refs.append(str(res["path"]))
+                else:
+                    async def click_after_checkpoint(x, y):
+                        """Call the native mouse route only after pixel verification."""
+                        return await self._vm_tool("vm_click", {"x": x, "y": y},
+                                                   verified_click=True)
+
+                    res = await click_gate.confirm(args.get("ticket"),
+                        screenshot_for_checkpoint, click_after_checkpoint,
+                        x=args.get("x"), y=args.get("y"),
+                        screen_sha256=args.get("screen_sha256"), viewed=args.get("viewed"))
+            else:
+                res = await self._dispatch_tool(name, args, group, event=event)
             from .task_delivery import observe
             turn["_delivery_outcome"]["last_tools"].append(name)
             if name in ("read_forward", "forward_expand") and isinstance(res, dict):

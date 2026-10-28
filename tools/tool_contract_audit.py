@@ -44,7 +44,7 @@ from plugin.autonomy import AutonomousController  # noqa: E402
 from plugin.tool_catalog import NATIVE_TOOL_COUNT  # noqa: E402
 from plugin.qq_social import schema as social_schema  # noqa: E402
 from plugin import fact_tools  # noqa: E402
-from plugin.tool_context import redact  # noqa: E402
+from plugin.tool_context import redact, bounded_value  # noqa: E402
 from plugin.message_batch import message_record  # noqa: E402
 from plugin.reply_selection import decode_reply  # noqa: E402
 
@@ -61,7 +61,7 @@ CASES = {
     "workspace_cwd": {},
     "workspace_present": {"paths": ["contract.txt"]},
     "workspace_read_image": {"path": "contract.png"},
-    "tool_search": {"query": "vm_shot"},
+    "tool_search": {"query": "vm_shot", "limit": 1},
     "tool_describe": {"names": ["vm_shot"]},
     "skill_list": {}, "skill_read": {"name": "contract"},
     "skill_save": {"name": "contract-save", "instructions": "Offline reference.", "description": "Contract reference"},
@@ -102,7 +102,9 @@ CASES = {
     "web_fetch": {"url": "https://audit.invalid/page"},
     "tool_observations": {"limit": 8},
     "vm_shot": {}, "vm_browse": {"url": "https://audit.invalid/page"},
-    "vm_click_confirm": {}, "vm_click_preview": {"x": 12, "y": 15},
+    "vm_click_confirm": {"ticket": "offline-no-ticket", "x": 12, "y": 15,
+                         "screen_sha256": "0" * 64, "viewed": True},
+    "vm_click_preview": {"x": 12, "y": 15},
     "vm_click_text": {"text": "contract"}, "vm_click": {"x": 12, "y": 15},
     "vm_type": {"text": "contract"}, "vm_key": {"key": "Return"},
     "vm_job_start": {"code": "# inert audit payload", "lang": "python"},
@@ -153,6 +155,14 @@ EXPECTED_UNAVAILABLE = {
     "qq_add_friend": "proactive_friend_add",
 }
 REQUEST_NAMES = {"qq_request_capabilities", "qq_requests", "qq_request_decide", *EXPECTED_UNAVAILABLE}
+# Missing visual checkpoints are an expected fail-closed contract, not click success.
+# The integration test owns the separate positive preview/observe/confirm sequence.
+EXPECTED_GATED_CLICKS = {
+    "vm_click": ("preview_and_confirm_required", "preview_and_confirm_required"),
+    "vm_click_text": ("preview_and_confirm_required", "preview_and_confirm_required"),
+    "vm_click_confirm": ("preview_and_confirm_required", "no_pending_preview"),
+    "vm_click_preview": ("preview_and_confirm_required", "preview_unavailable"),
+}
 # These expectations are independent of the social router and its schema metadata.
 EXPECTED_SOCIAL_ACTIONS = {
     "qq_group_inspect": ["get_group_info", "get_group_member_list"],
@@ -667,8 +677,8 @@ class AuditHarness:
         return args, event
 
 
-def _quality(result, name=None):
-    """Describe structure, never interpret stubbed success as a real side effect."""
+def _quality(result, name=None, *, via_provider=False):
+    """Grade exact receipts; offline click denials are not simulated success."""
     try:
         json.dumps(result, allow_nan=False)
         serializable = True
@@ -680,11 +690,16 @@ def _quality(result, name=None):
                    and result.get("error") == "native_capability_unavailable"
                    and result.get("supported") is False
                    and result.get("capability") == EXPECTED_UNAVAILABLE[name])
-    accepted = isinstance(result, dict) and (result.get("ok") is True or unavailable)
+    gated = (name in EXPECTED_GATED_CLICKS and isinstance(result, dict)
+             and result.get("ok") is False
+             and result.get("error") == EXPECTED_GATED_CLICKS[name][int(via_provider)])
+    accepted = isinstance(result, dict) and (result.get("ok") is True or unavailable or gated)
     return {"object": isinstance(result, dict), "json_serializable": serializable,
             "contract_satisfied": accepted, "expected_unavailable": unavailable,
+            "expected_gated": gated,
             "classification": "capability_unavailable" if unavailable else (
-                "acknowledged" if isinstance(result, dict) and result.get("ok") is True else "error"),
+                "click_checkpoint_required" if gated else (
+                "acknowledged" if isinstance(result, dict) and result.get("ok") is True else "error")),
             "boolean_ok": isinstance(result, dict) and isinstance(result.get("ok"), bool),
             "keys": sorted(result) if isinstance(result, dict) else [],
             "ok": result.get("ok") if isinstance(result, dict) else None,
@@ -964,6 +979,14 @@ async def _audit(root, monkeypatch, batch_size):
                 and result.get("total") == actual["total"]
                 and result.get("uncategorized") == actual["uncategorized"]
                 and {"category": "contract arbitrary label", "count": 1} in actual["categories"])
+        elif name in EXPECTED_GATED_CLICKS:
+            # A bare name from the dispatcher lacks turn-local image confirmation;
+            # deny before any old immediate-click VM endpoint can be reached.
+            entry["boundary_contract_matches"] = (
+                isinstance(result, dict) and result.get("ok") is False
+                and result.get("error") == EXPECTED_GATED_CLICKS[name][0]
+                and not any(edge["edge"] == "vm_http_stub"
+                            for edge in entry["stubbed_edges"]))
         elif name in EXPECTED_VM_PATHS:
             actual_paths = [edge["url"].removeprefix("http://127.0.0.1:18003")
                             for edge in entry["stubbed_edges"] if edge["edge"] == "vm_http_stub"]
@@ -974,7 +997,13 @@ async def _audit(root, monkeypatch, batch_size):
         else:
             entry["boundary_contract_matches"] = True
         handler = inventory.get(name) or {}
-        if handler.get("handler") == "_dispatch_tool":
+        if name in EXPECTED_GATED_CLICKS:
+            # Old dispatcher routes deliberately stop before the VM backend;
+            # the separately tested model loop owns the positive two-step flow.
+            entry["handler_body_executed"] = any(
+                function in {"_dispatch_tool", "_vm_tool"}
+                for function, _line in executed_lines)
+        elif handler.get("handler") == "_dispatch_tool":
             entry["handler_body_executed"] = any(("_dispatch_tool", line) in executed_lines for line in handler["body_lines"])
         elif name in FOREGROUND:
             entry["handler_body_executed"] = bool(event.actions)
@@ -1023,11 +1052,15 @@ async def _audit(root, monkeypatch, batch_size):
             "retained_observation_names": [row["tool_name"] for row in observations],
             "all_observations_retained": [row["tool_name"] for row in observations] == batch,
             "failed_results": [{"name": row["tool_name"], "result": row["result"]} for row in observations
-                               if not _quality(row["result"], row["tool_name"])["contract_satisfied"]],
-            "expected_unavailable_count": sum(_quality(row["result"], row["tool_name"])["expected_unavailable"] for row in observations),
+                               if not _quality(row["result"], row["tool_name"], via_provider=True)["contract_satisfied"]],
+            "expected_unavailable_count": sum(_quality(row["result"], row["tool_name"], via_provider=True)["expected_unavailable"] for row in observations),
+            "expected_gated_count": sum(_quality(row["result"], row["tool_name"], via_provider=True)["expected_gated"] for row in observations),
             "all_results_successful": all(row["result"].get("ok") is True for row in observations),
-            "all_result_contracts_satisfied": all(_quality(row["result"], row["tool_name"])["contract_satisfied"] for row in observations),
-            "paired_results_match_archive": [json.loads(message["content"])["result"] for message in paired] == [row["result"] for row in observations]})
+            "all_result_contracts_satisfied": all(_quality(row["result"], row["tool_name"], via_provider=True)["contract_satisfied"] for row in observations),
+            "paired_results_match_archive": [bounded_value(
+                json.loads(message["content"])["result"],
+                plugin._tool_evidence().max_result_chars) for message in paired]
+                == [row["result"] for row in observations]})
     unknown = await harness.plugin._dispatch_tool("__contract_unknown_tool__", {}, "42")
     report["unknown_tool"] = {"result": unknown, "rejected": unknown.get("ok") is False and "unknown tool" in unknown.get("error", "")}
     report["forbidden_io_attempts"] = harness.denied

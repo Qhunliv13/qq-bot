@@ -197,9 +197,9 @@ def test_empty_and_iterable_inputs():
     ]
 
 
-def test_click_confirm_description_matches_argument_free_route(native_schemas):
-    """Metadata must not advertise a token absent from the existing contract."""
+def test_click_confirm_requires_matching_visual_checkpoint(native_schemas):
+    """Metadata must require the exact model-visible ticket, pixels and location."""
     schema = next(schema for schema in native_schemas if schema["function"]["name"] == "vm_click_confirm")
-    assert schema["function"]["parameters"] == {"type": "object", "properties": {}, "required": []}
-    assert "令牌" not in TOOL_DESCRIPTIONS["vm_click_confirm"]
-    assert "点击" in TOOL_DESCRIPTIONS["vm_click_confirm"]
+    assert schema["function"]["parameters"]["required"] == [
+        "ticket", "x", "y", "screen_sha256", "viewed"]
+    assert "一次性 ticket" in TOOL_DESCRIPTIONS["vm_click_confirm"]

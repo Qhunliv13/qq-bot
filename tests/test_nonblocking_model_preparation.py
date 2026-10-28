@@ -153,6 +153,7 @@ def test_native_preparation_awaits_offload_before_committing_messages(monkeypatc
             "    submitted_ref_count = 1\n"
             "    initial_refs = ['initial']\n"
             "    live_refs = ['initial']\n"
+            "    click_gate = type('Gate', (), {'pending_marker_path': None})()\n"
             "    task_context = None\n"
             "    turn = {}\n"
             "    MAX_IMAGES_PER_CALL = 3\n"

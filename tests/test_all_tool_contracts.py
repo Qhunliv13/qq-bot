@@ -92,7 +92,17 @@ def test_new_native_contracts_use_reviewed_receipts_and_actions(report):
 def test_request_contracts_distinguish_unavailable_from_route_errors(report):
     """All six native handlers execute while exactly three remain honestly unavailable."""
     rows = {row["name"]: row for row in report["tools"]}
-    assert report["result_quality_counts"] == {"acknowledged": 105, "capability_unavailable": 3}
+    assert report["result_quality_counts"] == {"acknowledged": 101,
+        "capability_unavailable": 3, "click_checkpoint_required": 4}
+    for name, errors in AUDIT.EXPECTED_GATED_CLICKS.items():
+        row = rows[name]
+        assert row["result"] == {"ok": False, "error": errors[0]}
+        assert row["result_quality"]["expected_gated"] is True
+        assert not [edge for edge in row["stubbed_edges"] if edge["edge"] == "vm_http_stub"]
+    assert sum(batch["expected_gated_count"] for batch in report["provider_batches"]) == 4
+    for batch in report["provider_batches"]:
+        for receipt in batch["failed_results"]:
+            assert receipt["name"] not in AUDIT.EXPECTED_GATED_CLICKS
     for name in AUDIT.REQUEST_NAMES:
         assert rows[name]["handler_body_executed"] and rows[name]["boundary_contract_matches"], rows[name]
         assert rows[name]["result_quality"]["contract_satisfied"] is True
@@ -389,7 +399,7 @@ def test_result_failure_and_handler_exception_are_not_hidden(tmp_path, monkeypat
     def prepare_bad_coordinate(self, name):
         """Make one VM mapping fail before transport without replacing its router."""
         args, event = original(self, name)
-        if name == "vm_click":
+        if name == "vm_slider_drag":
             args["x"] = "not-an-integer"
         return args, event
 
@@ -403,8 +413,8 @@ def test_result_failure_and_handler_exception_are_not_hidden(tmp_path, monkeypat
         result = AUDIT.audit(tmp_path, edges)
     rows = {row["name"]: row for row in result["tools"]}
     assert rows["web_fetch"]["result_quality"]["ok"] is False
-    assert rows["vm_click"]["exception"]["type"] == "ValueError"
-    assert {"web_fetch", "vm_click"} <= {gap["name"] for gap in result["gaps"]}
+    assert rows["vm_slider_drag"]["exception"]["type"] == "ValueError"
+    assert {"web_fetch", "vm_slider_drag"} <= {gap["name"] for gap in result["gaps"]}
     assert result["route_contracts_pass"] is False
 
 
