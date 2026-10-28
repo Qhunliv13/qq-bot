@@ -158,6 +158,7 @@ def _load_production(root):
         "random": random, "logger": logging.getLogger("offline-production-tests"),
         "At": At, "Reply": Reply, "Image": Image, "MessageChain": MessageChain,
         "ToolContextArchive": ToolContextArchive,
+        "configured_owners": __import__("plugin.runtime_settings", fromlist=["configured_owners"]).configured_owners,
     }
     exec(compile(ast.fix_missing_locations(module), str(path), "exec"), namespace)
     namespace["HIGAN_ROOT"] = str(root)

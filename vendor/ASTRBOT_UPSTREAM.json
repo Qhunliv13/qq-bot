@@ -1,0 +1,46 @@
+{
+  "schema": 1,
+  "name": "AstrBot",
+  "version": "4.28.1",
+  "repository": "https://github.com/AstrBotDevs/AstrBot",
+  "ref": "refs/tags/v4.28.1",
+  "commit": "ab42c0d9b726d82ad0f9563e04c53a4460c00d61",
+  "archive_url": "https://codeload.github.com/AstrBotDevs/AstrBot/tar.gz/ab42c0d9b726d82ad0f9563e04c53a4460c00d61",
+  "archive_sha256": "989b6621890d0366b4de20c748c9c6d6613108af339ad1e01b83456b6e9c5046",
+  "source_directory": "vendor/astrbot",
+  "source_file_count": 1738,
+  "source_bytes": 17813523,
+  "upstream_modifications": [],
+  "excluded_upstream_paths": [],
+  "license_files": [
+    {
+      "path": "EULA.md",
+      "sha256": "c332de7781e87c67d6d3beda463fa04705075a6bae9e52a252f7c639f6defd80"
+    },
+    {
+      "path": "FIRST_NOTICE.en-US.md",
+      "sha256": "aafba323689cdc5d9bb961ab0c44787edc33a3d14b0678f8b27c7d5002a4e5e7"
+    },
+    {
+      "path": "FIRST_NOTICE.ja-JP.md",
+      "sha256": "f9b5f92da597427a6e5aa8adfef3fc7014cc2e765dfe341173aa93635fbafc05"
+    },
+    {
+      "path": "FIRST_NOTICE.md",
+      "sha256": "3038dec057edbee026bab1d2063607f30bdab3a24238600c02dcddc53b3d82fb"
+    },
+    {
+      "path": "FIRST_NOTICE.ru-RU.md",
+      "sha256": "6a02e428c3e769d14d467585470cfa2f83e64e0722b0dfb1ed19b5ede56742bb"
+    },
+    {
+      "path": "LICENSE",
+      "sha256": "ccf7d08f932af3e813848881731113afbb7c80d0fd6d958e8d319002bf344d02"
+    },
+    {
+      "path": "dashboard/LICENSE",
+      "sha256": "c3ec6b69a03fd4091080f40b3f4ae0f66bfb389ad306c74be8181ae2cbd004e9"
+    }
+  ],
+  "scope": "Complete unmodified official AstrBot source archive; no NapCat implementation is included. Upstream adapter references and declarations are preserved."
+}

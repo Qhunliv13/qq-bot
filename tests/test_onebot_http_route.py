@@ -15,7 +15,8 @@ def native_http(monkeypatch):
     tree=ast.parse(source.read_text(encoding='utf-8'))
     cls=next(node for node in tree.body if isinstance(node,ast.ClassDef) and node.name=='HiganPlugin')
     node=next(node for node in cls.body if isinstance(node,ast.FunctionDef) and node.name=='_onebot_http')
-    namespace={'re':re,'logger':SimpleNamespace(warning=lambda *args:None)}
+    namespace={'__package__':'plugin','re':re,'ONEBOT_BASE':'http://127.0.0.1:13000',
+               'logger':SimpleNamespace(warning=lambda *args:None)}
     exec(compile(ast.Module(body=[node],type_ignores=[]),str(source),'exec'),namespace)
     calls=[]
     class Response:

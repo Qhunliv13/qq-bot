@@ -1,0 +1,43 @@
+# Run with the external bootstrap-generated env file; all state stays outside git.
+services:
+  bot:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: qhunliv-astrbot:4.28.1-local
+    labels:
+      io.qhunliv.bootstrap.data-dir: '${BOT_DATA_DIR:?Set BOT_DATA_DIR with bootstrap}'
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 120s
+    environment:
+      HIGAN_ROOT: /root/higan
+      ASTRBOT_ROOT: /AstrBot
+      HIGAN_SETTINGS_FILE: /run/qhunliv/settings.json
+    ports:
+      - '127.0.0.1:${BOT_WEB_PORT:-6185}:6185'
+      # External OneBot is optional; no QQ adapter is enabled on fresh state.
+      - '127.0.0.1:${BOT_ONEBOT_PORT:-6199}:6199'
+    volumes:
+      - type: bind
+        source: '${BOT_DATA_DIR:?Set BOT_DATA_DIR with bootstrap}/astrbot'
+        target: /AstrBot/data
+        bind:
+          create_host_path: false
+      - type: bind
+        source: '${BOT_DATA_DIR:?Set BOT_DATA_DIR with bootstrap}/higan'
+        target: /root/higan
+        bind:
+          create_host_path: false
+      - type: bind
+        source: '${BOT_DATA_DIR:?Set BOT_DATA_DIR with bootstrap}/settings.json'
+        target: /run/qhunliv/settings.json
+        read_only: true
+        bind:
+          create_host_path: false
+    healthcheck:
+      test: ['CMD', 'python', '/opt/qhunliv/local_runtime_client.py', '--socket', '/root/higan/run/local.sock', '--health']
+      interval: 10s
+      timeout: 5s
+      start_period: 180s
+      retries: 6

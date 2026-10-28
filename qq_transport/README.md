@@ -2,8 +2,9 @@
 
 These independently authored modules contain no NapCat imports, endpoint proxy,
 loader or copied handler implementation. They do not log in to QQ, load Tencent
-native libraries, open HTTP/WebSocket listeners, or replace the running transport.
-Importing the package does not start any service or install default handlers.
+native libraries, or replace the running transport. Importing the package does not
+start any service or install default handlers. An explicitly started loopback HTTP
+boundary is available; a native QQ backend and reverse WebSocket are not.
 
 ## Implemented and tested offline
 
@@ -20,6 +21,13 @@ Importing the package does not start any service or install default handlers.
 - `events.py`: immutable local event outbox, account isolation, ordered per-consumer
   acknowledgement and a serialized pump into an injected async sink. Native payload
   fields remain intact. Internal sequence IDs are not QQ message IDs.
+
+- `http_api.py`: explicitly started `ActionHttpServer` accepts authenticated
+  loopback-only `POST /action` requests, forwards full JSON parameters to the same
+  dispatcher and uses `X-Operation-Id` for journaled mutations. Account routing is
+  configured, not taken from request contents. Bounded request parsing, strict JSON
+  and cancellation-safe draining are tested with real local sockets. No backend or
+  synthetic default success handlers are installed.
 
 ## Guarantees and limits
 

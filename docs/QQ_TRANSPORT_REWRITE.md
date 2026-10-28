@@ -3,6 +3,19 @@
 Status: **static native investigation and isolated transport core; no replacement QQ backend exists yet**.
 Inventory date: 2026-10-27, Asia/Shanghai. The production transport remains unchanged.
 
+## Distribution and protocol boundary update (2026-10-28)
+
+The repository now embeds the complete unchanged AstrBot v4.28.1 source with all
+original declarations; fresh deployment uses the one-command installer documented
+in `QUICKSTART.md`. No NapCat implementation/client/session is included or installed.
+QQ remains externally configured and optional; bootstrap never selects the unfinished
+independent backend or replaces the existing production login.
+
+The independent transport now has an explicitly injected, authenticated loopback
+HTTP action boundary with real socket tests. It reuses the operation journal and
+handler dispatcher; it contains **no new QQ login or native action implementation**.
+This is concrete protocol infrastructure progress, not native-backend readiness.
+
 ## User requirement and non-negotiable boundary
 
 Replace NapCat completely while retaining the same personal QQ account, existing functions,

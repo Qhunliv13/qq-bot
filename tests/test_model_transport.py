@@ -28,8 +28,9 @@ def test_actual_provider_loader_sets_timeout_without_changing_credentials(tmp_pa
     tree=ast.parse(source.read_text(encoding="utf-8"))
     cls=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=="HiganPlugin")
     method=next(n for n in cls.body if isinstance(n,ast.FunctionDef) and n.name=="_her_llm_config")
+    import os
     ns={"__name__":"plugin.timeout_test", "__package__":"plugin", "json":json,
-        "CHAT_TIMEOUT":45,"logger":logging.getLogger(__name__)}
+        "os":os,"Path":Path,"CHAT_TIMEOUT":45,"logger":logging.getLogger(__name__)}
     config=tmp_path/"cmd_config.json"
     config.write_text(json.dumps({"provider_sources":[{"api_base":"https://offline.invalid/v1", "key":["offline-key"],"timeout":300}],
                                   "provider":[{"id":"qapi-relay","model":"offline-model"}]}),encoding="utf-8")

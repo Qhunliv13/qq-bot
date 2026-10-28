@@ -1,0 +1,22 @@
+.git
+.pytest_cache
+**/__pycache__
+**/*.pyc
+**/*.log
+.env
+.env.*
+**/*private*
+trash
+tests
+_inbox
+node_modules
+**/node_modules
+runtime
+local-data
+*.deb
+*.AppImage
+NapCat*
+napcat*
+# The pinned upstream tree has no sessions or secret credentials. Preserve its
+# complete source/notices even when original test filenames contain 'private'.
+!vendor/astrbot/**

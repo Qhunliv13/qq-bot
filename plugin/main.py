@@ -146,7 +146,8 @@ SILENT_MARKERS = ("SILENT", "silent", "（不回复）", "(不回复)", "不回�
 #: 主人 QQ 名单，用于身份标注与权限判断。
 #: 提示词同时提供 QQ 与身份，避免仅凭昵称推断。
 
-OWNER_QQS = {"2084526117", "3974648486"}
+from .runtime_settings import configured_owners
+OWNER_QQS = configured_owners({"2084526117", "3974648486"})
 
 # 系统提示词单独放在 prompts.py（文案与逻辑分离，改文案不必碰逻辑）
 from .conversation_context import system_prompt
@@ -364,6 +365,10 @@ class HiganPlugin(Star):
         只读，不写：直接写 `personas` 表会导致 AstrBot 崩溃循环（字段类型不匹配），
         所以这里只用 SELECT；取不到就返回空串（插件仍可工作，只是语气弱一些）。
         """
+        from .runtime_settings import configured_persona
+        supplied = configured_persona()
+        if supplied is not None:
+            return supplied
         import sqlite3
         for db in ("data/data_v4.db", "/root/astrbot-src/data/data_v4.db"):
             if not os.path.exists(db):
@@ -1733,19 +1738,28 @@ class HiganPlugin(Star):
     def _her_llm_config(self) -> tuple:
         """从 cmd_config 读她自己的上游（api_base / key / model）。"""
         try:
-            cfg_path = "/root/astrbot-src/data/cmd_config.json"
+            cfg_path = (Path(os.environ.get("ASTRBOT_ROOT", "/root/astrbot-src")) / "data/cmd_config.json").as_posix()
             with open(cfg_path, encoding="utf-8-sig") as fh:
                 cfg = json.load(fh)
-            source = (cfg.get("provider_sources") or [{}])[0]
+            providers = cfg.get("provider") or []
+            selected_id = (cfg.get("provider_settings") or {}).get("default_provider_id")
+            # New installs follow AstrBot's selected model/source binding. Preserve
+            # the existing deployment's selection when no explicit default exists.
+            selected = next((item for item in providers if item.get("id") == selected_id), None) if selected_id else None
+            if selected_id and selected is None:
+                raise ValueError("selected_model_missing")
+            if selected is None:
+                selected = next((item for item in providers if item.get("id") == "qapi-relay"), {})
+            sources = cfg.get("provider_sources") or [{}]
+            source_id = selected.get("provider_source_id")
+            source = next((item for item in sources if item.get("id") == source_id), None) if source_id else sources[0]
+            if source is None:
+                raise ValueError("selected_model_source_missing")
             from .model_transport import request_timeout
             self._provider_request_timeout = request_timeout(source, CHAT_TIMEOUT)
             base = (source.get("api_base") or "").rstrip("/")
             key = (source.get("key") or [""])[0]
-            model = ""
-            for item in cfg.get("provider") or []:
-                if item.get("id") == "qapi-relay":
-                    model = item.get("model") or ""
-                    break
+            model = selected.get("model") or ""
             return base, key, model
         except Exception as exc:  # noqa: BLE001
             logger.warning("[higan] 读上游配置失败：%r", exc)
@@ -1976,10 +1990,16 @@ class HiganPlugin(Star):
                 raise ValueError("invalid_onebot_action")
             if not isinstance(params, dict):
                 raise TypeError("onebot_parameters_must_be_object")
-            _url = "http://127.0.0.1:13000/" + action
+            from .runtime_settings import onebot_connection
+            endpoint, token = onebot_connection(ONEBOT_BASE)
+            if not endpoint:
+                return {"status": "failed", "retcode": -1, "error": "qq_transport_unavailable"}
+            _url = endpoint + "/" + action
             payload = _json.dumps(params).encode("utf-8")
             req = urllib.request.Request(_url, data=payload, method="POST")
             req.add_header("Content-Type", "application/json")
+            if token:
+                req.add_header("Authorization", "Bearer " + token)
             with urllib.request.urlopen(req, timeout=25) as resp:
                 return _json.loads(resp.read().decode("utf-8", "replace"))
         except Exception as exc:  # noqa: BLE001
@@ -4452,9 +4472,17 @@ class HiganPlugin(Star):
     async def _onebot(action: str, payload: dict) -> dict:
         """调 NapCat 的 OneBot HTTP 接口（只读用途）。"""
         import urllib.request
-        url = "%s/%s" % (ONEBOT_BASE, action)
+        from .runtime_settings import onebot_connection
+        endpoint, token = onebot_connection(ONEBOT_BASE)
+        if not endpoint:
+            return {"status": "failed", "retcode": -1, "error": "qq_transport_unavailable"}
+        if not isinstance(action, str) or not re.fullmatch(r"[A-Za-z0-9_]+", action):
+            return {}
+        url = "%s/%s" % (endpoint, action)
         req = urllib.request.Request(url, data=json.dumps(payload).encode(), method="POST")
         req.add_header("Content-Type", "application/json")
+        if token:
+            req.add_header("Authorization", "Bearer " + token)
 
         def _call() -> dict:
             """同步读取 OneBot JSON 响应，由外层在线程执行。"""
