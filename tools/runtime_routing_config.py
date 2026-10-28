@@ -155,6 +155,8 @@ async def run(args: argparse.Namespace) -> dict:
         api_key = result["api_key"]
         current = await asyncio.to_thread(request, "GET", api_key)
         if current != before or fingerprint(config_path) != config_digest:
+            print(json.dumps({"diagnostic": "profile_drift_keys", "keys": sorted(
+                key for key in set(current) | set(before) if current.get(key) != before.get(key))}), flush=True)
             raise RuntimeError("Current dashboard/disk profile differs; refusing PUT")
         await asyncio.to_thread(request, "PUT", api_key, expected)
         actual = await asyncio.to_thread(request, "GET", api_key)
@@ -184,7 +186,16 @@ def main() -> None:
         result = asyncio.run(run(args))
     except Exception as exc:
         # Native errors may contain credentials/profile fields; never print values.
-        print(json.dumps({"success": False, "error_type": type(exc).__name__}), file=sys.stderr)
+        safe_reasons = {
+            "Current dashboard/disk profile differs; refusing PUT": "profile_drift",
+            "Temporary key scope differs": "key_scope_mismatch",
+            "Native dashboard request failed": "dashboard_rejected",
+            "Native dashboard returned an invalid profile": "invalid_profile_envelope",
+            "Framework import changed configuration": "import_changed_config",
+            "Post-update profile differs; inspect private backup; no blind rollback": "post_update_drift",
+        }
+        print(json.dumps({"success": False, "error_type": type(exc).__name__,
+                          "error_code": safe_reasons.get(str(exc), "guard_or_transport_failure")}), file=sys.stderr)
         raise SystemExit(1) from None
     print(json.dumps(result))
 
