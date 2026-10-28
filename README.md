@@ -47,7 +47,7 @@ python -m compileall -q plugin
 
 ## QQ 作为能力，而非 bot 的生命线（设计中）
 
-[核心解耦设计](docs/BOT_CORE_DECOUPLING.md)将身份、记忆、任务／目标、工具和执行协调归入独立核心，让 QQ 成为接入能力之一。`bot_core/` 当前仅有平台中立的端点、主体和事件契约原型；**没有宣称已抽离运行引擎或实现 QQ 离线任务主机**。旧数据、权限、公共／私密边界和单一执行顺序必须保留；无论新实现测试结果如何，切换生产都要等用户另行明确通知。
+按最新要求先落地[简单独立 harness](docs/BOT_HARNESS.md)：`bot_core.Harness` 直接复用现有 `plugin.agent_loop.run`，通过回调注入模型和工具；`python -m bot_core --help` 提供本地入口，不导入 AstrBot、不连接或迁移 QQ 登录。默认不会自动搬动现有记忆、任务或 106 项生产工具。更大的[核心解耦设计](docs/BOT_CORE_DECOUPLING.md)仅作未来参考，不作为本次 harness 的运行复杂度。现有登录与生产保持不变，切换仍须用户另行明确通知。
 
 ## 版本与档案
 

@@ -193,8 +193,14 @@ new owner authority; no data or tool disappears during incremental extraction.
 
 ## Explicit limits of the first code increment
 
-The new `bot_core` contracts are an isolated boundary prototype, not an extracted bot
-engine. They validate routing/provenance shape but cannot authenticate an untrusted
-caller by themselves. The current production bot remains hosted by AstrBot and QQ;
-local scheduling, independent execution and output routing are still design/next steps.
-There is no new listening API, production migration, credential copy or live cutover.
+The initial `bot_core` contracts validate routing/provenance shape but cannot authenticate
+an untrusted caller. The subsequent user instruction explicitly narrows implementation
+to a **simple harness**, not this entire architecture at once. `BOT_HARNESS.md` describes
+the now-available thin independent invocation of the existing `plugin.agent_loop.run`,
+with injected model/tools and a local CLI. That loop is reused, not reimplemented.
+
+The current production bot remains hosted by AstrBot and QQ. Independent scheduling,
+automatic memory/task migration and production output routing are not supplied by the
+harness. There is no new listening API, credential copy, login change or live cutover.
+The broader layers in this document remain optional future design, not prerequisites
+or added runtime machinery for the requested simple independent harness.
