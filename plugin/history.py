@@ -17,6 +17,7 @@ import json
 import os
 import re
 import time
+from threading import RLock
 
 MAX_LINES = 5000
 MAX_SCOPES = 30
@@ -28,6 +29,9 @@ class Recorder:
     def __init__(self, root: str = "/root/higan/history") -> None:
         """初始化（目录不存在就建）。"""
         self.root = root
+        # One detached tail/count per file; the lock also protects future threaded readers.
+        self._snapshot_lock = RLock()
+        self._snapshot_cache = {}
         try:
             os.makedirs(root, exist_ok=True)
         except Exception:                                 # noqa: BLE001
@@ -104,40 +108,102 @@ class Recorder:
             # Preserve the legacy immediate return, including for an unavailable file.
             return {"records": [], "count": 0, "available": True}
         excluded = tuple(exclude_message_ids)
-        records = deque(maxlen=limit)
-        count = 0
-        try:
-            with open(self._path(scope), encoding="utf-8") as handle:
-                # Read the entire file: a bounded tail alone cannot provide the
-                # stable eligible count used to align globally cached prefixes.
-                for raw in handle:
-                    try:
-                        item = json.loads(raw)
-                    except (ValueError, TypeError):
-                        # A partial or corrupt JSONL entry does not erase neighboring evidence.
-                        continue
-                    if not isinstance(item, dict) or not isinstance(item.get("line"), str):
-                        # Keep precisely the legacy valid-record acceptance contract.
-                        continue
-                    if not item["line"]:
-                        continue
-                    metadata = item.get("record")
-                    if (isinstance(metadata, dict) and "id" in metadata
-                            and any(metadata["id"] == message_id for message_id in excluded)):
-                        # Scope is already bound by the file; retain native ID equality
-                        # (not string normalization) and never inspect legacy text.
-                        continue
+        path = self._path(scope)
+        # Keep only the base query and latest filtered query per path. A cheap
+        # activity lookup must not evict the larger shared-history tail.
+        cache_key = (path, bool(excluded))
+        with self._snapshot_lock:
+            try:
+                stat = os.stat(path)
+                stamp = (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns)
+                cached = self._snapshot_cache.get(cache_key)
+                # A different selection or larger requested tail needs a full scan;
+                # no new retention limit may silently discard requested evidence.
+                reusable = (cached is not None and cached["scope"] == str(scope)
+                            and cached["excluded"] == excluded
+                            and (cached["limit"] is None or limit is not None
+                                 and cached["limit"] >= limit))
+                if reusable and cached["stamp"] == stamp:
+                    result = cached["result"]
+                else:
+                    append = (reusable and cached["stamp"][:2] == stamp[:2]
+                              and stamp[2] > cached["stamp"][2]
+                              and stamp[3] > cached["stamp"][3])
+                    capacity = cached["limit"] if append else limit
+                    state = cached["committed"] if append else (0, [], 0)
+                    with open(path, "rb") as handle:
+                        handle.seek(state[0])
+                        result, committed = self._scan_snapshot(
+                            handle, scope, capacity, excluded, state)
+                        after = os.fstat(handle.fileno())
+                    # Concurrent file changes cannot anchor the next incremental read.
+                    after_stamp = (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+                    if after_stamp == stamp:
+                        self._snapshot_cache[cache_key] = {"stamp": stamp, "scope": str(scope), "excluded": excluded,
+                            "limit": capacity, "result": result, "committed": committed}
+                    else:
+                        self._snapshot_cache.pop(cache_key, None)
+                detached = deepcopy(result)
+                if limit is not None:
+                    detached["records"] = detached["records"][-limit:]
+                return detached
+            except (OSError, UnicodeError):
+                # Partial/failed reads must neither publish nor retain partial counts.
+                self._snapshot_cache.pop(cache_key, None)
+                return {"records": [], "count": 0, "available": False}
+
+    def _scan_snapshot(self, handle, scope, limit, excluded, state):
+        """Resume after complete lines; keep an unterminated final row tentative.
+
+        Recorder archives are append-only. Replacements, shrinkage and same-size
+        rewrites rebuild in the caller; a valid final row without newline remains
+        visible now but is reread if later bytes complete or invalidate that row.
+        """
+        offset, prior, count = state
+        records = deque(prior, maxlen=limit)
+        committed = None
+        for raw, end_offset in self._snapshot_lines(handle):
+            if not raw.endswith((b"\n", b"\r")):
+                # Retain only one tail copy, not one per complete archive row.
+                committed = (offset, list(records), count)
+            # Decode before JSON validation: invalid UTF-8 has always failed the
+            # whole snapshot rather than behaving like an ignorable malformed row.
+            text = raw.decode("utf-8")
+            try:
+                item = json.loads(text)
+            except (ValueError, TypeError):
+                item = None
+            if (isinstance(item, dict) and isinstance(item.get("line"), str)
+                    and item["line"]):
+                metadata = item.get("record")
+                if not (isinstance(metadata, dict) and "id" in metadata
+                        and any(metadata["id"] == message_id for message_id in excluded)):
                     count += 1
                     row = {"scope": str(scope), "ts": item.get("ts"), "line": item["line"]}
                     if "record" in item:
-                        # json.loads owns this fresh tree; retain it directly so evicted
-                        # rows need no deepcopy, while each returned scan stays detached.
                         row["record"] = metadata
                     records.append(row)
-        except (OSError, UnicodeError):
-            # Partial reads are not coherent snapshots; never publish their tail/count.
-            return {"records": [], "count": 0, "available": False}
-        return {"records": list(records), "count": count, "available": True}
+            if raw.endswith((b"\n", b"\r")):
+                # Snapshot only at a complete-line boundary, including malformed
+                # rows, so append replay never double-counts the tentative last row.
+                offset = end_offset
+        if committed is None:
+            committed = (offset, list(records), count)
+        return {"records": list(records), "count": count, "available": True}, committed
+
+    @staticmethod
+    def _snapshot_lines(handle):
+        """Yield universal-newline byte records and exact resumable file offsets.
+
+        Binary offsets avoid text-reader cookies; splitting CR as well as LF
+        preserves the old UTF-8 text reader's universal-newline acceptance.
+        """
+        position = handle.tell()
+        for block in handle:
+            for match in re.finditer(rb"[^\r\n]*(?:\r\n|\r|\n)|[^\r\n]+$", block):
+                raw = match.group()
+                position += len(raw)
+                yield raw, position
 
     def search(self, keyword: str, scope: str = "", limit: int = 10) -> list:
         """按关键词找记录（跨 scope 返回 [{scope, line}]）。"""

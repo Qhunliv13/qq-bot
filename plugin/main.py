@@ -1375,7 +1375,9 @@ class HiganPlugin(Star):
             while self._pending.get(group):
                 if not hasattr(self, "_execution_lock"):
                     self._execution_lock = asyncio.Lock()
+                queued_at = time.monotonic()
                 async with self._execution_lock:
+                    lock_wait = time.monotonic() - queued_at
                     # No await separates the snapshot from detaching its source list:
                     # arrivals during execution therefore belong to the next turn.
                     entries = list(self._pending.get(group, []))
@@ -1396,11 +1398,16 @@ class HiganPlugin(Star):
                         "clock": self._clock_context(), "messages": batch["records"],
                         "image_refs": selected_refs, "image_sources": sources}
                     logger.info("[higan] 群 %s 合批裁决：%d 条消息，一次模型机会", group, len(entries))
+                    turn_started = time.monotonic()
+                    logger.info("[higan] reply_phase phase=lock_wait seconds=%.3f batch_size=%d",
+                                lock_wait, len(entries))
                     try:
                         await self._handle_one(ev, group, txt, batch["has_image"], batch["woken"])
                     except Exception as exc:
                         logger.error("[higan] 群 %s 合批处理失败：%s", group, type(exc).__name__)
                     finally:
+                        logger.info("[higan] reply_phase phase=turn seconds=%.3f batch_size=%d",
+                                    time.monotonic() - turn_started, len(entries))
                         self._turn_context.pop(group, None)
         except Exception as exc:
             logger.error("[higan] 群 %s 待处理消息出错：%s", group, type(exc).__name__)
@@ -3430,8 +3437,12 @@ class HiganPlugin(Star):
             excluded = [(str(group), str(record["id"])) for record in current_records
                         if isinstance(record, dict) and record.get("id") is not None]
             try:
-                shared = CrossScopeMemory(self._hist()).unified_snapshot(
+                snapshot_started = time.monotonic()
+                shared = await asyncio.to_thread(
+                    CrossScopeMemory(self._hist()).unified_snapshot,
                     exclude_messages=excluded, cache_block_size=DEFAULT_SHARED_CACHE_BLOCK)
+                logger.info("[higan] reply_phase phase=history_snapshot seconds=%.3f rows=%d",
+                            time.monotonic() - snapshot_started, len(shared["records"]))
                 # Public QQ history stays read-only; local history never joins its pool.
                 turn["history"] = list(shared["records"])
                 if local_context:
@@ -3472,7 +3483,10 @@ class HiganPlugin(Star):
             except Exception as exc:
                 turn["activity"] = {"source": "activity_state", "available": False,
                                     "error": type(exc).__name__}
+        context_started = time.monotonic()
         prompt = self._request_context(event, group, text, has_image)
+        logger.info("[higan] reply_phase phase=context seconds=%.3f chars=%d",
+                    time.monotonic() - context_started, len(prompt))
 
         async def _llm(_sys, _prompt):
             """Retain legacy callback compatibility for the shared loop module."""
@@ -3488,20 +3502,27 @@ class HiganPlugin(Star):
                     task_context, self._tasks_mod().listing(only_active=False)):
                 return "", []
             from .image_transcript import with_images
+            images_started = time.monotonic()
             if not images_initialized:
                 # Enrich the loop's original user exactly once, before its first request.
-                messages[:] = with_images(messages, initial_refs, self._as_llm_url,
-                                          MAX_IMAGES_PER_CALL, initial=True,
-                                          source_records=turn.get("image_sources", []))
+                converted = await asyncio.to_thread(
+                    with_images, list(messages), list(initial_refs), self._as_llm_url,
+                    MAX_IMAGES_PER_CALL, initial=True,
+                    source_records=turn.get("image_sources", []))
+                messages[:] = converted
                 images_initialized = True
             else:
                 # The loop has appended every tool result; new images cannot break tool pairing.
                 # Count tool observations, not filenames: a new screenshot may reuse
                 # the same path with different bytes. Old data URLs stay immutable.
                 new_refs = live_refs[submitted_ref_count:]
-                messages[:] = with_images(messages, new_refs, self._as_llm_url,
-                                          MAX_IMAGES_PER_CALL)
+                converted = await asyncio.to_thread(
+                    with_images, list(messages), list(new_refs), self._as_llm_url,
+                    MAX_IMAGES_PER_CALL)
+                messages[:] = converted
                 submitted_ref_count = len(live_refs)
+            logger.info("[higan] reply_phase phase=image_prepare seconds=%.3f",
+                        time.monotonic() - images_started)
             return await self._llm_tools(system, prompt, [], messages, allow_tools)
 
         async def _execute_tool(name, args):
