@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-28",
+  "time_zone": "Asia/Shanghai",
+  "deployed_plugin_commit": "625552790124017601439d9f6660c00f9337c79d",
+  "previous_deployed_plugin_commit": "7af432c7ada89f1c8727c6cfe3b26934b8d52502",
+  "diagnostic_probe_commit": "165d679f9701197f7df163b1a788b26bb14c3121",
+  "activation": "exact-plugin native reload; no service or NapCat restart",
+  "release_name": "cross-group-recall-20261028-1724",
+  "changed_plugin_modules": 8,
+  "full_plugin_hashes_verified": 52,
+  "tests": {"passed": 2967, "skipped": 37, "subtests_passed": 100},
+  "static_checks": {"pyflakes": true, "credential_scan_failures": 0},
+  "preservation": {
+    "qq_login_preserved": true,
+    "astrbot_main_pid_unchanged": true,
+    "napcat_start_timestamp_unchanged": true,
+    "five_static_configuration_hashes_unchanged": true,
+    "existing_state_paths_preserved": true,
+    "autonomy_file_runtime_cursors_may_change_normally": true
+  },
+  "post_release": {
+    "local_entry_health": true,
+    "mention_policy_probe": true,
+    "fact_queue_probe": true,
+    "message_transfer_probe": true,
+    "explicit_publication_probe": true,
+    "native_group_info_and_members_read": true,
+    "real_scoped_archive_retrieval": true,
+    "native_bot_count_unknown": true,
+    "real_model_calls": 0,
+    "qq_test_messages_sent": 0
+  },
+  "limitations": [
+    "The selected target group was present in the default window during final verification; window crowd-out is a tested failure mode, not proof that it caused the screenshot response.",
+    "Archive discovery and scoped retrieval defects were verified and fixed; no forced prompt or group-specific answer was added.",
+    "Native member rows lacked reliable bot classification; a member count is not a bot count.",
+    "No post-release model conversation was executed; the fix is verified at archive, dispatch, native read and preservation boundaries.",
+    "Initial post-release controller stopped at an obsolete fixed 106-tool probe assertion after successful code activation. The committed diagnostic now checks exact catalog membership; the probe and full final state verification then passed without another activation.",
+    "AstrBot vendored packaging was not substituted into the existing production host. This release also includes previously committed fact image and legacy-compatible runtime settings modules."
+  ]
+}
