@@ -75,6 +75,31 @@ class ClickGateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.clicks, [])
         self.assertFalse(await self.gate.mark_observed(preview["path"]))
 
+    async def test_unicode_paths_are_observable_and_confirmable(self):
+        """A legitimate Unicode state directory must not break the visual checkpoint."""
+        self.root = Path(self.temp.name) / '截图目录'
+        self.root.mkdir()
+        self.shot = self.root / '屏幕.png'
+        self.paint('white')
+        self.gate = ClickGate(self.root)
+        preview = await self.checkpoint()
+        self.assertTrue((await self.approve(preview))['ok'])
+        self.assertEqual(self.clicks, [(20, 25)])
+
+    async def test_nonascii_and_surrogate_confirmation_is_safe_mismatch(self):
+        """Untrusted Unicode tickets/digests never raise or authorize a click."""
+        for value in ('错误', '\ud800'):
+            for field in ('ticket', 'screen_sha256'):
+                with self.subTest(value=repr(value), field=field):
+                    preview = await self.checkpoint()
+                    ticket = value if field == 'ticket' else preview['ticket']
+                    digest = value if field == 'screen_sha256' else preview['screen_sha256']
+                    result = await self.gate.confirm(ticket, self.screenshot, self.click,
+                        x=20, y=25, screen_sha256=digest, viewed=True)
+                    self.assertEqual(result['error'], 'preview_confirmation_mismatch')
+                    self.assertEqual((await self.approve(preview))['error'], 'no_pending_preview')
+        self.assertEqual(self.clicks, [])
+
     async def test_valid_preview_and_one_time_confirm(self):
         """Return a distinct immutable marker and consume the ticket once."""
         preview = await self.checkpoint()

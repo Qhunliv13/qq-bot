@@ -24,6 +24,16 @@ MAX_SCREEN_PIXELS = 16 * 1024 * 1024
 DEFAULT_TTL_SECONDS = 60
 
 
+def _same_text(actual, expected):
+    """Compare exact text including Unicode paths without compare_digest's ASCII trap.
+
+    Surrogate preservation makes malformed model text a non-match rather than an
+    uncaught encoding exception; no normalization can alias a different ticket.
+    """
+    return secrets.compare_digest(actual.encode('utf-8', errors='surrogatepass'),
+                                  expected.encode('utf-8', errors='surrogatepass'))
+
+
 class ClickGate:
     """Hold exactly one opaque click checkpoint within one plugin model turn."""
 
@@ -143,7 +153,7 @@ class ClickGate:
         async with self._lock:
             if self._pending is None or not isinstance(path, str):
                 return False
-            if not secrets.compare_digest(path, self._pending[5]):
+            if not _same_text(path, self._pending[5]):
                 return False
             if time.monotonic() >= self._pending[4]:
                 self._pending = None
@@ -163,11 +173,11 @@ class ClickGate:
             if pending is None:
                 return {"ok": False, "error": "no_pending_preview"}
             expected_ticket, expected_x, expected_y, expected_digest, expires, _path = pending
-            if (not isinstance(ticket, str) or not secrets.compare_digest(ticket, expected_ticket)
+            if (not isinstance(ticket, str) or not _same_text(ticket, expected_ticket)
                     or type(x) is not int or type(y) is not int
                     or (x, y) != (expected_x, expected_y)
                     or not isinstance(screen_sha256, str)
-                    or not secrets.compare_digest(screen_sha256, expected_digest)
+                    or not _same_text(screen_sha256, expected_digest)
                     or viewed is not True):
                 return {"ok": False, "error": "preview_confirmation_mismatch"}
             if not observed:
