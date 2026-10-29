@@ -1,0 +1,3413 @@
+{
+  "abi_compatibility": "unverified",
+  "application_invoked": true,
+  "authored_source_sha256": "4ab8582d780a2cbf4a1fdddc90990dc0c74d594edc8f177dfe219b2b61993a94",
+  "bounds_seconds": {
+    "outer": 45,
+    "qq": 30
+  },
+  "completion": "watchdog_30s",
+  "dispatch_progress": {
+    "flags": {
+      "bootstrapEntered": true,
+      "nextTick": true,
+      "onReady": false,
+      "promiseThen": true,
+      "queueMicrotask": true,
+      "setImmediate": true,
+      "setTimeout0": true,
+      "setTimeout1000": false,
+      "synchronousEnd": true,
+      "whenReady": false
+    },
+    "history": [
+      {
+        "elapsed_ms": 0,
+        "event": "bootstrapEntered"
+      },
+      {
+        "elapsed_ms": 0,
+        "event": "synchronousEnd"
+      },
+      {
+        "elapsed_ms": 0,
+        "event": "nextTick"
+      },
+      {
+        "elapsed_ms": 0,
+        "event": "promiseThen"
+      },
+      {
+        "elapsed_ms": 0,
+        "event": "queueMicrotask"
+      },
+      {
+        "elapsed_ms": 313,
+        "event": "setImmediate"
+      },
+      {
+        "elapsed_ms": 313,
+        "event": "setTimeout0"
+      }
+    ],
+    "nonce": "b34b641b39bb1a838b232a2c3ffa6344",
+    "observation_complete": false,
+    "registrations": {
+      "nextTick": "registered",
+      "onReady": "registered",
+      "promiseThen": "registered",
+      "queueMicrotask": "registered",
+      "setImmediate": "registered",
+      "setTimeout0": "registered",
+      "setTimeout1000": "registered",
+      "whenReady": "registered"
+    },
+    "runtime": {
+      "exec_path_matches": true,
+      "versions": {
+        "chrome": "144.0.7559.60",
+        "electron": "40.0.0",
+        "modules": "143",
+        "napi": "10",
+        "node": "24.11.1",
+        "uv": "1.51.0",
+        "v8": "14.4.258.16-electron.0"
+      }
+    },
+    "schema_version": 1
+  },
+  "elapsed_seconds": 30.05,
+  "entry_override_readonly": true,
+  "ephemeral_manifest_mounted": true,
+  "errors": [
+    "host_dispatch_incomplete"
+  ],
+  "exit_code": -9,
+  "experiment_completed": true,
+  "filesystem_mode": "pivot-root",
+  "full_sendrecv_verified": false,
+  "host_dispatch_observation_complete": false,
+  "host_record": null,
+  "host_software_sha256_after": {
+    "qq": "ae67432744180adc2b6567aa61b9575b14b28745f57b377a2853a1b744299ec2",
+    "resources/app/app_launcher/index.js": "1c3f92e9da772b2578803f0e2847d3667363165b7f8a77e4869c060ce21596ab",
+    "resources/app/application.asar": "8a50d728a5e122e0ef08d73b01578b5124d40b93e7f17ffa16b92896daff5338",
+    "resources/app/package.json": "e7d8f160704a8704a4f531ef97602ea6fea8338f738f74ee9b10155cb9fc0a85",
+    "resources/app/wrapper.node": "236ff3ebf29310c75a41394d80db4587411d43d66208c2a7d58b160d7b7b213b"
+  },
+  "host_software_sha256_before": {
+    "qq": "ae67432744180adc2b6567aa61b9575b14b28745f57b377a2853a1b744299ec2",
+    "resources/app/app_launcher/index.js": "1c3f92e9da772b2578803f0e2847d3667363165b7f8a77e4869c060ce21596ab",
+    "resources/app/application.asar": "8a50d728a5e122e0ef08d73b01578b5124d40b93e7f17ffa16b92896daff5338",
+    "resources/app/package.json": "e7d8f160704a8704a4f531ef97602ea6fea8338f738f74ee9b10155cb9fc0a85",
+    "resources/app/wrapper.node": "236ff3ebf29310c75a41394d80db4587411d43d66208c2a7d58b160d7b7b213b"
+  },
+  "host_software_unchanged": true,
+  "independent_backend_ready": false,
+  "invocation": {
+    "argv": [
+      "/opt/QQ/qq"
+    ],
+    "electron_run_as_node_present": false
+  },
+  "isolation": {
+    "chroot": false,
+    "effective_capabilities_zero": true,
+    "ipc": true,
+    "mount": true,
+    "network": true,
+    "no_new_privileges": true,
+    "oldroot_detached": true,
+    "pid": true,
+    "pivotRoot": true,
+    "unprivileged": true
+  },
+  "manifest_override_readonly": true,
+  "mode": "ephemeral_host_dispatch_fatal_offline",
+  "native_binding_verified": false,
+  "native_host_binding_load_verified": false,
+  "native_login_verified": false,
+  "offline_network": {
+    "ipv4_routes_absent": true,
+    "ipv6_forward_routes_absent": true,
+    "loopback_down": true,
+    "only_loopback": true
+  },
+  "override_main": "./app_launcher/index.js",
+  "private_control_reads": {
+    "authored_main": {
+      "accessed": true,
+      "opened": true
+    },
+    "manifest": {
+      "accessed": true,
+      "opened": true
+    },
+    "overflow": false
+  },
+  "private_diagnostics_written": false,
+  "private_display": {
+    "authenticated": true,
+    "effective_capabilities_zero": true,
+    "launch_attempted": true,
+    "ready": true,
+    "socket_owner_verified": true,
+    "stderr_prefix_bounded": true,
+    "stderr_present": true,
+    "tcp_disabled": true,
+    "unprivileged": true
+  },
+  "private_export": {
+    "completed": true,
+    "length": 1739,
+    "linux_owner_mode_verified": true,
+    "windows_posix_mode_claimed": false
+  },
+  "private_fatal_capture": {
+    "stderr": {
+      "captured_length": 555,
+      "sha256": "fdb0398f109ec07dd6953470a8ff98ebf4025614aaa94c858116db02833b9222"
+    },
+    "stdout": {
+      "captured_length": 156,
+      "sha256": "88ccf942b8ae1d389e5919e245885296fafc0f550e1bdb2ee893021dc794c239"
+    }
+  },
+  "private_output_categories": {},
+  "private_runtime_services": {
+    "activation_disabled": true,
+    "bus_ready": true,
+    "daemon_stderr_present": false,
+    "effective_capabilities_zero": true,
+    "fontconfig_readonly": true,
+    "launch_attempted": true,
+    "socket_owner_verified": true,
+    "unprivileged": true
+  },
+  "process_retired": true,
+  "production_cutover": false,
+  "production_cutover_authorized": false,
+  "runtime_executed": true,
+  "runtime_versions_verified": true,
+  "safe_to_login": false,
+  "session_initialized": false,
+  "stall_capture": {
+    "category_false_means_no_error": false,
+    "resource_bounds_unchanged": {
+      "cpu_seconds": 30,
+      "file_size_bytes": 16384,
+      "open_files": 128
+    },
+    "root_cause_proven": false,
+    "stderr_cap_reached": false,
+    "stderr_categories": {
+      "dbus_scope_unknown": false,
+      "dbus_unavailable": true,
+      "file_size_limit": false,
+      "fontconfig_unavailable": false,
+      "private_session_bus_connect_failure": false,
+      "profile_create_or_open_failed": false,
+      "resource_efbig": false,
+      "resource_emfile": false,
+      "resource_enospc": false,
+      "sandbox": false,
+      "sandbox_fatal": false,
+      "sharedmemory": false,
+      "system_bus_socket_missing": true,
+      "too_many_open_files": false
+    },
+    "stderr_prefix_truncated": false,
+    "stderr_size_bytes": 555,
+    "stdout_cap_reached": false,
+    "stdout_size_bytes": 156
+  },
+  "stall_observation": {
+    "maximum_samples": 30,
+    "maximum_threads_per_sample": 64,
+    "private_pid_scope_only": true,
+    "sample_interval_seconds": 1,
+    "samples": [
+      {
+        "elapsed_seconds": 0.173,
+        "identity_verified": true,
+        "main": {
+          "core_dumping": 0,
+          "exit_code": 0,
+          "fd": {
+            "count": 4,
+            "maxfd": 3,
+            "truncated": false,
+            "visibility": "readable"
+          },
+          "flags": 4456704,
+          "limits": {
+            "cpu_seconds": {
+              "hard": 30,
+              "soft": 30
+            },
+            "file_size_bytes": {
+              "hard": 16384,
+              "soft": 16384
+            },
+            "open_files": {
+              "hard": 128,
+              "soft": 128
+            }
+          },
+          "main_wait": {
+            "category": "numeric_zero"
+          },
+          "num_threads": 1,
+          "start_ticks": 221,
+          "state": "R",
+          "stime_ticks": 0,
+          "task_directory_readable": true,
+          "task_exit_codes": {
+            "counts": {
+              "0": 1
+            },
+            "overflow_count": 0,
+            "unavailable_count": 0
+          },
+          "task_waits": {
+            "categories": {
+              "denied": 0,
+              "empty": 0,
+              "invalid_shape": 0,
+              "numeric_nonzero": 0,
+              "numeric_zero": 1,
+              "symbol": 0,
+              "unavailable": 0
+            },
+            "overflow_count": 0,
+            "symbols": {}
+          },
+          "thread_summary": {
+            "states": {
+              "D": 0,
+              "I": 0,
+              "K": 0,
+              "N": 0,
+              "P": 0,
+              "R": 1,
+              "S": 0,
+              "T": 0,
+              "W": 0,
+              "X": 0,
+              "Z": 0,
+              "t": 0,
+              "x": 0
+            },
+            "wait_categories": {
+              "futex": 0,
+              "other": 1,
+              "poll": 0,
+              "read": 0,
+              "unknown": 0,
+              "wait": 0
+            }
+          },
+          "threads_truncated": false,
+          "utime_ticks": 0,
+          "wchan_visibility": {
+            "sampled": 1,
+            "stat_unavailable": 0,
+            "wchan_empty": 0,
+            "wchan_nonzero": 0,
+            "wchan_read_denied": 0,
+            "wchan_unavailable": 0,
+            "wchan_zero": 1
+          }
+        },
+        "tmp_free_bytes": 16744448,
+        "windows": {
+          "dialog_presence": null,
+          "main_pid_correlated_windows": 0,
+          "roles_queried": false,
+          "root_children": 0,
+          "visited_windows": 0
+        }
+      },
+      {
+        "elapsed_seconds": 1.011,
+        "identity_verified": true,
+        "main": {
+          "core_dumping": 1,
+          "exit_code": 5,
+          "fd": {
+            "count": 53,
+            "maxfd": 52,
+            "truncated": false,
+            "visibility": "readable"
+          },
+          "flags": 4195592,
+          "limits": {
+            "cpu_seconds": {
+              "hard": 30,
+              "soft": 30
+            },
+            "file_size_bytes": {
+              "hard": 16384,
+              "soft": 16384
+            },
+            "open_files": {
+              "hard": 128,
+              "soft": 128
+            }
+          },
+          "main_wait": {
+            "category": "symbol",
+            "symbol": "do_exit"
+          },
+          "num_threads": 25,
+          "start_ticks": 221,
+          "state": "I",
+          "stime_ticks": 45,
+          "task_directory_readable": true,
+          "task_exit_codes": {
+            "counts": {
+              "0": 25
+            },
+            "overflow_count": 0,
+            "unavailable_count": 0
+          },
+          "task_waits": {
+            "categories": {
+              "denied": 0,
+              "empty": 0,
+              "invalid_shape": 0,
+              "numeric_nonzero": 0,
+              "numeric_zero": 0,
+              "symbol": 25,
+              "unavailable": 0
+            },
+            "overflow_count": 0,
+            "symbols": {
+              "symbol:anon_pipe_write": 1,
+              "symbol:do_exit": 24
+            }
+          },
+          "thread_summary": {
+            "states": {
+              "D": 0,
+              "I": 24,
+              "K": 0,
+              "N": 0,
+              "P": 0,
+              "R": 1,
+              "S": 0,
+              "T": 0,
+              "W": 0,
+              "X": 0,
+              "Z": 0,
+              "t": 0,
+              "x": 0
+            },
+            "wait_categories": {
+              "futex": 0,
+              "other": 25,
+              "poll": 0,
+              "read": 0,
+              "unknown": 0,
+              "wait": 0
+            }
+          },
+          "threads_truncated": false,
+          "utime_ticks": 11,
+          "wchan_visibility": {
+            "sampled": 25,
+            "stat_unavailable": 0,
+            "wchan_empty": 0,
+            "wchan_nonzero": 25,
+            "wchan_read_denied": 0,
+            "wchan_unavailable": 0,
+            "wchan_zero": 0
+          }
+        },
+        "tmp_free_bytes": 16592896,
+        "windows": {
+          "dialog_presence": null,
+          "main_pid_correlated_windows": 1,
+          "roles_queried": false,
+          "root_children": 3,
+          "visited_windows": 3
+        }
+      },
+      {
+        "elapsed_seconds": 2.011,
+        "identity_verified": true,
+        "main": {
+          "core_dumping": 1,
+          "exit_code": 5,
+          "fd": {
+            "count": 53,
+            "maxfd": 52,
+            "truncated": false,
+            "visibility": "readable"
+          },
+          "flags": 4195592,
+          "limits": {
+            "cpu_seconds": {
+              "hard": 30,
+              "soft": 30
+            },
+            "file_size_bytes": {
+              "hard": 16384,
+              "soft": 16384
+            },
+            "open_files": {
+              "hard": 128,
+              "soft": 128
+            }
+          },
+          "main_wait": {
+            "category": "symbol",
+            "symbol": "do_exit"
+          },
+          "num_threads": 25,
+          "start_ticks": 221,
+          "state": "I",
+          "stime_ticks": 56,
+          "task_directory_readable": true,
+          "task_exit_codes": {
+            "counts": {
+              "0": 25
+            },
+            "overflow_count": 0,
+            "unavailable_count": 0
+          },
+          "task_waits": {
+            "categories": {
+              "denied": 0,
+              "empty": 0,
+              "invalid_shape": 0,
+              "numeric_nonzero": 0,
+              "numeric_zero": 0,
+              "symbol": 25,
+              "unavailable": 0
+            },
+            "overflow_count": 0,
+            "symbols": {
+              "symbol:anon_pipe_write": 1,
+              "symbol:do_exit": 24
+            }
+          },
+          "thread_summary": {
+            "states": {
+              "D": 0,
+              "I": 24,
+              "K": 0,
+              "N": 0,
+              "P": 0,
+              "R": 0,
+              "S": 1,
+              "T": 0,
+              "W": 0,
+              "X": 0,
+              "Z": 0,
+              "t": 0,
+              "x": 0
+            },
+            "wait_categories": {
+              "futex": 0,
+              "other": 25,
+              "poll": 0,
+              "read": 0,
+              "unknown": 0,
+              "wait": 0
+            }
+          },
+          "threads_truncated": false,
+          "utime_ticks": 11,
+          "wchan_visibility": {
+            "sampled": 25,
+            "stat_unavailable": 0,
+            "wchan_empty": 0,
+            "wchan_nonzero": 25,
+            "wchan_read_denied": 0,
+            "wchan_unavailable": 0,
+            "wchan_zero": 0
+          }
+        },
+        "tmp_free_bytes": 16592896,
+        "windows": {
+          "dialog_presence": null,
+          "main_pid_correlated_windows": 1,
+          "roles_queried": false,
+          "root_children": 3,
+          "visited_windows": 3
+        }
+      },
+      {
+        "elapsed_seconds": 3.011,
+        "identity_verified": true,
+        "main": {
+          "core_dumping": 1,
+          "exit_code": 5,
+          "fd": {
+            "count": 53,
+            "maxfd": 52,
+            "truncated": false,
+            "visibility": "readable"
+          },
+          "flags": 4195592,
+          "limits": {
+            "cpu_seconds": {
+              "hard": 30,
+              "soft": 30
+            },
+            "file_size_bytes": {
+              "hard": 16384,
+              "soft": 16384
+            },
+            "open_files": {
+              "hard": 128,
+              "soft": 128
+            }
+          },
+          "main_wait": {
+            "category": "symbol",
+            "symbol": "do_exit"
+          },
+          "num_threads": 25,
+          "start_ticks": 221,
+          "state": "I",
+          "stime_ticks": 66,
+          "task_directory_readable": true,
+          "task_exit_codes": {
+            "counts": {
+              "0": 25
+            },
+            "overflow_count": 0,
+            "unavailable_count": 0
+          },
+          "task_waits": {
+            "categories": {
+              "denied": 0,
+              "empty": 0,
+              "invalid_shape": 0,
+              "numeric_nonzero": 0,
+              "numeric_zero": 0,
+              "symbol": 25,
+              "unavailable": 0
+            },
+            "overflow_count": 0,
+            "symbols": {
+              "symbol:anon_pipe_write": 1,
+              "symbol:do_exit": 24
+            }
+          },
+          "thread_summary": {
+            "states": {
+              "D": 0,
+              "I": 24,
+              "K": 0,
+              "N": 0,
+              "P": 0,
+              "R": 1,
+              "S": 0,
+              "T": 0,
+              "W": 0,
+              "X": 0,
+              "Z": 0,
+              "t": 0,
+              "x": 0
+            },
+            "wait_categories": {
+              "futex": 0,
+              "other": 25,
+              "poll": 0,
+              "read": 0,
+              "unknown": 0,
+              "wait": 0
+            }
+          },
+          "threads_truncated": false,
+          "utime_ticks": 11,
+          "wchan_visibility": {
+            "sampled": 25,
+            "stat_unavailable": 0,
+            "wchan_empty": 0,
+            "wchan_nonzero": 25,
+            "wchan_read_denied": 0,
+            "wchan_unavailable": 0,
+            "wchan_zero": 0
+          }
+        },
+        "tmp_free_bytes": 16592896,
+        "windows": {
+          "dialog_presence": null,
+          "main_pid_correlated_windows": 1,
+          "roles_queried": false,
+          "root_children": 3,
+          "visited_windows": 3
+        }
+      },
+      {
+        "elapsed_seconds": 4.011,
+        "identity_verified": true,
+        "main": {
+          "core_dumping": 1,
+          "exit_code": 5,
+          "fd": {
+            "count": 53,
+            "maxfd": 52,
+            "truncated": false,
+            "visibility": "readable"
+          },
+          "flags": 4195592,
+          "limits": {
+            "cpu_seconds": {
+              "hard": 30,
+              "soft": 30
+            },
+            "file_size_bytes": {
+              "hard": 16384,
+              "soft": 16384
+            },
+            "open_files": {
+              "hard": 128,
+              "soft": 128
+            }
+          },
+          "main_wait": {
+            "category": "symbol",
+            "symbol": "do_exit"
+          },
+          "num_threads": 25,
+          "start_ticks": 221,
+          "state": "I",
+          "stime_ticks": 75,
+          "task_directory_readable": true,
+          "task_exit_codes": {
+            "counts": {
+              "0": 25
+            },
+            "overflow_count": 0,
+            "unavailable_count": 0
+          },
+          "task_waits": {
+            "categories": {
+              "denied": 0,
+              "empty": 0,
+              "invalid_shape": 0,
+              "numeric_nonzero": 0,
+              "numeric_zero": 1,
+              "symbol": 24,
+              "unavailable": 0
+            },
+            "overflow_count": 0,
+            "symbols": {
+              "symbol:do_exit": 24
+            }
+          },
+          "thread_summary": {
+            "states": {
+              "D": 0,
+              "I": 24,
+              "K": 0,
+              "N": 0,
+              "P": 0,
+              "R": 0,
+              "S": 1,
+              "T": 0,
+              "W": 0,
+              "X": 0,
+              "Z": 0,
+              "t": 0,
+              "x": 0
+            },
+            "wait_categories": {
+              "futex": 0,
+              "other": 25,
+              "poll": 0,
+              "read": 0,
+              "unknown": 0,
+              "wait": 0
+            }
+          },
+          "threads_truncated": false,
+          "utime_ticks": 11,
+          "wchan_visibility": {
+            "sampled": 25,
+            "stat_unavailable": 0,
+            "wchan_empty": 0,
+            "wchan_nonzero": 24,
+            "wchan_read_denied": 0,
+            "wchan_unavailable": 0,
+            "wchan_zero": 1
+          }
+        },
+        "tmp_free_bytes": 16592896,
+        "windows": {
+          "dialog_presence": null,
+          "main_pid_correlated_windows": 1,
+          "roles_queried": false,
+          "root_children": 3,
+          "visited_windows": 3
+        }
+      },
+      {
+        "elapsed_seconds": 5.011,
+        "identity_verified": true,
+        "main": {
+          "core_dumping": 1,
+          "exit_code": 5,
+          "fd": {
+            "count": 53,
+            "maxfd": 52,
+            "truncated": false,
+            "visibility": "readable"
+          },
+          "flags": 4195592,
+          "limits": {
+            "cpu_seconds": {
+              "hard": 30,
+              "soft": 30
+            },
+            "file_size_bytes": {
+              "hard": 16384,
+              "soft": 16384
+            },
+            "open_files": {
+              "hard": 128,
+              "soft": 128
+            }
+          },
+          "main_wait": {
+            "category": "symbol",
+            "symbol": "do_exit"
+          },
+          "num_threads": 25,
+          "start_ticks": 221,
+          "state": "I",
+          "stime_ticks": 86,
+          "task_directory_readable": true,
+          "task_exit_codes": {
+            "counts": {
+              "0": 25
+            },
+            "overflow_count": 0,
+            "unavailable_count": 0
+          },
+          "task_waits": {
+            "categories": {
+              "denied": 0,
+              "empty": 0,
+              "invalid_shape": 0,
+              "numeric_nonzero": 0,
+              "numeric_zero": 0,
+              "symbol": 25,
+              "unavailable": 0
+            },
+            "overflow_count": 0,
+            "symbols": {
+              "symbol:anon_pipe_write": 1,
+              "symbol:do_exit": 24
+            }
+          },
+          "thread_summary": {
+            "states": {
+              "D": 0,
+              "I": 24,
+              "K": 0,
+              "N": 0,
+              "P": 0,
+              "R": 0,
+              "S": 1,
+              "T": 0,
+              "W": 0,
+              "X": 0,
+              "Z": 0,
+              "t": 0,
+              "x": 0
+            },
+            "wait_categories": {
+              "futex": 0,
+              "other": 25,
+              "poll": 0,
+              "read": 0,
+              "unknown": 0,
+              "wait": 0
+            }
+          },
+          "threads_truncated": false,
+          "utime_ticks": 12,
+          "wchan_visibility": {
+            "sampled": 25,
+            "stat_unavailable": 0,
+            "wchan_empty": 0,
+            "wchan_nonzero": 25,
+            "wchan_read_denied": 0,
+            "wchan_unavailable": 0,
+            "wchan_zero": 0
+          }
+        },
+        "tmp_free_bytes": 16592896,
+        "windows": {
+          "dialog_presence": null,
+          "main_pid_correlated_windows": 1,
+          "roles_queried": false,
+          "root_children": 3,
+          "visited_windows": 3
+        }
+      },
+      {
+        "elapsed_seconds": 6.011,
+        "identity_verified": true,
+        "main": {
+          "core_dumping": 1,
+          "exit_code": 5,
+          "fd": {
+            "count": 53,
+            "maxfd": 52,
+            "truncated": false,
+            "visibility": "readable"
+          },
+          "flags": 4195592,
+          "limits": {
+            "cpu_seconds": {
+              "hard": 30,
+              "soft": 30
+            },
+            "file_size_bytes": {
+              "hard": 16384,
+              "soft": 16384
+            },
+            "open_files": {
+              "hard": 128,
+              "soft": 128
+            }
+          },
+          "main_wait": {
+            "category": "symbol",
+            "symbol": "do_exit"
+          },
+          "num_threads": 25,
+          "start_ticks": 221,
+          "state": "I",
+          "stime_ticks": 96,
+          "task_directory_readable": true,
+          "task_exit_codes": {
+            "counts": {
+              "0": 25
+            },
+            "overflow_count": 0,
+            "unavailable_count": 0
+          },
+          "task_waits": {
+            "categories": {
+              "denied": 0,
+              "empty": 0,
+              "invalid_shape": 0,
+              "numeric_nonzero": 0,
+              "numeric_zero": 0,
+              "symbol": 25,
+              "unavailable": 0
+            },
+            "overflow_count": 0,
+            "symbols": {
+              "symbol:anon_pipe_write": 1,
+              "symbol:do_exit": 24
+            }
+          },
+          "thread_summary": {
+            "states": {
+              "D": 0,
+              "I": 24,
+              "K": 0,
+              "N": 0,
+              "P": 0,
+              "R": 0,
+              "S": 1,
+              "T": 0,
+              "W": 0,
+              "X": 0,
+              "Z": 0,
+              "t": 0,
+              "x": 0
+            },
+            "wait_categories": {
+              "futex": 0,
+              "other": 25,
+              "poll": 0,
+              "read": 0,
+              "unknown": 0,
+              "wait": 0
+            }
+          },
+          "threads_truncated": false,
+          "utime_ticks": 12,
+          "wchan_visibility": {
+            "sampled": 25,
+            "stat_unavailable": 0,
+            "wchan_empty": 0,
+            "wchan_nonzero": 25,
+            "wchan_read_denied": 0,
+            "wchan_unavailable": 0,
+            "wchan_zero": 0
+          }
+        },
+        "tmp_free_bytes": 16592896,
+        "windows": {
+          "dialog_presence": null,
+          "main_pid_correlated_windows": 1,
+          "roles_queried": false,
+          "root_children": 3,
+          "visited_windows": 3
+        }
+      },
+      {
+        "elapsed_seconds": 7.011,
+        "identity_verified": true,
+        "main": {
+          "core_dumping": 1,
+          "exit_code": 5,
+          "fd": {
+            "count": 53,
+            "maxfd": 52,
+            "truncated": false,
+            "visibility": "readable"
+          },
+          "flags": 4195592,
+          "limits": {
+            "cpu_seconds": {
+              "hard": 30,
+              "soft": 30
+            },
+            "file_size_bytes": {
+              "hard": 16384,
+              "soft": 16384
+            },
+            "open_files": {
+              "hard": 128,
+              "soft": 128
+            }
+          },
+          "main_wait": {
+            "category": "symbol",
+            "symbol": "do_exit"
+          },
+          "num_threads": 25,
+          "start_ticks": 221,
+          "state": "I",
+          "stime_ticks": 104,
+          "task_directory_readable": true,
+          "task_exit_codes": {
+            "counts": {
+              "0": 25
+            },
+            "overflow_count": 0,
+            "unavailable_count": 0
+          },
+          "task_waits": {
+            "categories": {
+              "denied": 0,
+              "empty": 0,
+              "invalid_shape": 0,
+              "numeric_nonzero": 0,
+              "numeric_zero": 0,
+              "symbol": 25,
+              "unavailable": 0
+            },
+            "overflow_count": 0,
+            "symbols": {
+              "symbol:anon_pipe_write": 1,
+              "symbol:do_exit": 24
+            }
+          },
+          "thread_summary": {
+            "states": {
+              "D": 0,
+              "I": 24,
+              "K": 0,
+              "N": 0,
+              "P": 0,
+              "R": 0,
+              "S": 1,
+              "T": 0,
+              "W": 0,
+              "X": 0,
+              "Z": 0,
+              "t": 0,
+              "x": 0
+            },
+            "wait_categories": {
+              "futex": 0,
+              "other": 25,
+              "poll": 0,
+              "read": 0,
+              "unknown": 0,
+              "wait": 0
+            }
+          },
+          "threads_truncated": false,
+          "utime_ticks": 12,
+          "wchan_visibility": {
+            "sampled": 25,
+            "stat_unavailable": 0,
+            "wchan_empty": 0,
+            "wchan_nonzero": 25,
+            "wchan_read_denied": 0,
+            "wchan_unavailable": 0,
+            "wchan_zero": 0
+          }
+        },
+        "tmp_free_bytes": 16592896,
+        "windows": {
+          "dialog_presence": null,
+          "main_pid_correlated_windows": 1,
+          "roles_queried": false,
+          "root_children": 3,
+          "visited_windows": 3
+        }
+      },
+      {
+        "elapsed_seconds": 8.011,
+        "identity_verified": true,
+        "main": {
+          "core_dumping": 1,
+          "exit_code": 5,
+          "fd": {
+            "count": 53,
+            "maxfd": 52,
+            "truncated": false,
+            "visibility": "readable"
+          },
+          "flags": 4195592,
+          "limits": {
+            "cpu_seconds": {
+              "hard": 30,
+              "soft": 30
+            },
+            "file_size_bytes": {
+              "hard": 16384,
+              "soft": 16384
+            },
+            "open_files": {
+              "hard": 128,
+              "soft": 128
+            }
+          },
+          "main_wait": {
+            "category": "symbol",
+            "symbol": "do_exit"
+          },
+          "num_threads": 25,
+          "start_ticks": 221,
+          "state": "I",
+          "stime_ticks": 114,
+          "task_directory_readable": true,
+          "task_exit_codes": {
+            "counts": {
+              "0": 25
+            },
+            "overflow_count": 0,
+            "unavailable_count": 0
+          },
+          "task_waits": {
+            "categories": {
+              "denied": 0,
+              "empty": 0,
+              "invalid_shape": 0,
+              "numeric_nonzero": 0,
+              "numeric_zero": 1,
+              "symbol": 24,
+              "unavailable": 0
+            },
+            "overflow_count": 0,
+            "symbols": {
+              "symbol:do_exit": 24
+            }
+          },
+          "thread_summary": {
+            "states": {
+              "D": 0,
+              "I": 24,
+              "K": 0,
+              "N": 0,
+              "P": 0,
+              "R": 0,
+              "S": 1,
+              "T": 0,
+              "W": 0,
+              "X": 0,
+              "Z": 0,
+              "t": 0,
+              "x": 0
+            },
+            "wait_categories": {
+              "futex": 0,
+              "other": 25,
+              "poll": 0,
+              "read": 0,
+              "unknown": 0,
+              "wait": 0
+            }
+          },
+          "threads_truncated": false,
+          "utime_ticks": 12,
+          "wchan_visibility": {
+            "sampled": 25,
+            "stat_unavailable": 0,
+            "wchan_empty": 0,
+            "wchan_nonzero": 24,
+            "wchan_read_denied": 0,
+            "wchan_unavailable": 0,
+            "wchan_zero": 1
+          }
+        },
+        "tmp_free_bytes": 16592896,
+        "windows": {
+          "dialog_presence": null,
+          "main_pid_correlated_windows": 1,
+          "roles_queried": false,
+          "root_children": 3,
+          "visited_windows": 3
+        }
+      },
+      {
+        "elapsed_seconds": 9.011,
+        "identity_verified": true,
+        "main": {
+          "core_dumping": 1,
+          "exit_code": 5,
+          "fd": {
+            "count": 53,
+            "maxfd": 52,
+            "truncated": false,
+            "visibility": "readable"
+          },
+          "flags": 4195592,
+          "limits": {
+            "cpu_seconds": {
+              "hard": 30,
+              "soft": 30
+            },
+            "file_size_bytes": {
+              "hard": 16384,
+              "soft": 16384
+            },
+            "open_files": {
+              "hard": 128,
+              "soft": 128
+            }
+          },
+          "main_wait": {
+            "category": "symbol",
+            "symbol": "do_exit"
+          },
+          "num_threads": 25,
+          "start_ticks": 221,
+          "state": "I",
+          "stime_ticks": 124,
+          "task_directory_readable": true,
+          "task_exit_codes": {
+            "counts": {
+              "0": 25
+            },
+            "overflow_count": 0,
+            "unavailable_count": 0
+          },
+          "task_waits": {
+            "categories": {
+              "denied": 0,
+              "empty": 0,
+              "invalid_shape": 0,
+              "numeric_nonzero": 0,
+              "numeric_zero": 0,
+              "symbol": 25,
+              "unavailable": 0
+            },
+            "overflow_count": 0,
+            "symbols": {
+              "symbol:anon_pipe_write": 1,
+              "symbol:do_exit": 24
+            }
+          },
+          "thread_summary": {
+            "states": {
+              "D": 0,
+              "I": 24,
+              "K": 0,
+              "N": 0,
+              "P": 0,
+              "R": 0,
+              "S": 1,
+              "T": 0,
+              "W": 0,
+              "X": 0,
+              "Z": 0,
+              "t": 0,
+              "x": 0
+            },
+            "wait_categories": {
+              "futex": 0,
+              "other": 25,
+              "poll": 0,
+              "read": 0,
+              "unknown": 0,
+              "wait": 0
+            }
+          },
+          "threads_truncated": false,
+          "utime_ticks": 12,
+          "wchan_visibility": {
+            "sampled": 25,
+            "stat_unavailable": 0,
+            "wchan_empty": 0,
+            "wchan_nonzero": 25,
+            "wchan_read_denied": 0,
+            "wchan_unavailable": 0,
+            "wchan_zero": 0
+          }
+        },
+        "tmp_free_bytes": 16592896,
+        "windows": {
+          "dialog_presence": null,
+          "main_pid_correlated_windows": 1,
+          "roles_queried": false,
+          "root_children": 3,
+          "visited_windows": 3
+        }
+      },
+      {
+        "elapsed_seconds": 10.011,
+        "identity_verified": true,
+        "main": {
+          "core_dumping": 1,
+          "exit_code": 5,
+          "fd": {
+            "count": 53,
+            "maxfd": 52,
+            "truncated": false,
+            "visibility": "readable"
+          },
+          "flags": 4195592,
+          "limits": {
+            "cpu_seconds": {
+              "hard": 30,
+              "soft": 30
+            },
+            "file_size_bytes": {
+              "hard": 16384,
+              "soft": 16384
+            },
+            "open_files": {
+              "hard": 128,
+              "soft": 128
+            }
+          },
+          "main_wait": {
+            "category": "symbol",
+            "symbol": "do_exit"
+          },
+          "num_threads": 25,
+          "start_ticks": 221,
+          "state": "I",
+          "stime_ticks": 133,
+          "task_directory_readable": true,
+          "task_exit_codes": {
+            "counts": {
+              "0": 25
+            },
+            "overflow_count": 0,
+            "unavailable_count": 0
+          },
+          "task_waits": {
+            "categories": {
+              "denied": 0,
+              "empty": 0,
+              "invalid_shape": 0,
+              "numeric_nonzero": 0,
+              "numeric_zero": 0,
+              "symbol": 25,
+              "unavailable": 0
+            },
+            "overflow_count": 0,
+            "symbols": {
+              "symbol:anon_pipe_write": 1,
+              "symbol:do_exit": 24
+            }
+          },
+          "thread_summary": {
+            "states": {
+              "D": 0,
+              "I": 24,
+              "K": 0,
+              "N": 0,
+              "P": 0,
+              "R": 0,
+              "S": 1,
+              "T": 0,
+              "W": 0,
+              "X": 0,
+              "Z": 0,
+              "t": 0,
+              "x": 0
+            },
+            "wait_categories": {
+              "futex": 0,
+              "other": 25,
+              "poll": 0,
+              "read": 0,
+              "unknown": 0,
+              "wait": 0
+            }
+          },
+          "threads_truncated": false,
+          "utime_ticks": 12,
+          "wchan_visibility": {
+            "sampled": 25,
+            "stat_unavailable": 0,
+            "wchan_empty": 0,
+            "wchan_nonzero": 25,
+            "wchan_read_denied": 0,
+            "wchan_unavailable": 0,
+            "wchan_zero": 0
+          }
+        },
+        "tmp_free_bytes": 16592896,
+        "windows": {
+          "dialog_presence": null,
+          "main_pid_correlated_windows": 1,
+          "roles_queried": false,
+          "root_children": 3,
+          "visited_windows": 3
+        }
+      },
+      {
+        "elapsed_seconds": 11.011,
+        "identity_verified": true,
+        "main": {
+          "core_dumping": 1,
+          "exit_code": 5,
+          "fd": {
+            "count": 53,
+            "maxfd": 52,
+            "truncated": false,
+            "visibility": "readable"
+          },
+          "flags": 4195592,
+          "limits": {
+            "cpu_seconds": {
+              "hard": 30,
+              "soft": 30
+            },
+            "file_size_bytes": {
+              "hard": 16384,
+              "soft": 16384
+            },
+            "open_files": {
+              "hard": 128,
+              "soft": 128
+            }
+          },
+          "main_wait": {
+            "category": "symbol",
+            "symbol": "do_exit"
+          },
+          "num_threads": 25,
+          "start_ticks": 221,
+          "state": "I",
+          "stime_ticks": 144,
+          "task_directory_readable": true,
+          "task_exit_codes": {
+            "counts": {
+              "0": 25
+            },
+            "overflow_count": 0,
+            "unavailable_count": 0
+          },
+          "task_waits": {
+            "categories": {
+              "denied": 0,
+              "empty": 0,
+              "invalid_shape": 0,
+              "numeric_nonzero": 0,
+              "numeric_zero": 0,
+              "symbol": 25,
+              "unavailable": 0
+            },
+            "overflow_count": 0,
+            "symbols": {
+              "symbol:anon_pipe_write": 1,
+              "symbol:do_exit": 24
+            }
+          },
+          "thread_summary": {
+            "states": {
+              "D": 0,
+              "I": 24,
+              "K": 0,
+              "N": 0,
+              "P": 0,
+              "R": 0,
+              "S": 1,
+              "T": 0,
+              "W": 0,
+              "X": 0,
+              "Z": 0,
+              "t": 0,
+              "x": 0
+            },
+            "wait_categories": {
+              "futex": 0,
+              "other": 25,
+              "poll": 0,
+              "read": 0,
+              "unknown": 0,
+              "wait": 0
+            }
+          },
+          "threads_truncated": false,
+          "utime_ticks": 13,
+          "wchan_visibility": {
+            "sampled": 25,
+            "stat_unavailable": 0,
+            "wchan_empty": 0,
+            "wchan_nonzero": 25,
+            "wchan_read_denied": 0,
+            "wchan_unavailable": 0,
+            "wchan_zero": 0
+          }
+        },
+        "tmp_free_bytes": 16592896,
+        "windows": {
+          "dialog_presence": null,
+          "main_pid_correlated_windows": 1,
+          "roles_queried": false,
+          "root_children": 3,
+          "visited_windows": 3
+        }
+      },
+      {
+        "elapsed_seconds": 12.011,
+        "identity_verified": true,
+        "main": {
+          "core_dumping": 1,
+          "exit_code": 5,
+          "fd": {
+            "count": 53,
+            "maxfd": 52,
+            "truncated": false,
+            "visibility": "readable"
+          },
+          "flags": 4195592,
+          "limits": {
+            "cpu_seconds": {
+              "hard": 30,
+              "soft": 30
+            },
+            "file_size_bytes": {
+              "hard": 16384,
+              "soft": 16384
+            },
+            "open_files": {
+              "hard": 128,
+              "soft": 128
+            }
+          },
+          "main_wait": {
+            "category": "symbol",
+            "symbol": "do_exit"
+          },
+          "num_threads": 25,
+          "start_ticks": 221,
+          "state": "I",
+          "stime_ticks": 153,
+          "task_directory_readable": true,
+          "task_exit_codes": {
+            "counts": {
+              "0": 25
+            },
+            "overflow_count": 0,
+            "unavailable_count": 0
+          },
+          "task_waits": {
+            "categories": {
+              "denied": 0,
+              "empty": 0,
+              "invalid_shape": 0,
+              "numeric_nonzero": 0,
+              "numeric_zero": 1,
+              "symbol": 24,
+              "unavailable": 0
+            },
+            "overflow_count": 0,
+            "symbols": {
+              "symbol:do_exit": 24
+            }
+          },
+          "thread_summary": {
+            "states": {
+              "D": 0,
+              "I": 24,
+              "K": 0,
+              "N": 0,
+              "P": 0,
+              "R": 0,
+              "S": 1,
+              "T": 0,
+              "W": 0,
+              "X": 0,
+              "Z": 0,
+              "t": 0,
+              "x": 0
+            },
+            "wait_categories": {
+              "futex": 0,
+              "other": 25,
+              "poll": 0,
+              "read": 0,
+              "unknown": 0,
+              "wait": 0
+            }
+          },
+          "threads_truncated": false,
+          "utime_ticks": 13,
+          "wchan_visibility": {
+            "sampled": 25,
+            "stat_unavailable": 0,
+            "wchan_empty": 0,
+            "wchan_nonzero": 24,
+            "wchan_read_denied": 0,
+            "wchan_unavailable": 0,
+            "wchan_zero": 1
+          }
+        },
+        "tmp_free_bytes": 16592896,
+        "windows": {
+          "dialog_presence": null,
+          "main_pid_correlated_windows": 1,
+          "roles_queried": false,
+          "root_children": 3,
+          "visited_windows": 3
+        }
+      },
+      {
+        "elapsed_seconds": 13.011,
+        "identity_verified": true,
+        "main": {
+          "core_dumping": 1,
+          "exit_code": 5,
+          "fd": {
+            "count": 53,
+            "maxfd": 52,
+            "truncated": false,
+            "visibility": "readable"
+          },
+          "flags": 4195592,
+          "limits": {
+            "cpu_seconds": {
+              "hard": 30,
+              "soft": 30
+            },
+            "file_size_bytes": {
+              "hard": 16384,
+              "soft": 16384
+            },
+            "open_files": {
+              "hard": 128,
+              "soft": 128
+            }
+          },
+          "main_wait": {
+            "category": "symbol",
+            "symbol": "do_exit"
+          },
+          "num_threads": 25,
+          "start_ticks": 221,
+          "state": "I",
+          "stime_ticks": 162,
+          "task_directory_readable": true,
+          "task_exit_codes": {
+            "counts": {
+              "0": 25
+            },
+            "overflow_count": 0,
+            "unavailable_count": 0
+          },
+          "task_waits": {
+            "categories": {
+              "denied": 0,
+              "empty": 0,
+              "invalid_shape": 0,
+              "numeric_nonzero": 0,
+              "numeric_zero": 0,
+              "symbol": 25,
+              "unavailable": 0
+            },
+            "overflow_count": 0,
+            "symbols": {
+              "symbol:anon_pipe_write": 1,
+              "symbol:do_exit": 24
+            }
+          },
+          "thread_summary": {
+            "states": {
+              "D": 0,
+              "I": 24,
+              "K": 0,
+              "N": 0,
+              "P": 0,
+              "R": 0,
+              "S": 1,
+              "T": 0,
+              "W": 0,
+              "X": 0,
+              "Z": 0,
+              "t": 0,
+              "x": 0
+            },
+            "wait_categories": {
+              "futex": 0,
+              "other": 25,
+              "poll": 0,
+              "read": 0,
+              "unknown": 0,
+              "wait": 0
+            }
+          },
+          "threads_truncated": false,
+          "utime_ticks": 13,
+          "wchan_visibility": {
+            "sampled": 25,
+            "stat_unavailable": 0,
+            "wchan_empty": 0,
+            "wchan_nonzero": 25,
+            "wchan_read_denied": 0,
+            "wchan_unavailable": 0,
+            "wchan_zero": 0
+          }
+        },
+        "tmp_free_bytes": 16592896,
+        "windows": {
+          "dialog_presence": null,
+          "main_pid_correlated_windows": 1,
+          "roles_queried": false,
+          "root_children": 3,
+          "visited_windows": 3
+        }
+      },
+      {
+        "elapsed_seconds": 14.011,
+        "identity_verified": true,
+        "main": {
+          "core_dumping": 1,
+          "exit_code": 5,
+          "fd": {
+            "count": 53,
+            "maxfd": 52,
+            "truncated": false,
+            "visibility": "readable"
+          },
+          "flags": 4195592,
+          "limits": {
+            "cpu_seconds": {
+              "hard": 30,
+              "soft": 30
+            },
+            "file_size_bytes": {
+              "hard": 16384,
+              "soft": 16384
+            },
+            "open_files": {
+              "hard": 128,
+              "soft": 128
+            }
+          },
+          "main_wait": {
+            "category": "symbol",
+            "symbol": "do_exit"
+          },
+          "num_threads": 25,
+          "start_ticks": 221,
+          "state": "I",
+          "stime_ticks": 171,
+          "task_directory_readable": true,
+          "task_exit_codes": {
+            "counts": {
+              "0": 25
+            },
+            "overflow_count": 0,
+            "unavailable_count": 0
+          },
+          "task_waits": {
+            "categories": {
+              "denied": 0,
+              "empty": 0,
+              "invalid_shape": 0,
+              "numeric_nonzero": 0,
+              "numeric_zero": 1,
+              "symbol": 24,
+              "unavailable": 0
+            },
+            "overflow_count": 0,
+            "symbols": {
+              "symbol:do_exit": 24
+            }
+          },
+          "thread_summary": {
+            "states": {
+              "D": 0,
+              "I": 24,
+              "K": 0,
+              "N": 0,
+              "P": 0,
+              "R": 0,
+              "S": 1,
+              "T": 0,
+              "W": 0,
+              "X": 0,
+              "Z": 0,
+              "t": 0,
+              "x": 0
+            },
+            "wait_categories": {
+              "futex": 0,
+              "other": 25,
+              "poll": 0,
+              "read": 0,
+              "unknown": 0,
+              "wait": 0
+            }
+          },
+          "threads_truncated": false,
+          "utime_ticks": 13,
+          "wchan_visibility": {
+            "sampled": 25,
+            "stat_unavailable": 0,
+            "wchan_empty": 0,
+            "wchan_nonzero": 24,
+            "wchan_read_denied": 0,
+            "wchan_unavailable": 0,
+            "wchan_zero": 1
+          }
+        },
+        "tmp_free_bytes": 16592896,
+        "windows": {
+          "dialog_presence": null,
+          "main_pid_correlated_windows": 1,
+          "roles_queried": false,
+          "root_children": 3,
+          "visited_windows": 3
+        }
+      },
+      {
+        "elapsed_seconds": 15.011,
+        "identity_verified": true,
+        "main": {
+          "core_dumping": 1,
+          "exit_code": 5,
+          "fd": {
+            "count": 53,
+            "maxfd": 52,
+            "truncated": false,
+            "visibility": "readable"
+          },
+          "flags": 4195592,
+          "limits": {
+            "cpu_seconds": {
+              "hard": 30,
+              "soft": 30
+            },
+            "file_size_bytes": {
+              "hard": 16384,
+              "soft": 16384
+            },
+            "open_files": {
+              "hard": 128,
+              "soft": 128
+            }
+          },
+          "main_wait": {
+            "category": "symbol",
+            "symbol": "do_exit"
+          },
+          "num_threads": 25,
+          "start_ticks": 221,
+          "state": "I",
+          "stime_ticks": 183,
+          "task_directory_readable": true,
+          "task_exit_codes": {
+            "counts": {
+              "0": 25
+            },
+            "overflow_count": 0,
+            "unavailable_count": 0
+          },
+          "task_waits": {
+            "categories": {
+              "denied": 0,
+              "empty": 0,
+              "invalid_shape": 0,
+              "numeric_nonzero": 0,
+              "numeric_zero": 1,
+              "symbol": 24,
+              "unavailable": 0
+            },
+            "overflow_count": 0,
+            "symbols": {
+              "symbol:do_exit": 24
+            }
+          },
+          "thread_summary": {
+            "states": {
+              "D": 0,
+              "I": 24,
+              "K": 0,
+              "N": 0,
+              "P": 0,
+              "R": 0,
+              "S": 1,
+              "T": 0,
+              "W": 0,
+              "X": 0,
+              "Z": 0,
+              "t": 0,
+              "x": 0
+            },
+            "wait_categories": {
+              "futex": 0,
+              "other": 25,
+              "poll": 0,
+              "read": 0,
+              "unknown": 0,
+              "wait": 0
+            }
+          },
+          "threads_truncated": false,
+          "utime_ticks": 13,
+          "wchan_visibility": {
+            "sampled": 25,
+            "stat_unavailable": 0,
+            "wchan_empty": 0,
+            "wchan_nonzero": 24,
+            "wchan_read_denied": 0,
+            "wchan_unavailable": 0,
+            "wchan_zero": 1
+          }
+        },
+        "tmp_free_bytes": 16592896,
+        "windows": {
+          "dialog_presence": null,
+          "main_pid_correlated_windows": 1,
+          "roles_queried": false,
+          "root_children": 3,
+          "visited_windows": 3
+        }
+      },
+      {
+        "elapsed_seconds": 16.011,
+        "identity_verified": true,
+        "main": {
+          "core_dumping": 1,
+          "exit_code": 5,
+          "fd": {
+            "count": 53,
+            "maxfd": 52,
+            "truncated": false,
+            "visibility": "readable"
+          },
+          "flags": 4195592,
+          "limits": {
+            "cpu_seconds": {
+              "hard": 30,
+              "soft": 30
+            },
+            "file_size_bytes": {
+              "hard": 16384,
+              "soft": 16384
+            },
+            "open_files": {
+              "hard": 128,
+              "soft": 128
+            }
+          },
+          "main_wait": {
+            "category": "symbol",
+            "symbol": "do_exit"
+          },
+          "num_threads": 25,
+          "start_ticks": 221,
+          "state": "I",
+          "stime_ticks": 196,
+          "task_directory_readable": true,
+          "task_exit_codes": {
+            "counts": {
+              "0": 25
+            },
+            "overflow_count": 0,
+            "unavailable_count": 0
+          },
+          "task_waits": {
+            "categories": {
+              "denied": 0,
+              "empty": 0,
+              "invalid_shape": 0,
+              "numeric_nonzero": 0,
+              "numeric_zero": 0,
+              "symbol": 25,
+              "unavailable": 0
+            },
+            "overflow_count": 0,
+            "symbols": {
+              "symbol:anon_pipe_write": 1,
+              "symbol:do_exit": 24
+            }
+          },
+          "thread_summary": {
+            "states": {
+              "D": 0,
+              "I": 24,
+              "K": 0,
+              "N": 0,
+              "P": 0,
+              "R": 1,
+              "S": 0,
+              "T": 0,
+              "W": 0,
+              "X": 0,
+              "Z": 0,
+              "t": 0,
+              "x": 0
+            },
+            "wait_categories": {
+              "futex": 0,
+              "other": 25,
+              "poll": 0,
+              "read": 0,
+              "unknown": 0,
+              "wait": 0
+            }
+          },
+          "threads_truncated": false,
+          "utime_ticks": 13,
+          "wchan_visibility": {
+            "sampled": 25,
+            "stat_unavailable": 0,
+            "wchan_empty": 0,
+            "wchan_nonzero": 25,
+            "wchan_read_denied": 0,
+            "wchan_unavailable": 0,
+            "wchan_zero": 0
+          }
+        },
+        "tmp_free_bytes": 16592896,
+        "windows": {
+          "dialog_presence": null,
+          "main_pid_correlated_windows": 1,
+          "roles_queried": false,
+          "root_children": 3,
+          "visited_windows": 3
+        }
+      },
+      {
+        "elapsed_seconds": 17.011,
+        "identity_verified": true,
+        "main": {
+          "core_dumping": 1,
+          "exit_code": 5,
+          "fd": {
+            "count": 53,
+            "maxfd": 52,
+            "truncated": false,
+            "visibility": "readable"
+          },
+          "flags": 4195592,
+          "limits": {
+            "cpu_seconds": {
+              "hard": 30,
+              "soft": 30
+            },
+            "file_size_bytes": {
+              "hard": 16384,
+              "soft": 16384
+            },
+            "open_files": {
+              "hard": 128,
+              "soft": 128
+            }
+          },
+          "main_wait": {
+            "category": "symbol",
+            "symbol": "do_exit"
+          },
+          "num_threads": 25,
+          "start_ticks": 221,
+          "state": "I",
+          "stime_ticks": 207,
+          "task_directory_readable": true,
+          "task_exit_codes": {
+            "counts": {
+              "0": 25
+            },
+            "overflow_count": 0,
+            "unavailable_count": 0
+          },
+          "task_waits": {
+            "categories": {
+              "denied": 0,
+              "empty": 0,
+              "invalid_shape": 0,
+              "numeric_nonzero": 0,
+              "numeric_zero": 0,
+              "symbol": 25,
+              "unavailable": 0
+            },
+            "overflow_count": 0,
+            "symbols": {
+              "symbol:anon_pipe_write": 1,
+              "symbol:do_exit": 24
+            }
+          },
+          "thread_summary": {
+            "states": {
+              "D": 0,
+              "I": 24,
+              "K": 0,
+              "N": 0,
+              "P": 0,
+              "R": 0,
+              "S": 1,
+              "T": 0,
+              "W": 0,
+              "X": 0,
+              "Z": 0,
+              "t": 0,
+              "x": 0
+            },
+            "wait_categories": {
+              "futex": 0,
+              "other": 25,
+              "poll": 0,
+              "read": 0,
+              "unknown": 0,
+              "wait": 0
+            }
+          },
+          "threads_truncated": false,
+          "utime_ticks": 13,
+          "wchan_visibility": {
+            "sampled": 25,
+            "stat_unavailable": 0,
+            "wchan_empty": 0,
+            "wchan_nonzero": 25,
+            "wchan_read_denied": 0,
+            "wchan_unavailable": 0,
+            "wchan_zero": 0
+          }
+        },
+        "tmp_free_bytes": 16592896,
+        "windows": {
+          "dialog_presence": null,
+          "main_pid_correlated_windows": 1,
+          "roles_queried": false,
+          "root_children": 3,
+          "visited_windows": 3
+        }
+      },
+      {
+        "elapsed_seconds": 18.011,
+        "identity_verified": true,
+        "main": {
+          "core_dumping": 1,
+          "exit_code": 5,
+          "fd": {
+            "count": 53,
+            "maxfd": 52,
+            "truncated": false,
+            "visibility": "readable"
+          },
+          "flags": 4195592,
+          "limits": {
+            "cpu_seconds": {
+              "hard": 30,
+              "soft": 30
+            },
+            "file_size_bytes": {
+              "hard": 16384,
+              "soft": 16384
+            },
+            "open_files": {
+              "hard": 128,
+              "soft": 128
+            }
+          },
+          "main_wait": {
+            "category": "symbol",
+            "symbol": "do_exit"
+          },
+          "num_threads": 25,
+          "start_ticks": 221,
+          "state": "I",
+          "stime_ticks": 248,
+          "task_directory_readable": true,
+          "task_exit_codes": {
+            "counts": {
+              "0": 25
+            },
+            "overflow_count": 0,
+            "unavailable_count": 0
+          },
+          "task_waits": {
+            "categories": {
+              "denied": 0,
+              "empty": 0,
+              "invalid_shape": 0,
+              "numeric_nonzero": 0,
+              "numeric_zero": 1,
+              "symbol": 24,
+              "unavailable": 0
+            },
+            "overflow_count": 0,
+            "symbols": {
+              "symbol:do_exit": 24
+            }
+          },
+          "thread_summary": {
+            "states": {
+              "D": 0,
+              "I": 24,
+              "K": 0,
+              "N": 0,
+              "P": 0,
+              "R": 1,
+              "S": 0,
+              "T": 0,
+              "W": 0,
+              "X": 0,
+              "Z": 0,
+              "t": 0,
+              "x": 0
+            },
+            "wait_categories": {
+              "futex": 0,
+              "other": 25,
+              "poll": 0,
+              "read": 0,
+              "unknown": 0,
+              "wait": 0
+            }
+          },
+          "threads_truncated": false,
+          "utime_ticks": 13,
+          "wchan_visibility": {
+            "sampled": 25,
+            "stat_unavailable": 0,
+            "wchan_empty": 0,
+            "wchan_nonzero": 24,
+            "wchan_read_denied": 0,
+            "wchan_unavailable": 0,
+            "wchan_zero": 1
+          }
+        },
+        "tmp_free_bytes": 16592896,
+        "windows": {
+          "dialog_presence": null,
+          "main_pid_correlated_windows": 1,
+          "roles_queried": false,
+          "root_children": 3,
+          "visited_windows": 3
+        }
+      },
+      {
+        "elapsed_seconds": 19.011,
+        "identity_verified": true,
+        "main": {
+          "core_dumping": 1,
+          "exit_code": 5,
+          "fd": {
+            "count": 53,
+            "maxfd": 52,
+            "truncated": false,
+            "visibility": "readable"
+          },
+          "flags": 4195592,
+          "limits": {
+            "cpu_seconds": {
+              "hard": 30,
+              "soft": 30
+            },
+            "file_size_bytes": {
+              "hard": 16384,
+              "soft": 16384
+            },
+            "open_files": {
+              "hard": 128,
+              "soft": 128
+            }
+          },
+          "main_wait": {
+            "category": "symbol",
+            "symbol": "do_exit"
+          },
+          "num_threads": 25,
+          "start_ticks": 221,
+          "state": "I",
+          "stime_ticks": 268,
+          "task_directory_readable": true,
+          "task_exit_codes": {
+            "counts": {
+              "0": 25
+            },
+            "overflow_count": 0,
+            "unavailable_count": 0
+          },
+          "task_waits": {
+            "categories": {
+              "denied": 0,
+              "empty": 0,
+              "invalid_shape": 0,
+              "numeric_nonzero": 0,
+              "numeric_zero": 0,
+              "symbol": 25,
+              "unavailable": 0
+            },
+            "overflow_count": 0,
+            "symbols": {
+              "symbol:anon_pipe_write": 1,
+              "symbol:do_exit": 24
+            }
+          },
+          "thread_summary": {
+            "states": {
+              "D": 0,
+              "I": 24,
+              "K": 0,
+              "N": 0,
+              "P": 0,
+              "R": 0,
+              "S": 1,
+              "T": 0,
+              "W": 0,
+              "X": 0,
+              "Z": 0,
+              "t": 0,
+              "x": 0
+            },
+            "wait_categories": {
+              "futex": 0,
+              "other": 25,
+              "poll": 0,
+              "read": 0,
+              "unknown": 0,
+              "wait": 0
+            }
+          },
+          "threads_truncated": false,
+          "utime_ticks": 13,
+          "wchan_visibility": {
+            "sampled": 25,
+            "stat_unavailable": 0,
+            "wchan_empty": 0,
+            "wchan_nonzero": 25,
+            "wchan_read_denied": 0,
+            "wchan_unavailable": 0,
+            "wchan_zero": 0
+          }
+        },
+        "tmp_free_bytes": 16592896,
+        "windows": {
+          "dialog_presence": null,
+          "main_pid_correlated_windows": 1,
+          "roles_queried": false,
+          "root_children": 3,
+          "visited_windows": 3
+        }
+      },
+      {
+        "elapsed_seconds": 20.011,
+        "identity_verified": true,
+        "main": {
+          "core_dumping": 1,
+          "exit_code": 5,
+          "fd": {
+            "count": 53,
+            "maxfd": 52,
+            "truncated": false,
+            "visibility": "readable"
+          },
+          "flags": 4195592,
+          "limits": {
+            "cpu_seconds": {
+              "hard": 30,
+              "soft": 30
+            },
+            "file_size_bytes": {
+              "hard": 16384,
+              "soft": 16384
+            },
+            "open_files": {
+              "hard": 128,
+              "soft": 128
+            }
+          },
+          "main_wait": {
+            "category": "symbol",
+            "symbol": "do_exit"
+          },
+          "num_threads": 25,
+          "start_ticks": 221,
+          "state": "I",
+          "stime_ticks": 279,
+          "task_directory_readable": true,
+          "task_exit_codes": {
+            "counts": {
+              "0": 25
+            },
+            "overflow_count": 0,
+            "unavailable_count": 0
+          },
+          "task_waits": {
+            "categories": {
+              "denied": 0,
+              "empty": 0,
+              "invalid_shape": 0,
+              "numeric_nonzero": 0,
+              "numeric_zero": 0,
+              "symbol": 25,
+              "unavailable": 0
+            },
+            "overflow_count": 0,
+            "symbols": {
+              "symbol:anon_pipe_write": 1,
+              "symbol:do_exit": 24
+            }
+          },
+          "thread_summary": {
+            "states": {
+              "D": 0,
+              "I": 24,
+              "K": 0,
+              "N": 0,
+              "P": 0,
+              "R": 1,
+              "S": 0,
+              "T": 0,
+              "W": 0,
+              "X": 0,
+              "Z": 0,
+              "t": 0,
+              "x": 0
+            },
+            "wait_categories": {
+              "futex": 0,
+              "other": 25,
+              "poll": 0,
+              "read": 0,
+              "unknown": 0,
+              "wait": 0
+            }
+          },
+          "threads_truncated": false,
+          "utime_ticks": 13,
+          "wchan_visibility": {
+            "sampled": 25,
+            "stat_unavailable": 0,
+            "wchan_empty": 0,
+            "wchan_nonzero": 25,
+            "wchan_read_denied": 0,
+            "wchan_unavailable": 0,
+            "wchan_zero": 0
+          }
+        },
+        "tmp_free_bytes": 16592896,
+        "windows": {
+          "dialog_presence": null,
+          "main_pid_correlated_windows": 1,
+          "roles_queried": false,
+          "root_children": 3,
+          "visited_windows": 3
+        }
+      },
+      {
+        "elapsed_seconds": 21.011,
+        "identity_verified": true,
+        "main": {
+          "core_dumping": 1,
+          "exit_code": 5,
+          "fd": {
+            "count": 53,
+            "maxfd": 52,
+            "truncated": false,
+            "visibility": "readable"
+          },
+          "flags": 4195592,
+          "limits": {
+            "cpu_seconds": {
+              "hard": 30,
+              "soft": 30
+            },
+            "file_size_bytes": {
+              "hard": 16384,
+              "soft": 16384
+            },
+            "open_files": {
+              "hard": 128,
+              "soft": 128
+            }
+          },
+          "main_wait": {
+            "category": "symbol",
+            "symbol": "do_exit"
+          },
+          "num_threads": 25,
+          "start_ticks": 221,
+          "state": "I",
+          "stime_ticks": 290,
+          "task_directory_readable": true,
+          "task_exit_codes": {
+            "counts": {
+              "0": 25
+            },
+            "overflow_count": 0,
+            "unavailable_count": 0
+          },
+          "task_waits": {
+            "categories": {
+              "denied": 0,
+              "empty": 0,
+              "invalid_shape": 0,
+              "numeric_nonzero": 0,
+              "numeric_zero": 0,
+              "symbol": 25,
+              "unavailable": 0
+            },
+            "overflow_count": 0,
+            "symbols": {
+              "symbol:anon_pipe_write": 1,
+              "symbol:do_exit": 24
+            }
+          },
+          "thread_summary": {
+            "states": {
+              "D": 0,
+              "I": 24,
+              "K": 0,
+              "N": 0,
+              "P": 0,
+              "R": 0,
+              "S": 1,
+              "T": 0,
+              "W": 0,
+              "X": 0,
+              "Z": 0,
+              "t": 0,
+              "x": 0
+            },
+            "wait_categories": {
+              "futex": 0,
+              "other": 25,
+              "poll": 0,
+              "read": 0,
+              "unknown": 0,
+              "wait": 0
+            }
+          },
+          "threads_truncated": false,
+          "utime_ticks": 13,
+          "wchan_visibility": {
+            "sampled": 25,
+            "stat_unavailable": 0,
+            "wchan_empty": 0,
+            "wchan_nonzero": 25,
+            "wchan_read_denied": 0,
+            "wchan_unavailable": 0,
+            "wchan_zero": 0
+          }
+        },
+        "tmp_free_bytes": 16592896,
+        "windows": {
+          "dialog_presence": null,
+          "main_pid_correlated_windows": 1,
+          "roles_queried": false,
+          "root_children": 3,
+          "visited_windows": 3
+        }
+      },
+      {
+        "elapsed_seconds": 22.011,
+        "identity_verified": true,
+        "main": {
+          "core_dumping": 1,
+          "exit_code": 5,
+          "fd": {
+            "count": 53,
+            "maxfd": 52,
+            "truncated": false,
+            "visibility": "readable"
+          },
+          "flags": 4195592,
+          "limits": {
+            "cpu_seconds": {
+              "hard": 30,
+              "soft": 30
+            },
+            "file_size_bytes": {
+              "hard": 16384,
+              "soft": 16384
+            },
+            "open_files": {
+              "hard": 128,
+              "soft": 128
+            }
+          },
+          "main_wait": {
+            "category": "symbol",
+            "symbol": "do_exit"
+          },
+          "num_threads": 25,
+          "start_ticks": 221,
+          "state": "I",
+          "stime_ticks": 298,
+          "task_directory_readable": true,
+          "task_exit_codes": {
+            "counts": {
+              "0": 25
+            },
+            "overflow_count": 0,
+            "unavailable_count": 0
+          },
+          "task_waits": {
+            "categories": {
+              "denied": 0,
+              "empty": 0,
+              "invalid_shape": 0,
+              "numeric_nonzero": 0,
+              "numeric_zero": 0,
+              "symbol": 25,
+              "unavailable": 0
+            },
+            "overflow_count": 0,
+            "symbols": {
+              "symbol:anon_pipe_write": 1,
+              "symbol:do_exit": 24
+            }
+          },
+          "thread_summary": {
+            "states": {
+              "D": 0,
+              "I": 24,
+              "K": 0,
+              "N": 0,
+              "P": 0,
+              "R": 0,
+              "S": 1,
+              "T": 0,
+              "W": 0,
+              "X": 0,
+              "Z": 0,
+              "t": 0,
+              "x": 0
+            },
+            "wait_categories": {
+              "futex": 0,
+              "other": 25,
+              "poll": 0,
+              "read": 0,
+              "unknown": 0,
+              "wait": 0
+            }
+          },
+          "threads_truncated": false,
+          "utime_ticks": 13,
+          "wchan_visibility": {
+            "sampled": 25,
+            "stat_unavailable": 0,
+            "wchan_empty": 0,
+            "wchan_nonzero": 25,
+            "wchan_read_denied": 0,
+            "wchan_unavailable": 0,
+            "wchan_zero": 0
+          }
+        },
+        "tmp_free_bytes": 16592896,
+        "windows": {
+          "dialog_presence": null,
+          "main_pid_correlated_windows": 1,
+          "roles_queried": false,
+          "root_children": 3,
+          "visited_windows": 3
+        }
+      },
+      {
+        "elapsed_seconds": 23.011,
+        "identity_verified": true,
+        "main": {
+          "core_dumping": 1,
+          "exit_code": 5,
+          "fd": {
+            "count": 53,
+            "maxfd": 52,
+            "truncated": false,
+            "visibility": "readable"
+          },
+          "flags": 4195592,
+          "limits": {
+            "cpu_seconds": {
+              "hard": 30,
+              "soft": 30
+            },
+            "file_size_bytes": {
+              "hard": 16384,
+              "soft": 16384
+            },
+            "open_files": {
+              "hard": 128,
+              "soft": 128
+            }
+          },
+          "main_wait": {
+            "category": "symbol",
+            "symbol": "do_exit"
+          },
+          "num_threads": 25,
+          "start_ticks": 221,
+          "state": "I",
+          "stime_ticks": 307,
+          "task_directory_readable": true,
+          "task_exit_codes": {
+            "counts": {
+              "0": 25
+            },
+            "overflow_count": 0,
+            "unavailable_count": 0
+          },
+          "task_waits": {
+            "categories": {
+              "denied": 0,
+              "empty": 0,
+              "invalid_shape": 0,
+              "numeric_nonzero": 0,
+              "numeric_zero": 0,
+              "symbol": 25,
+              "unavailable": 0
+            },
+            "overflow_count": 0,
+            "symbols": {
+              "symbol:anon_pipe_write": 1,
+              "symbol:do_exit": 24
+            }
+          },
+          "thread_summary": {
+            "states": {
+              "D": 0,
+              "I": 24,
+              "K": 0,
+              "N": 0,
+              "P": 0,
+              "R": 0,
+              "S": 1,
+              "T": 0,
+              "W": 0,
+              "X": 0,
+              "Z": 0,
+              "t": 0,
+              "x": 0
+            },
+            "wait_categories": {
+              "futex": 0,
+              "other": 25,
+              "poll": 0,
+              "read": 0,
+              "unknown": 0,
+              "wait": 0
+            }
+          },
+          "threads_truncated": false,
+          "utime_ticks": 13,
+          "wchan_visibility": {
+            "sampled": 25,
+            "stat_unavailable": 0,
+            "wchan_empty": 0,
+            "wchan_nonzero": 25,
+            "wchan_read_denied": 0,
+            "wchan_unavailable": 0,
+            "wchan_zero": 0
+          }
+        },
+        "tmp_free_bytes": 16592896,
+        "windows": {
+          "dialog_presence": null,
+          "main_pid_correlated_windows": 1,
+          "roles_queried": false,
+          "root_children": 3,
+          "visited_windows": 3
+        }
+      },
+      {
+        "elapsed_seconds": 24.011,
+        "identity_verified": true,
+        "main": {
+          "core_dumping": 1,
+          "exit_code": 5,
+          "fd": {
+            "count": 53,
+            "maxfd": 52,
+            "truncated": false,
+            "visibility": "readable"
+          },
+          "flags": 4195592,
+          "limits": {
+            "cpu_seconds": {
+              "hard": 30,
+              "soft": 30
+            },
+            "file_size_bytes": {
+              "hard": 16384,
+              "soft": 16384
+            },
+            "open_files": {
+              "hard": 128,
+              "soft": 128
+            }
+          },
+          "main_wait": {
+            "category": "symbol",
+            "symbol": "do_exit"
+          },
+          "num_threads": 25,
+          "start_ticks": 221,
+          "state": "I",
+          "stime_ticks": 317,
+          "task_directory_readable": true,
+          "task_exit_codes": {
+            "counts": {
+              "0": 25
+            },
+            "overflow_count": 0,
+            "unavailable_count": 0
+          },
+          "task_waits": {
+            "categories": {
+              "denied": 0,
+              "empty": 0,
+              "invalid_shape": 0,
+              "numeric_nonzero": 0,
+              "numeric_zero": 0,
+              "symbol": 25,
+              "unavailable": 0
+            },
+            "overflow_count": 0,
+            "symbols": {
+              "symbol:anon_pipe_write": 1,
+              "symbol:do_exit": 24
+            }
+          },
+          "thread_summary": {
+            "states": {
+              "D": 0,
+              "I": 24,
+              "K": 0,
+              "N": 0,
+              "P": 0,
+              "R": 0,
+              "S": 1,
+              "T": 0,
+              "W": 0,
+              "X": 0,
+              "Z": 0,
+              "t": 0,
+              "x": 0
+            },
+            "wait_categories": {
+              "futex": 0,
+              "other": 25,
+              "poll": 0,
+              "read": 0,
+              "unknown": 0,
+              "wait": 0
+            }
+          },
+          "threads_truncated": false,
+          "utime_ticks": 13,
+          "wchan_visibility": {
+            "sampled": 25,
+            "stat_unavailable": 0,
+            "wchan_empty": 0,
+            "wchan_nonzero": 25,
+            "wchan_read_denied": 0,
+            "wchan_unavailable": 0,
+            "wchan_zero": 0
+          }
+        },
+        "tmp_free_bytes": 16592896,
+        "windows": {
+          "dialog_presence": null,
+          "main_pid_correlated_windows": 1,
+          "roles_queried": false,
+          "root_children": 3,
+          "visited_windows": 3
+        }
+      },
+      {
+        "elapsed_seconds": 25.011,
+        "identity_verified": true,
+        "main": {
+          "core_dumping": 1,
+          "exit_code": 5,
+          "fd": {
+            "count": 53,
+            "maxfd": 52,
+            "truncated": false,
+            "visibility": "readable"
+          },
+          "flags": 4195592,
+          "limits": {
+            "cpu_seconds": {
+              "hard": 30,
+              "soft": 30
+            },
+            "file_size_bytes": {
+              "hard": 16384,
+              "soft": 16384
+            },
+            "open_files": {
+              "hard": 128,
+              "soft": 128
+            }
+          },
+          "main_wait": {
+            "category": "symbol",
+            "symbol": "do_exit"
+          },
+          "num_threads": 25,
+          "start_ticks": 221,
+          "state": "I",
+          "stime_ticks": 326,
+          "task_directory_readable": true,
+          "task_exit_codes": {
+            "counts": {
+              "0": 25
+            },
+            "overflow_count": 0,
+            "unavailable_count": 0
+          },
+          "task_waits": {
+            "categories": {
+              "denied": 0,
+              "empty": 0,
+              "invalid_shape": 0,
+              "numeric_nonzero": 0,
+              "numeric_zero": 0,
+              "symbol": 25,
+              "unavailable": 0
+            },
+            "overflow_count": 0,
+            "symbols": {
+              "symbol:anon_pipe_write": 1,
+              "symbol:do_exit": 24
+            }
+          },
+          "thread_summary": {
+            "states": {
+              "D": 0,
+              "I": 24,
+              "K": 0,
+              "N": 0,
+              "P": 0,
+              "R": 0,
+              "S": 1,
+              "T": 0,
+              "W": 0,
+              "X": 0,
+              "Z": 0,
+              "t": 0,
+              "x": 0
+            },
+            "wait_categories": {
+              "futex": 0,
+              "other": 25,
+              "poll": 0,
+              "read": 0,
+              "unknown": 0,
+              "wait": 0
+            }
+          },
+          "threads_truncated": false,
+          "utime_ticks": 13,
+          "wchan_visibility": {
+            "sampled": 25,
+            "stat_unavailable": 0,
+            "wchan_empty": 0,
+            "wchan_nonzero": 25,
+            "wchan_read_denied": 0,
+            "wchan_unavailable": 0,
+            "wchan_zero": 0
+          }
+        },
+        "tmp_free_bytes": 16592896,
+        "windows": {
+          "dialog_presence": null,
+          "main_pid_correlated_windows": 1,
+          "roles_queried": false,
+          "root_children": 3,
+          "visited_windows": 3
+        }
+      },
+      {
+        "elapsed_seconds": 26.011,
+        "identity_verified": true,
+        "main": {
+          "core_dumping": 1,
+          "exit_code": 5,
+          "fd": {
+            "count": 53,
+            "maxfd": 52,
+            "truncated": false,
+            "visibility": "readable"
+          },
+          "flags": 4195592,
+          "limits": {
+            "cpu_seconds": {
+              "hard": 30,
+              "soft": 30
+            },
+            "file_size_bytes": {
+              "hard": 16384,
+              "soft": 16384
+            },
+            "open_files": {
+              "hard": 128,
+              "soft": 128
+            }
+          },
+          "main_wait": {
+            "category": "symbol",
+            "symbol": "do_exit"
+          },
+          "num_threads": 25,
+          "start_ticks": 221,
+          "state": "I",
+          "stime_ticks": 335,
+          "task_directory_readable": true,
+          "task_exit_codes": {
+            "counts": {
+              "0": 25
+            },
+            "overflow_count": 0,
+            "unavailable_count": 0
+          },
+          "task_waits": {
+            "categories": {
+              "denied": 0,
+              "empty": 0,
+              "invalid_shape": 0,
+              "numeric_nonzero": 0,
+              "numeric_zero": 1,
+              "symbol": 24,
+              "unavailable": 0
+            },
+            "overflow_count": 0,
+            "symbols": {
+              "symbol:do_exit": 24
+            }
+          },
+          "thread_summary": {
+            "states": {
+              "D": 0,
+              "I": 24,
+              "K": 0,
+              "N": 0,
+              "P": 0,
+              "R": 0,
+              "S": 1,
+              "T": 0,
+              "W": 0,
+              "X": 0,
+              "Z": 0,
+              "t": 0,
+              "x": 0
+            },
+            "wait_categories": {
+              "futex": 0,
+              "other": 25,
+              "poll": 0,
+              "read": 0,
+              "unknown": 0,
+              "wait": 0
+            }
+          },
+          "threads_truncated": false,
+          "utime_ticks": 13,
+          "wchan_visibility": {
+            "sampled": 25,
+            "stat_unavailable": 0,
+            "wchan_empty": 0,
+            "wchan_nonzero": 24,
+            "wchan_read_denied": 0,
+            "wchan_unavailable": 0,
+            "wchan_zero": 1
+          }
+        },
+        "tmp_free_bytes": 16592896,
+        "windows": {
+          "dialog_presence": null,
+          "main_pid_correlated_windows": 1,
+          "roles_queried": false,
+          "root_children": 3,
+          "visited_windows": 3
+        }
+      },
+      {
+        "elapsed_seconds": 27.011,
+        "identity_verified": true,
+        "main": {
+          "core_dumping": 1,
+          "exit_code": 5,
+          "fd": {
+            "count": 53,
+            "maxfd": 52,
+            "truncated": false,
+            "visibility": "readable"
+          },
+          "flags": 4195592,
+          "limits": {
+            "cpu_seconds": {
+              "hard": 30,
+              "soft": 30
+            },
+            "file_size_bytes": {
+              "hard": 16384,
+              "soft": 16384
+            },
+            "open_files": {
+              "hard": 128,
+              "soft": 128
+            }
+          },
+          "main_wait": {
+            "category": "symbol",
+            "symbol": "do_exit"
+          },
+          "num_threads": 25,
+          "start_ticks": 221,
+          "state": "I",
+          "stime_ticks": 344,
+          "task_directory_readable": true,
+          "task_exit_codes": {
+            "counts": {
+              "0": 25
+            },
+            "overflow_count": 0,
+            "unavailable_count": 0
+          },
+          "task_waits": {
+            "categories": {
+              "denied": 0,
+              "empty": 0,
+              "invalid_shape": 0,
+              "numeric_nonzero": 0,
+              "numeric_zero": 0,
+              "symbol": 25,
+              "unavailable": 0
+            },
+            "overflow_count": 0,
+            "symbols": {
+              "symbol:anon_pipe_write": 1,
+              "symbol:do_exit": 24
+            }
+          },
+          "thread_summary": {
+            "states": {
+              "D": 0,
+              "I": 24,
+              "K": 0,
+              "N": 0,
+              "P": 0,
+              "R": 0,
+              "S": 1,
+              "T": 0,
+              "W": 0,
+              "X": 0,
+              "Z": 0,
+              "t": 0,
+              "x": 0
+            },
+            "wait_categories": {
+              "futex": 0,
+              "other": 25,
+              "poll": 0,
+              "read": 0,
+              "unknown": 0,
+              "wait": 0
+            }
+          },
+          "threads_truncated": false,
+          "utime_ticks": 13,
+          "wchan_visibility": {
+            "sampled": 25,
+            "stat_unavailable": 0,
+            "wchan_empty": 0,
+            "wchan_nonzero": 25,
+            "wchan_read_denied": 0,
+            "wchan_unavailable": 0,
+            "wchan_zero": 0
+          }
+        },
+        "tmp_free_bytes": 16592896,
+        "windows": {
+          "dialog_presence": null,
+          "main_pid_correlated_windows": 1,
+          "roles_queried": false,
+          "root_children": 3,
+          "visited_windows": 3
+        }
+      },
+      {
+        "elapsed_seconds": 28.011,
+        "identity_verified": true,
+        "main": {
+          "core_dumping": 1,
+          "exit_code": 5,
+          "fd": {
+            "count": 53,
+            "maxfd": 52,
+            "truncated": false,
+            "visibility": "readable"
+          },
+          "flags": 4195592,
+          "limits": {
+            "cpu_seconds": {
+              "hard": 30,
+              "soft": 30
+            },
+            "file_size_bytes": {
+              "hard": 16384,
+              "soft": 16384
+            },
+            "open_files": {
+              "hard": 128,
+              "soft": 128
+            }
+          },
+          "main_wait": {
+            "category": "symbol",
+            "symbol": "do_exit"
+          },
+          "num_threads": 25,
+          "start_ticks": 221,
+          "state": "I",
+          "stime_ticks": 353,
+          "task_directory_readable": true,
+          "task_exit_codes": {
+            "counts": {
+              "0": 25
+            },
+            "overflow_count": 0,
+            "unavailable_count": 0
+          },
+          "task_waits": {
+            "categories": {
+              "denied": 0,
+              "empty": 0,
+              "invalid_shape": 0,
+              "numeric_nonzero": 0,
+              "numeric_zero": 0,
+              "symbol": 25,
+              "unavailable": 0
+            },
+            "overflow_count": 0,
+            "symbols": {
+              "symbol:anon_pipe_write": 1,
+              "symbol:do_exit": 24
+            }
+          },
+          "thread_summary": {
+            "states": {
+              "D": 0,
+              "I": 24,
+              "K": 0,
+              "N": 0,
+              "P": 0,
+              "R": 0,
+              "S": 1,
+              "T": 0,
+              "W": 0,
+              "X": 0,
+              "Z": 0,
+              "t": 0,
+              "x": 0
+            },
+            "wait_categories": {
+              "futex": 0,
+              "other": 25,
+              "poll": 0,
+              "read": 0,
+              "unknown": 0,
+              "wait": 0
+            }
+          },
+          "threads_truncated": false,
+          "utime_ticks": 13,
+          "wchan_visibility": {
+            "sampled": 25,
+            "stat_unavailable": 0,
+            "wchan_empty": 0,
+            "wchan_nonzero": 25,
+            "wchan_read_denied": 0,
+            "wchan_unavailable": 0,
+            "wchan_zero": 0
+          }
+        },
+        "tmp_free_bytes": 16592896,
+        "windows": {
+          "dialog_presence": null,
+          "main_pid_correlated_windows": 1,
+          "roles_queried": false,
+          "root_children": 3,
+          "visited_windows": 3
+        }
+      },
+      {
+        "elapsed_seconds": 29.011,
+        "identity_verified": true,
+        "main": {
+          "core_dumping": 1,
+          "exit_code": 5,
+          "fd": {
+            "count": 53,
+            "maxfd": 52,
+            "truncated": false,
+            "visibility": "readable"
+          },
+          "flags": 4195592,
+          "limits": {
+            "cpu_seconds": {
+              "hard": 30,
+              "soft": 30
+            },
+            "file_size_bytes": {
+              "hard": 16384,
+              "soft": 16384
+            },
+            "open_files": {
+              "hard": 128,
+              "soft": 128
+            }
+          },
+          "main_wait": {
+            "category": "symbol",
+            "symbol": "do_exit"
+          },
+          "num_threads": 25,
+          "start_ticks": 221,
+          "state": "I",
+          "stime_ticks": 362,
+          "task_directory_readable": true,
+          "task_exit_codes": {
+            "counts": {
+              "0": 25
+            },
+            "overflow_count": 0,
+            "unavailable_count": 0
+          },
+          "task_waits": {
+            "categories": {
+              "denied": 0,
+              "empty": 0,
+              "invalid_shape": 0,
+              "numeric_nonzero": 0,
+              "numeric_zero": 0,
+              "symbol": 25,
+              "unavailable": 0
+            },
+            "overflow_count": 0,
+            "symbols": {
+              "symbol:anon_pipe_write": 1,
+              "symbol:do_exit": 24
+            }
+          },
+          "thread_summary": {
+            "states": {
+              "D": 0,
+              "I": 24,
+              "K": 0,
+              "N": 0,
+              "P": 0,
+              "R": 0,
+              "S": 1,
+              "T": 0,
+              "W": 0,
+              "X": 0,
+              "Z": 0,
+              "t": 0,
+              "x": 0
+            },
+            "wait_categories": {
+              "futex": 0,
+              "other": 25,
+              "poll": 0,
+              "read": 0,
+              "unknown": 0,
+              "wait": 0
+            }
+          },
+          "threads_truncated": false,
+          "utime_ticks": 13,
+          "wchan_visibility": {
+            "sampled": 25,
+            "stat_unavailable": 0,
+            "wchan_empty": 0,
+            "wchan_nonzero": 25,
+            "wchan_read_denied": 0,
+            "wchan_unavailable": 0,
+            "wchan_zero": 0
+          }
+        },
+        "tmp_free_bytes": 16592896,
+        "windows": {
+          "dialog_presence": null,
+          "main_pid_correlated_windows": 1,
+          "roles_queried": false,
+          "root_children": 3,
+          "visited_windows": 3
+        }
+      }
+    ],
+    "summary": {
+      "classification": "predominantly_waiting_observed",
+      "cpu_tick_delta": 375,
+      "first_cpu_ticks": {
+        "stime_ticks": 0,
+        "utime_ticks": 0
+      },
+      "last_cpu_ticks": {
+        "stime_ticks": 362,
+        "utime_ticks": 13
+      },
+      "root_cause_proven": false,
+      "ticks_per_second": 100,
+      "valid_samples": 30
+    },
+    "window_roles_queried": false
+  },
+  "status": "failed",
+  "synthetic_identity": {
+    "enabled": true,
+    "host_identity_read": false,
+    "records": {
+      "/etc/group": {
+        "mode_0444": true,
+        "root_owned": true,
+        "sha256": "a5691792cb2e052fca833fa1a28886074060a218d012cf548c3213ffe751f809"
+      },
+      "/etc/passwd": {
+        "mode_0444": true,
+        "root_owned": true,
+        "sha256": "cac8ee37fbc6f53dff0da19369f3f6b23be01c34ac42915ae84432a584727f80"
+      }
+    }
+  },
+  "versions": {
+    "chrome": "144.0.7559.60",
+    "electron": "40.0.0",
+    "modules": "143",
+    "napi": "10",
+    "node": "24.11.1",
+    "uv": "1.51.0",
+    "v8": "14.4.258.16-electron.0"
+  }
+}
