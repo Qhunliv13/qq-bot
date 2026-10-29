@@ -131,3 +131,32 @@ Missing final records leave older summary flags such as `runtime_versions_verifi
 false; the progress record does not contain version strings, so none are invented.
 The process-wide 16-KiB regular-file limit and offline environment remain unchanged.
 No production account, session, configuration or transport was accessed or changed.
+
+## External bounded sampling of prepared connection (next observation)
+
+The [subsequent artifact](qq-prepared-stall-evidence.json) uses the existing
+`qq_vendor_stall_observation.observe_wait` implementation for this fixed mode.
+Only the outer waiter, its preimports and copied dependencies change; no new
+native actions or JS probe are added. The previous artifact is retained unchanged.
+The login module now includes the `7645f84` retirement guards, so this is **not**
+a single-variable comparison against the prior run.
+
+- Real preparation returned at 38 ms, initialization at 45 ms, connect at 46 ms.
+  The last stage is again `after_connect`; callbacks remain zero and no timer/final
+  record appears. The watchdog retired QQ at 30.12 seconds, exit -9.
+- All 30 external samples passed main-PID identity checks, over 0.173–29.012 s.
+  CPU increased 378 ticks at 100 Hz (3.78 CPU seconds); main states were R once
+  and I 29 times. The existing descriptive classifier says
+  `predominantly_waiting_observed`, not sustained >=half-core busy behavior.
+- Thread counts grew from 1 to 44. All 1277 sampled thread wait categories are
+  `other`, which cannot identify a particular wait, deadlock or service dependency.
+- Captured output sizes were 1073/1299 bytes (stdout/stderr). Only the bounded
+  `dbus_unavailable` token category matched; this is not proof of causality.
+  No file-size/open-file token matched, but absence does not rule out limit effects.
+- Sampled limits remain CPU 30 seconds, regular file 16384 bytes, open files 128.
+  Offline/isolation gates and five unchanged QQ software hashes passed.
+
+The prepared backend remains unsuitable for production cutover. The next question
+is the specific service/event-loop wait contract, not another identical retry or
+permission to relax restrictions. This result proves neither authentication nor
+session readiness nor send/receive. No live production state was touched.

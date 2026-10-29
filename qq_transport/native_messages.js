@@ -188,18 +188,36 @@ function createMessageController({ session, accountIdentity, isReady, listenerLi
     onMsgInfoListUpdate(rawList) { receive('update', rawList); }
   });
 
+  /** Native/caller callbacks may dispose synchronously; disposal is always terminal. */
+  function ensureNotDisposed() {
+    if (phase === 'disposed') fail('INVALID_STATE');
+  }
+
   /** Register once after strict readiness; failed registrations are never auto-retried. */
   function initialize() {
     if (phase !== 'new') fail('INVALID_STATE');
     if (!ready()) fail('NOT_READY');
+    ensureNotDisposed();
     phase = 'initializing';
     try {
-      const service = method(session, 'getMsgService')();
-      native = Object.fromEntries(['generateMsgUniqueId', 'addKernelMsgListener', 'removeKernelMsgListener', 'sendMsg'].map(name => [name, method(service, name)]));
-      // The service lookup could synchronously change lifecycle authorization.
+      const getService = method(session, 'getMsgService');
+      ensureNotDisposed();
+      const service = getService();
+      ensureNotDisposed();
+      const methods = {};
+      for (const name of ['generateMsgUniqueId', 'addKernelMsgListener', 'removeKernelMsgListener', 'sendMsg']) {
+        methods[name] = method(service, name);
+        ensureNotDisposed();
+      }
+      native = methods;
+      // Readiness may itself dispose; never register after that callback returns.
       if (!ready()) fail('NOT_READY');
+      ensureNotDisposed();
       cleanupRequired = 'process_exit';
-      handle = native.addKernelMsgListener(listener);
+      const registeredHandle = native.addKernelMsgListener(listener);
+      // A late token cannot be adopted or removed using an unverified cleanup ABI.
+      ensureNotDisposed();
+      handle = registeredHandle;
       if (listenerLifetime === 'token') {
         if (!((typeof handle === 'number' && Number.isSafeInteger(handle))
           || (typeof handle === 'string' && /^(0|[1-9][0-9]{0,255})$/.test(handle)))) fail('INVALID_LISTENER_HANDLE');
@@ -207,6 +225,8 @@ function createMessageController({ session, accountIdentity, isReady, listenerLi
       }
       phase = 'active';
     } catch (error) {
+      // Disposal wins even when the same native call subsequently throws.
+      ensureNotDisposed();
       phase = 'failed';
       if (error instanceof NativeMessageError) throw error;
       fail('INITIALIZE_FAILED');
@@ -226,24 +246,29 @@ function createMessageController({ session, accountIdentity, isReady, listenerLi
     if (phase !== 'active') fail('INVALID_STATE');
     const validated = outgoing(request);
     if (!ready()) fail('NOT_READY');
+    ensureNotDisposed();
     let msgId = null;
     let timer;
     try {
       msgId = string(native.generateMsgUniqueId(validated.peer.chatType, validated.timestamp));
-      // Native allocation may synchronously invalidate the supplied lifecycle.
+      // Native allocation may dispose or invalidate the supplied lifecycle.
+      ensureNotDisposed();
       if (!ready()) fail('NOT_READY');
+      ensureNotDisposed();
       const resultPromise = native.sendMsg(msgId, validated.peer, validated.elements, new Map());
       // The pinned ABI is a promise, not a synchronous object or truthy success flag.
       if (!(resultPromise instanceof Promise)) throw new NativeMessageError('INVALID_ACK');
       const response = await Promise.race([resultPromise, new Promise((resolve, reject) => {
         timer = setTimeout(() => reject(new NativeMessageError('TIMEOUT')), sendTimeoutMs);
       })]);
+      // Observe native promise rejection/timeout even after disposal, but never accept it.
+      ensureNotDisposed();
       const result = read(response, 'result');
       const errMsg = read(response, 'errMsg');
       if ((result !== 0 && result !== -1) || typeof errMsg !== 'string' || errMsg.length > LIMITS.text) throw new NativeMessageError('INVALID_ACK');
       return Object.freeze({ state: result === 0 ? 'accepted' : 'rejected', native_msg_id: msgId, result });
     } catch (error) {
-      if (error instanceof NativeMessageError && error.code === 'NOT_READY') throw error;
+      if (phase !== 'disposed' && error instanceof NativeMessageError && error.code === 'NOT_READY') throw error;
       // A native exception, invalid response or timeout never licenses an automatic retry.
       throw new NativeMessageError('SEND_UNCERTAIN', typeof msgId === 'string' ? msgId : null);
     } finally { if (timer !== undefined) clearTimeout(timer); }

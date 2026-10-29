@@ -52,6 +52,13 @@ starts; a preflight `NOT_READY` leaves it dormant. It obtains
 four native methods before registering, and rejects accessor-backed methods
 without invoking them. Prototype traversal is bounded to four objects.
 
+Disposal is terminal across synchronous native callbacks. Startup checks local
+phase before and after service lookup, method resolution and listener registration;
+a callback that disposes then returns or throws yields fixed `INVALID_STATE`,
+never overwrites `disposed` with `active`/`failed`, and makes no later startup call.
+The initial readiness guard retains precedence: false/throwing readiness still
+returns `NOT_READY`, while a true callback cannot revive a disposed controller.
+
 - `initialize()` returns a frozen local diagnostic snapshot.
 - `subscribe(fn)` returns local unsubscribe; subscribers receive queued events.
 - `send(request)` returns a promise; see acknowledgement semantics below.
@@ -79,6 +86,12 @@ conversion:
 - A thrown/invalid registration may have registered natively already: no retry or
   invented token is attempted; process cleanup remains required. A removal error
   is sanitized to `REMOVE_LISTENER_FAILED` and requires process cleanup.
+- Disposal during registration leaves `cleanup_required: 'process_exit'`, for
+  both token and process lifetime, whether registration returns or throws. A late
+  returned handle is not adopted or removed; native registration status remains
+  explicitly uncertain. Disposal during service lookup prevents registration and
+  leaves listener cleanup `none`; this is not proof of native service/session
+  teardown. No new cleanup ABI or disposal bypass is introduced.
 
 ## Incoming events and privacy
 
@@ -171,7 +184,13 @@ invalid acknowledgement throws a sanitized `NativeMessageError` with
 (otherwise null). Timeout is default 30 seconds, explicitly configurable via
 `sendTimeoutMs` from 1 to 300,000 ms. Timeout does not cancel a native send; a
 late acknowledgement may still occur. Losing readiness after allocation but
-before dispatch throws `NOT_READY` without dispatching.
+before dispatch throws `NOT_READY` without dispatching. Disposal during allocation
+prevents dispatch and yields `SEND_UNCERTAIN`; disposal during dispatch or while
+its promise is pending likewise yields uncertainty, never accepted/rejected or
+delivered. The native promise remains observed until settlement/timeout (disposal
+is not cancellation), and no automatic retry or additional native send occurs.
+Pre-allocation disposal after a true readiness callback yields `INVALID_STATE`;
+the initial false/throwing readiness guard continues to yield `NOT_READY`.
 
 There is **no automatic retry**, no journal, no fake persistence, no idempotency
 promise across independent sends, and no delivery reconciliation. A future

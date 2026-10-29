@@ -194,6 +194,54 @@ await rejected(d.send(request()),'SEND_UNCERTAIN'); assert(!g.calls.some(x=>x[0]
 """)
 
 
+@pytest.mark.parametrize("boundary", ["get", "add"])
+@pytest.mark.parametrize("behavior", ["return", "throw"])
+@pytest.mark.parametrize("lifetime", ["process", "token"])
+def test_startup_disposal_is_terminal(tmp_path, boundary, behavior, lifetime):
+    """Native startup callbacks cannot resurrect state or adopt/remove late handles."""
+    run_node(tmp_path, f"const boundary='{boundary}', behavior='{behavior}', lifetime='{lifetime}';" + r"""
+const f=fixture({}, {listenerLifetime:lifetime}); let c;
+const stop=() => { c.dispose(); if(behavior==='throw') throw Error('private-native'); };
+if(boundary==='get') f.session.getMsgService=() => { f.calls.push(['service']); stop(); return f.service; };
+else f.service.addKernelMsgListener=() => { f.calls.push(['add']); stop(); return 19; };
+c=createMessageController(f.config);
+code(()=>c.initialize(),'INVALID_STATE');
+assert.equal(c.getSnapshot().phase,'disposed');
+assert.equal(c.getSnapshot().cleanup_required,boundary==='add'?'process_exit':'none');
+code(()=>c.initialize(),'INVALID_STATE'); await rejected(c.send(request()),'INVALID_STATE'); c.dispose();
+assert.deepEqual(f.calls.map(call=>call[0]),boundary==='get'?['service']:['service','add']);
+""")
+
+
+@pytest.mark.parametrize("boundary", ["allocate", "dispatch", "pending"])
+def test_send_disposal_is_uncertain_without_retry(tmp_path, boundary):
+    """Disposal during native work suppresses later dispatch and acknowledgement claims."""
+    run_node(tmp_path, f"const boundary='{boundary}';" + r"""
+let settle;
+const g=fixture(); let d;
+g.service.generateMsgUniqueId=() => {g.calls.push(['generate']); if(boundary==='allocate') d.dispose(); return '18446744073709551615';};
+g.service.sendMsg=() => {g.calls.push(['send']); if(boundary==='dispatch') d.dispose(); return new Promise(resolve=>{settle=resolve;});};
+d=createMessageController(g.config); d.initialize(); const result=d.send(request());
+if(boundary==='pending') d.dispose();
+if(settle) settle({result:0,errMsg:''});
+await assert.rejects(result,error=>error.code==='SEND_UNCERTAIN' && error.state==='uncertain' && error.native_msg_id==='18446744073709551615');
+assert.equal(d.getSnapshot().phase,'disposed'); d.dispose();
+assert.deepEqual(g.calls.map(call=>call[0]),boundary==='allocate'?['service','add','generate','remove']:['service','add','generate','send','remove']);
+""")
+
+
+def test_readiness_disposal_preserves_preflight_semantics(tmp_path):
+    """False preflight keeps NOT_READY; true callbacks cannot start disposed controllers."""
+    run_node(tmp_path, r"""
+for(const ready of [false,true]) {
+ const f=fixture(); let c;
+ f.config.isReady=()=>{c.dispose();return ready;}; c=createMessageController(f.config);
+ code(()=>c.initialize(),ready?'INVALID_STATE':'NOT_READY');
+ assert.equal(c.getSnapshot().phase,'disposed'); assert.deepEqual(f.calls,[]);
+}
+""")
+
+
 def test_token_type_process_lifetime_and_explicit_encoder(tmp_path):
     """Token types are not coerced; process ownership never fakes native unregister."""
     run_node(tmp_path, r"""

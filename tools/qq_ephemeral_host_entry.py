@@ -443,7 +443,8 @@ def observe_host(command, env, output, errors, timeout, report, *, source, contr
         report.update(application_invoked=True, runtime_executed=True)
         report["isolation"].update(unprivileged=True, no_new_privileges=True, effective_capabilities_zero=True)
         try:
-            if control_mode in ("vendor_stall", "vendor_window_roles"):
+            if control_mode in ("prepared_connect_offline", "vendor_stall", "vendor_window_roles"):
+                # Prepared mode shares count-only external facts, not new JS timers.
                 import qq_vendor_stall_observation
                 if control_mode == "vendor_window_roles":
                     import qq_private_window_roles
@@ -461,7 +462,7 @@ def observe_host(command, env, output, errors, timeout, report, *, source, contr
             if process.poll() is None:
                 process.kill()
             process.wait(timeout=2)
-        if control_mode in ("vendor_stall", "vendor_window_roles"):
+        if control_mode in ("prepared_connect_offline", "vendor_stall", "vendor_window_roles"):
             import qq_vendor_stall_observation
             qq_vendor_stall_observation.capture_categories(output, errors, report)
         report["private_control_reads"] = finish_read_watches(watch_fd, watches)
@@ -530,6 +531,9 @@ def child_main(args):
     if control_mode == "prepared_connect_offline":
         __import__("qq_native_connect_control")
         __import__("qq_prepared_connect_control")
+        # Reuse the trusted external sampler after pivot detaches its module path.
+        __import__("qq_application_observation")
+        __import__("qq_vendor_stall_observation")
     if control_mode == "initialize_factories":
         # Cache the fixed parser and existing offline gate before oldroot detach.
         __import__("qq_native_connect_control")
@@ -600,7 +604,7 @@ def observe(qq_root, *, execute=False, control_mode="wrapper"):
                             (("qq_native_connect_control.py", "qq_vendor_bootstrap_control.py", "qq_application_observation.py", "qq_vendor_stall_observation.py", "qq_private_window_roles.py") if control_mode == "vendor_window_roles" else
                               ("qq_native_connect_control.py", "qq_vendor_bootstrap_control.py", "qq_application_observation.py", "qq_vendor_stall_observation.py") if control_mode == "vendor_stall" else
                               ("qq_native_connect_control.py", "qq_vendor_bootstrap_control.py") if control_mode == "vendor_bootstrap" else
-                              ("qq_native_connect_control.py", "qq_prepared_connect_control.py") if control_mode == "prepared_connect_offline" else
+                              ("qq_native_connect_control.py", "qq_prepared_connect_control.py", "qq_application_observation.py", "qq_vendor_stall_observation.py") if control_mode == "prepared_connect_offline" else
                                ("qq_native_connect_control.py", "qq_native_ready_control.py") if control_mode == "connect_ready_offline" else
                              ("qq_native_connect_control.py", "qq_native_factory_control.py") if control_mode == "initialize_factories" else
                               ("qq_native_connect_control.py",) if control_mode == "connect_offline" else ()))

@@ -1,4 +1,4 @@
-"""Bounded external vendor-stall facts; no QQ JS, memory, titles, or actions."""
+"""Shared bounded external stall facts; no QQ JS, memory, titles, or actions."""
 
 import argparse
 import itertools
@@ -159,7 +159,7 @@ def summarize(records, ticks_per_second):
 
 
 def observe_wait(process, env, timeout=30, report=None, *, window_sampler=None):
-    """Replace only vendor_stall wait with <=30 one-second external bounded samples."""
+    """Observe fixed prepared/vendor waits with <=30 external samples; retain deadline."""
     global MAIN_PID, MAIN_START, WINDOW_SAMPLER
     if window_sampler is not None:
         try:
