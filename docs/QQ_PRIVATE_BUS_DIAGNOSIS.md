@@ -41,7 +41,7 @@ machine UUID path. A missing machine-id file is **not demonstrated** as a Hello/
 prerequisite. Sources: [bus context](https://gitlab.freedesktop.org/dbus/dbus/-/raw/dbus-1.14.10/bus/bus.c),
 [driver](https://gitlab.freedesktop.org/dbus/dbus/-/raw/dbus-1.14.10/bus/driver.c).
 
-## Next bounded diagnostic, not executed in this round
+## Bounded diagnostic design (subsequently executed below)
 
 Use the same private bus, UID65534/cap0/NNP and isolation, without QQ, account data
 or external sockets. Separate authentication from Hello/GetId. A same-connection
@@ -57,3 +57,23 @@ Hello would be a faulty test. Reply timeouts also require an outer wall watchdog
 Only after baseline measurement should separately reviewed synthetic-identity or
 machine-ID controls be considered. Do not bind host /etc, disable EXTERNAL, add
 system services or relax the runtime's security/resource limits to force success.
+
+## Subsequent baseline observation
+
+The [no-QQ control](QQ_BUS_ADMISSION_CONTROL.md) and its
+[immutable result](qq-bus-admission-evidence.json) now establish:
+
+- A standalone raw EXTERNAL authentication connection returned the expected OK.
+- Separate public-client invocations for explicit Hello and automatic-Hello/GetId
+  both returned exit code 1, without timeout (all checks completed in 0.009 s).
+- The client was UID/GID65534, cap-zero, NoNewPrivs. The offline gate passed;
+  no QQ executable or native binding was invoked and software hashes were unchanged.
+
+This separates authentication acceptance from successful bus-method use, but it
+is **not same-connection stage proof**. Because method stdout/stderr were discarded,
+exit code 1 alone does not discriminate admission, service or client errors. It
+cannot yet prove that passwd/NSS explains either the bus failure or Electron stall.
+The next discriminating check should retain only fixed client-error categories
+(or strictly bounded protocol outcomes), before testing an isolated synthetic
+identity control. No host identity files, system service or weaker authentication
+were introduced in this baseline.
