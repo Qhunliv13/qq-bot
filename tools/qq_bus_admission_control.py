@@ -5,6 +5,9 @@ same-connection progression or QQ readiness follows from these observations.
 """
 
 import argparse
+from contextlib import nullcontext
+from functools import partial
+import tempfile
 import json
 import os
 from pathlib import Path
@@ -76,8 +79,33 @@ def auth_probe():
         return "socket_error"
 
 
-def method_probe(method):
-    """Use dbus-send's public protocol implementation; discard all reply bytes."""
+def classify_stderr(raw, failed):
+    """Project only fixed booleans from 4096 bytes; strip quoted arbitrary excerpts."""
+    bounded = raw[:4096].lower()
+    # Quoted payloads/options are not diagnostic wording, preventing false matches.
+    text = re.sub(rb'''"[^"\n]*"|'[^'\n]*'|`[^`\n]*`''', b"", bounded)
+    patterns = {
+        "client_usage_error": rb"\b(?:unknown option|unrecognized option|usage)\b",
+        "connection_closed": rb"\b(?:connection (?:(?:was|is) )?closed|disconnected)\b",
+        "no_reply_timeout": rb"\b(?:no reply|did not receive a reply|noreply|timed out|timeout)\b",
+        "access_denied": rb"\b(?:accessdenied|access denied|permission denied)\b",
+        "auth_failure": rb"\b(?:authfailed|authentication failed|authentication failure|authentication rejected)\b",
+        "unknown_method": rb"\b(?:unknownmethod|unknown method)\b",
+        "service_unknown": rb"\b(?:serviceunknown|service unknown)\b",
+        "unix_identity_lookup_failure": rb"\b(?:could not get password database information for uid|could not get uid for username|could not get user database information|failed to (?:look up|lookup) (?:uid|user|username)|unknown username|user(?:name)? lookup failed)\b",
+        "daemon_unavailable": rb"\b(?:failed to connect|could not connect|connection refused|unable to autolaunch)\b",
+        "library_load_failure": rb"\berror (?:while )?loading shared libraries\b",
+        "machine_id_unavailable": rb"\bmachine[-_ ]?id\b.*\b(?:failed|missing|not found|no such file)\b|\b(?:failed|missing)\b.*\bmachine[-_ ]?id\b",
+        "message_generic_error": rb"\b(?:error|failed|failure)\b",
+    }
+    categories = {key: bool(re.search(pattern, text)) for key, pattern in patterns.items()}
+    categories["unknown_failure"] = bool(failed and not any(categories.values()))
+    return {"present": bool(raw), "prefix_truncated": len(raw) > 4096,
+            "categories": categories}
+
+
+def method_probe(method, detailed=False):
+    """Keep DEVNULL defaults; fixed capture uses inherited 16KB RLIMIT and no stdout."""
     if method not in ("Hello", "GetId"):
         raise ValueError("fixed_method_required")
     # --peer avoids automatic Hello; --bus performs its own Hello before GetId.
@@ -85,19 +113,25 @@ def method_probe(method):
     command = [CLIENT, transport + ADDRESS, "--print-reply", "--reply-timeout=1000",
                "--dest=org.freedesktop.DBus", "/org/freedesktop/DBus",
                "org.freedesktop.DBus." + method]
-    try:
-        result = subprocess.run(command, stdin=subprocess.DEVNULL,
-                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                timeout=1, check=False, close_fds=True)
-        return {"category": "returned_zero" if result.returncode == 0 else "nonzero_exit",
-                "returned_zero": result.returncode == 0, "exit_code": result.returncode}
-    except subprocess.TimeoutExpired:
-        return {"category": "timeout", "returned_zero": False, "exit_code": None}
-    except OSError:
-        return {"category": "launch_failed", "returned_zero": False, "exit_code": None}
+    # The detailed sampler narrows its inherited hard RLIMIT_FSIZE to <=16384.
+    with tempfile.TemporaryFile() if detailed else nullcontext(subprocess.DEVNULL) as errors:
+        try:
+            result = subprocess.run(command, stdin=subprocess.DEVNULL,
+                                    stdout=subprocess.DEVNULL, stderr=errors,
+                                    timeout=1, check=False, close_fds=True)
+            observed = {"category": "returned_zero" if result.returncode == 0 else "nonzero_exit",
+                        "returned_zero": result.returncode == 0, "exit_code": result.returncode}
+        except subprocess.TimeoutExpired:
+            observed = {"category": "timeout", "returned_zero": False, "exit_code": None}
+        except OSError:
+            observed = {"category": "launch_failed", "returned_zero": False, "exit_code": None}
+        if detailed:
+            errors.seek(0)
+            observed["stderr"] = classify_stderr(errors.read(4097), not observed["returned_zero"])
+        return observed
 
 
-def sample_bus():
+def sample_bus(detailed=False):
     """Run only fixed local clients after independently verifying dropped privileges."""
     result = {"identity": None, "auth": "not_attempted", "hello": None, "get_id": None,
               "completed": False, "same_connection_stage_proof": False}
@@ -112,16 +146,23 @@ def sample_bus():
     if not Path(CLIENT).is_file() or not os.access(CLIENT, os.X_OK):
         result["error"] = "dbus_send_missing"
         return result
+    if detailed:
+        # Narrow the existing 1MB hard limit only in this disposable sampler child.
+        import resource
+        soft, hard = resource.getrlimit(resource.RLIMIT_FSIZE)
+        cap = min([CALLBACK_LIMIT] + [value for value in (soft, hard) if value >= 0])
+        resource.setrlimit(resource.RLIMIT_FSIZE, (cap, cap))
     start = time.monotonic()
     result["auth"] = auth_probe()
     # These independent controls still run on AUTH failure, not a coupled proof.
-    result["hello"] = method_probe("Hello")
-    result["get_id"] = method_probe("GetId")
+    probe = partial(method_probe, detailed=True) if detailed else method_probe
+    result["hello"] = probe("Hello")
+    result["get_id"] = probe("GetId")
     result.update(completed=True, elapsed_seconds=round(time.monotonic() - start, 3))
     return result
 
 
-def observe_bus(command, env, output, errors, timeout, report):
+def observe_bus(command, env, output, errors, timeout, report, *, detailed=False):
     """Replace the trusted sampler only during the existing four-second fork hook."""
     if command != ["/opt/QQ/qq"] or timeout != 30 or "ELECTRON_RUN_AS_NODE" in env:
         raise control.runtime.ProbeError("bus_callback_contract_invalid")
@@ -129,12 +170,12 @@ def observe_bus(command, env, output, errors, timeout, report):
     # This runs in private PID1 only; restore globals even when the child fails.
     original, original_limit = application.sample_identity, application.SUMMARY_LIMIT
     try:
-        application.sample_identity = sample_bus
+        application.sample_identity = partial(sample_bus, detailed=True) if detailed else sample_bus
         application.SUMMARY_LIMIT = CALLBACK_LIMIT
         sample = application.unprivileged_sample(env, timeout=4)
     finally:
         application.sample_identity, application.SUMMARY_LIMIT = original, original_limit
-    report.update(mode="isolated_bus_admission_control", application_invoked=False,
+    report.update(mode="isolated_bus_admission_capture_control" if detailed else "isolated_bus_admission_control", application_invoked=False,
                   runtime_executed=False, same_connection_stage_proof=False,
                   invocation={"argv": [], "electron_run_as_node_present": False},
                   bus_admission=sample, experiment_completed=bool(sample and sample.get("completed")),

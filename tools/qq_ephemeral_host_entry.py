@@ -47,7 +47,7 @@ VERSION_KEYS = {"node", "electron", "modules", "napi", "chrome", "v8", "uv"}
 
 def validate_mode(control_mode):
     """Accept only explicit internally authored controls; reject script/path injection."""
-    if control_mode not in ("wrapper", "initialize", "initialize_factories", "connect_offline", "connect_ready_offline", "prepared_connect_offline", "prepared_phase_offline", "host_dispatch_offline", "host_dispatch_roles_offline", "host_dispatch_capture_offline", "vendor_bootstrap", "vendor_stall", "vendor_window_roles", "bus_admission_offline"):
+    if control_mode not in ("wrapper", "initialize", "initialize_factories", "connect_offline", "connect_ready_offline", "prepared_connect_offline", "prepared_phase_offline", "host_dispatch_offline", "host_dispatch_roles_offline", "host_dispatch_capture_offline", "vendor_bootstrap", "vendor_stall", "vendor_window_roles", "bus_admission_offline", "bus_admission_capture_offline"):
         raise runtime.ProbeError("control_mode_invalid")
     return control_mode
 
@@ -55,7 +55,7 @@ def validate_mode(control_mode):
 def fixed_sources(control_mode):
     """Resolve fixed trusted source names, including copied child-local modules."""
     validate_mode(control_mode)
-    if control_mode == "bus_admission_offline":
+    if control_mode in ("bus_admission_offline", "bus_admission_capture_offline"):
         # No QQ entry overlay or native source is needed for this no-QQ control.
         return {}
     if control_mode == "wrapper":
@@ -103,8 +103,8 @@ def base_report(control_mode="wrapper"):
         report.update(mode={"vendor_stall": "ephemeral_vendor_stall", "vendor_window_roles": "ephemeral_vendor_window_roles"}.get(control_mode, "ephemeral_vendor_bootstrap"), electron_ready_verified=False, vendor_bootstrap_observation_complete=False)
     if control_mode in ("host_dispatch_offline", "host_dispatch_roles_offline", "host_dispatch_capture_offline"):
         report.update(mode="ephemeral_" + control_mode, host_dispatch_observation_complete=False, dispatch_progress=None)
-    if control_mode == "bus_admission_offline":
-        report.update(mode="isolated_bus_admission_control",
+    if control_mode in ("bus_admission_offline", "bus_admission_capture_offline"):
+        report.update(mode="isolated_bus_admission_capture_control" if control_mode == "bus_admission_capture_offline" else "isolated_bus_admission_control",
                       invocation={"argv": [], "electron_run_as_node_present": False},
                       bounds_seconds={"client": 4, "stage": 1, "outer": OUTER_TIMEOUT},
                       same_connection_stage_proof=False, bus_admission=None)
@@ -564,9 +564,9 @@ def child_main(args):
     """Capture fixed bytes before pivot, then use the unmodified shared runtime."""
     root = runtime.validate_root(args.qq_root)
     control_mode = validate_mode(getattr(args, "control_mode", "wrapper"))
-    if control_mode == "bus_admission_offline":
+    if control_mode in ("bus_admission_offline", "bus_admission_capture_offline"):
         # Import before pivot; bypass every QQ overlay and launch path entirely.
-        diagnostic = __import__("qq_bus_admission_control")
+        diagnostic = __import__("qq_bus_capture_control" if control_mode == "bus_admission_capture_offline" else "qq_bus_admission_control")
         return runtime.child_probe(root, Path(args.jail), args.nonce,
                                    json.loads(args.parent_ns), args.mount_tool,
                                    filesystem_mode="pivot-root", pivot_tool=args.pivot_tool,
@@ -637,7 +637,7 @@ def observe(qq_root, *, execute=False, control_mode="wrapper"):
         if sys.platform != "linux":
             raise runtime.ProbeError("linux_required")
         root = runtime.validate_root(qq_root)
-        if control_mode != "bus_admission_offline":
+        if control_mode not in ("bus_admission_offline", "bus_admission_capture_offline"):
             validate_manifest((root / "resources/app/package.json").read_bytes())
         names = ("qq", "resources/app/package.json", "resources/app/wrapper.node", "resources/app/application.asar",
                  "resources/app/app_launcher/index.js")
@@ -666,9 +666,10 @@ def observe(qq_root, *, execute=False, control_mode="wrapper"):
                                ("qq_native_connect_control.py", "qq_native_ready_control.py") if control_mode == "connect_ready_offline" else
                              ("qq_native_connect_control.py", "qq_native_factory_control.py") if control_mode == "initialize_factories" else
                               ("qq_native_connect_control.py",) if control_mode == "connect_offline" else ()))
-            if control_mode == "bus_admission_offline":
+            if control_mode in ("bus_admission_offline", "bus_admission_capture_offline"):
                 helpers = tuple(Path(__file__).with_name(name) for name in
-                                ("qq_bus_admission_control.py", "qq_application_observation.py", "qq_native_connect_control.py"))
+                                ("qq_bus_admission_control.py", "qq_application_observation.py", "qq_native_connect_control.py") +
+                                (("qq_bus_capture_control.py",) if control_mode == "bus_admission_capture_offline" else ()))
             for source in (Path(__file__).resolve(), Path(runtime.__file__).resolve(), *sources.values(), *helpers):
                 shutil.copyfile(source, stage / source.name)
             command = [tools["unshare"], "--ipc", "--mount", "--net", "--pid", "--fork", "--kill-child",
@@ -721,7 +722,7 @@ def main(argv=None):
     parser.add_argument("--qq-root", required=True)
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--child", action="store_true", help=argparse.SUPPRESS)
-    parser.add_argument("--control-mode", choices=("wrapper", "initialize", "initialize_factories", "connect_offline", "connect_ready_offline", "prepared_connect_offline", "prepared_phase_offline", "host_dispatch_offline", "host_dispatch_roles_offline", "host_dispatch_capture_offline", "vendor_bootstrap", "vendor_stall", "vendor_window_roles", "bus_admission_offline"), default="wrapper", help=argparse.SUPPRESS)
+    parser.add_argument("--control-mode", choices=("wrapper", "initialize", "initialize_factories", "connect_offline", "connect_ready_offline", "prepared_connect_offline", "prepared_phase_offline", "host_dispatch_offline", "host_dispatch_roles_offline", "host_dispatch_capture_offline", "vendor_bootstrap", "vendor_stall", "vendor_window_roles", "bus_admission_offline", "bus_admission_capture_offline"), default="wrapper", help=argparse.SUPPRESS)
     for name in ("jail", "nonce", "parent-ns", "mount-tool", "pivot-tool", "umount-tool"):
         parser.add_argument("--" + name, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
