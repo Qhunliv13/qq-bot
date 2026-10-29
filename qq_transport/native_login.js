@@ -271,7 +271,32 @@ function createLoginController({ wrapper, engineConfig, loginConfig, globalAdapt
     /** Native diagnostic arguments are intentionally discarded. */
     onLoginFailed() { observed('onLoginFailed'); if (active()) fail(CODES.LOGIN_FAILED); },
     /** Session failure is terminal; a fresh attempt requires external policy. */
-    onQRCodeSessionFailed() { observed('onQRCodeSessionFailed'); if (active()) fail(CODES.QR_SESSION_FAILED); }
+    onQRCodeSessionFailed() { observed('onQRCodeSessionFailed'); if (active()) fail(CODES.QR_SESSION_FAILED); },
+    // These additional exact consumer-declared callbacks intentionally discard
+    // arguments. They cannot grant authentication, trigger retries or expose raw
+    // records; the controller only supports the explicit QR lifecycle above.
+    /** Polling notification is not a QR image or authentication proof. */
+    onQRCodeLoginPollingStarted() {},
+    /** Scan notification alone does not prove login succeeded. */
+    onQRCodeSessionUserScaned() {},
+    /** Logout notifications do not initiate another native operation. */
+    onLogoutSucceed() {},
+    /** Native error arguments are deliberately not forwarded. */
+    onLogoutFailed() {},
+    /** An unrelated logged-in notification cannot substitute for QR success. */
+    onUserLoggedIn() {},
+    /** Unsupported quick-login paths never enable an automatic fallback. */
+    onQRCodeSessionQuickLoginFailed() {},
+    /** Password login is outside this controller's explicit QR-only contract. */
+    onPasswordLoginFailed() {},
+    /** Preserve the vendor consumer's unusual capitalization without guessing. */
+    OnConfirmUnusualDeviceFailed() {},
+    /** Account-count notifications do not alter authorization or account choice. */
+    onQQLoginNumLimited() {},
+    /** Raw state objects are not treated as authenticated identity. */
+    onLoginState() {},
+    /** Account history is neither retained nor exposed by this controller. */
+    onLoginRecordUpdate() {}
   });
 
   /** Expose only safe status; identity requires its own explicit read. */

@@ -30,6 +30,24 @@ contract works in the installed host. The owner must supply configuration derive
 from **the actual same-version metadata**; this module cannot attest its origin.
 No deployment metadata or account defaults ship here.
 
+The complete explicit listener surface is taken from the same pinned
+`packages/napcat-core/listeners/NodeIKernelLoginListener.ts`: eighteen named methods,
+including `onQRCodeSessionUserScaned` and `OnConfirmUnusualDeviceFailed` with their
+original spellings. The seven supported lifecycle callbacks retain the projected
+state behavior below. Eleven additional notification methods deliberately do nothing
+and do not inspect arguments, grant authentication, retain account records, initiate
+fallbacks or expose raw payloads. They are explicit methods, not a catch-all Proxy;
+this completes the observed callback surface without changing the seven-counter
+telemetry schema. Their presence alone is not proof that native callbacks work.
+
+Pinned consumer ordering also creates the startup-session/session factory handles
+**before** engine/login configuration; actual session initialization/start still
+occurs only after successful login. `native_login.js` does not silently create those
+additional handles. The host owner must establish and verify any such prerequisite
+outside the controller, and must not assume later post-login factory creation is
+interchangeable. Separate fixed native-factory controls document this remaining
+host-integration question; no guessed fallback or session start belongs here.
+
 ## Public API
 
 ```javascript
