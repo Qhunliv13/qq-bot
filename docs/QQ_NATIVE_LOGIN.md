@@ -103,6 +103,14 @@ only `{code: 'LISTENER_FAILED'}` without original error text. Error reporting do
 not recursively report failures of error-event consumers. Unsubscribe/dispose
 suppresses queued deliveries. Callbacks may be synchronous/reentrant inside
 native methods; the controller sets request state before entering native code.
+After each synchronous factory/config/registration/connect/QR call, disposal is
+checked before subsequent native calls or lifecycle/handle writes. If native code
+disposes the controller and then returns or throws, the outer operation rejects
+with sanitized `INVALID_STATE`, preserving `disposed: true`, `phase: disconnected`,
+cleared identity/QR state and suppressed queued events. It cannot report a successful
+acknowledgement or publish initialization after disposal. Safe registration/connect
+return-type telemetry still records an actual return; native exception text is never
+retained, and disposal is not relabeled as an initialization/request failure.
 
 The QR event alone projects `{pngBase64QrcodeData, qrcodeUrl}`. Validation requires
 canonical base64 (plain or exact `data:image/png;base64,` prefix) containing a
@@ -160,7 +168,16 @@ cannot safely be cleaned up with a guessed identifier; host ownership must handl
 that uncertain state. `disconnected` after dispose describes this controller,
 not proof the native socket stopped. It returns the safe snapshot, including
 `cleanup_required`: `none`, `remove_listener` (numeric registration still owned),
-or `process_exit` (void/uncertain registration or failed removal).
+or `process_exit` (uncertain factory/config work, void/uncertain registration,
+registration returning after disposal, or failed removal).
+`process_exit` is set **before the first native factory call**, since even that
+call can perform native work before an exception. A dormant controller disposed
+before initialization still reports `none`. If listener registration disposes the
+controller and only afterward returns a numeric ID, the ID is not adopted, exposed,
+or removed by an extra native call. The terminal cleanup obligation remains
+`process_exit`; the owner must retire the process rather than reuse the singleton.
+This applies equally to token and process policies and does not change normal
+exact-ID removal for a numeric token acquired while the controller was live.
 `listener_handle_available` describes an actually held numeric token;
 `native_listener_removed` becomes true only when exact-ID removal returns.
 Process-owned void registration keeps `native_listener_removed: false` after
@@ -218,5 +235,14 @@ The pytest suite stores temporary JavaScript test files and launches Node throug
 exercise explicit method ordering, no calls before initialization, reentrant
 callbacks, booleans not fabricating QR/identity, immutable projections, safe
 snapshots, invalid descriptors/config/events, no repeat after uncertain outcome,
-listener isolation and exact-ID/idempotent removal. It imports no native QQ code
-and performs no network, QR scan, account login or production action.
+listener isolation and exact-ID/idempotent removal. Regression cases cover all five
+initialization boundaries disposing before return/throw under both ownership policies,
+early native failures requiring process exit, late numeric/void/invalid registration
+returns, and connect/QR disposal followed by true/false/void returns or exceptions.
+They assert exact native call sequences, no initialization event, no token resurrection,
+no extra cleanup call, cleared identity and sanitized `INVALID_STATE`.
+It imports no native QQ code and performs no network, QR scan, account login or
+production action. The disposal hardening was applied only after the parent-owned
+prepared-connect observation finished; that earlier capture's frozen source hash
+identifies the pre-hardening source, not this revision. No actual native rerun was
+performed to validate these guards; their evidence is exclusively the injected tests.

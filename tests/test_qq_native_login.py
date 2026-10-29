@@ -42,7 +42,7 @@ function fixture(overrides = {}) {
     loginConfig: {machineId:'',appid:'123',platVer:'test-os',commonPath:'/test/common',clientVer:'test-version',hostName:'test-host',externalVersion:false},
     globalAdapter: {}, clock: () => 123
   };
-  return {calls,login,wrapper,options,get listener() { return listener; }};
+  return {calls,engine,login,wrapper,options,get listener() { return listener; }};
 }
 function code(fn, expected) {
   assert.throws(fn, error => error instanceof NativeLoginError && error.code === expected && error.message === expected && !('cause' in error));
@@ -129,6 +129,164 @@ await tick();
 assert.deepEqual(seen.map(e => e[0]), ['initialized','connecting','connecting','connected','qr_pending','qr','authenticated']);
 assert.equal(seen[seen.length-1][1], 'authenticated');
 c.dispose();
+""")
+
+
+@pytest.mark.parametrize("stage", ["engine.get", "login.get", "engine.init", "login.init", "add"])
+@pytest.mark.parametrize("throws", [False, True])
+@pytest.mark.parametrize("lifetime", ["token", "process"])
+def test_initialization_disposal_stops_at_native_boundary(tmp_path, stage, throws, lifetime):
+    """Disposal inside any native call is terminal, even if it returns a numeric ID."""
+    run_node(tmp_path, "const [stage, throws, lifetime] = " + json.dumps([stage, throws, lifetime]) + r""";
+const f = fixture();
+f.options.listenerLifetime = lifetime;
+const targets = {
+  'engine.get': [f.wrapper.NodeIQQNTWrapperEngine, 'get'],
+  'login.get': [f.wrapper.NodeIKernelLoginService, 'get'],
+  'engine.init': [f.engine, 'initWithDeskTopConfig'],
+  'login.init': [f.login, 'initConfig'],
+  add: [f.login, 'addKernelLoginListener']
+};
+const [target, name] = targets[stage];
+const original = target[name];
+let c;
+target[name] = function (...args) {
+  const result = original.apply(this, args);
+  c.dispose();
+  assert.equal(c.getSnapshot().cleanup_required, 'process_exit');
+  if (throws) throw Error(secret);
+  return result;
+};
+c = createLoginController(f.options);
+const events = [];
+c.subscribe(event => events.push(event));
+code(() => c.initialize(), 'INVALID_STATE');
+const order = ['engine.get', 'login.get', 'engine.init', 'login.init', 'add'];
+assert.deepEqual(f.calls.map(call => call[0]), order.slice(0, order.indexOf(stage) + 1));
+const snapshot = c.getSnapshot();
+assert.equal(snapshot.disposed, true);
+assert.equal(snapshot.phase, 'disconnected');
+assert.equal(snapshot.cleanup_required, 'process_exit');
+assert.equal(snapshot.listener_handle_available, false);
+assert.equal(snapshot.native_listener_removed, false);
+assert.equal(snapshot.authenticated, false);
+assert.equal(snapshot.qr_available, false);
+assert.equal(c.getIdentity(), null);
+assert.equal(snapshot.initialization_step, {'engine.get':'factory_engine', 'login.get':'factory_login', 'engine.init':'engine_config', 'login.init':'login_config', add:'register_listener'}[stage]);
+assert.equal(snapshot.failed_stage, null);
+assert.equal(snapshot.failure_code, null);
+assert.equal(snapshot.registration_call_returned, stage === 'add' && !throws);
+assert.equal(snapshot.listener_id_type, stage !== 'add' ? 'not_attempted' : throws ? 'threw' : 'number');
+assert(!JSON.stringify(snapshot).includes(secret));
+c.dispose(); c.dispose();
+code(() => c.initialize(), 'INVALID_STATE');
+code(() => c.connect(), 'INVALID_STATE');
+code(() => c.getQRCodePicture(), 'INVALID_STATE');
+assert.deepEqual(f.calls.map(call => call[0]), order.slice(0, order.indexOf(stage) + 1));
+await tick();
+assert.deepEqual(events, []);
+""")
+
+
+def test_disposed_registration_keeps_only_safe_return_type(tmp_path):
+    """Late void/invalid registration results retain telemetry, never ownership."""
+    run_node(tmp_path, r"""
+for (const result of [undefined, '17', null, {}, true, NaN, -1]) {
+  const f = fixture();
+  f.options.listenerLifetime = 'process';
+  let c;
+  f.login.addKernelLoginListener = () => { f.calls.push(['add']); c.dispose(); return result; };
+  c = createLoginController(f.options);
+  code(() => c.initialize(), 'INVALID_STATE');
+  const snapshot = c.getSnapshot();
+  assert.equal(snapshot.registration_call_returned, true);
+  assert.equal(snapshot.listener_id_type, ['number', 'string', 'undefined'].includes(typeof result) ? typeof result : 'other');
+  assert.equal(snapshot.listener_handle_available, false);
+  assert.equal(snapshot.native_listener_removed, false);
+  assert.equal(snapshot.cleanup_required, 'process_exit');
+  assert.equal(snapshot.disposed, true);
+  assert.equal(snapshot.phase, 'disconnected');
+  assert.equal(snapshot.initialization_step, 'register_listener');
+  assert.equal(snapshot.failed_stage, null);
+  assert.equal(snapshot.failure_code, null);
+  c.dispose();
+  assert.deepEqual(f.calls.map(call => call[0]), ['engine.get', 'login.get', 'engine.init', 'login.init', 'add']);
+}
+""")
+
+
+@pytest.mark.parametrize("operation", ["connect", "qr"])
+@pytest.mark.parametrize("outcome", ["true", "false", "undefined", "throw"])
+def test_request_disposal_cannot_report_success_or_resurrect(tmp_path, operation, outcome):
+    """Synchronous callback disposal clears identity and dominates returns/exceptions."""
+    run_node(tmp_path, "const [operation, outcome] = " + json.dumps([operation, outcome]) + r""";
+const f = fixture();
+let c;
+const name = operation === 'connect' ? 'connect' : 'getQRCodePicture';
+f.login[name] = () => {
+  f.calls.push([operation]);
+  if (operation === 'connect') f.listener.onLoginConnected();
+  else {
+    f.listener.onQRCodeGetPicture({pngBase64QrcodeData:png,qrcodeUrl:'https://example.invalid/qr'});
+    f.listener.onQRCodeLoginSucceed({uin:'observed',uid:'observed-uid'});
+    assert.notEqual(c.getIdentity(), null);
+  }
+  c.dispose();
+  if (outcome === 'throw') throw Error(secret);
+  return {true:true, false:false, undefined:undefined}[outcome];
+};
+c = createLoginController(f.options);
+c.initialize();
+if (operation === 'qr') { c.connect(); f.listener.onLoginConnected(); }
+await tick();
+const events = [];
+c.subscribe(event => events.push(event));
+code(() => operation === 'connect' ? c.connect() : c.getQRCodePicture(), 'INVALID_STATE');
+const snapshot = c.getSnapshot();
+assert.equal(snapshot.disposed, true);
+assert.equal(snapshot.phase, 'disconnected');
+assert.equal(snapshot.authenticated, false);
+assert.equal(snapshot.qr_available, false);
+assert.equal(snapshot.failure_code, null);
+assert.equal(c.getIdentity(), null);
+assert.equal(snapshot.cleanup_required, 'none');
+assert.equal(snapshot.listener_handle_available, false);
+assert.equal(snapshot.native_listener_removed, true);
+assert(!JSON.stringify(snapshot).includes(secret));
+if (operation === 'connect') {
+  assert.equal(snapshot.connect_call_returned, outcome !== 'throw');
+  assert.equal(snapshot.connect_result_type, outcome === 'throw' ? 'threw' : outcome === 'undefined' ? 'undefined' : 'boolean');
+}
+c.dispose(); c.dispose();
+code(() => c.connect(), 'INVALID_STATE');
+code(() => c.getQRCodePicture(), 'INVALID_STATE');
+assert.deepEqual(f.calls.map(call => call[0]), ['engine.get', 'login.get', 'engine.init', 'login.init', 'add', 'connect', ...(operation === 'qr' ? ['qr'] : []), 'remove']);
+assert.deepEqual(f.calls.filter(call => call[0] === 'remove'), [['remove', 17]]);
+await tick();
+assert.deepEqual(events, []);
+""")
+
+
+@pytest.mark.parametrize("stage", ["engine.get", "login.get", "engine.init", "login.init"])
+def test_early_native_failure_requires_process_exit(tmp_path, stage):
+    """Factory/config uncertainty requires owner cleanup even before registration."""
+    run_node(tmp_path, "const stage = " + json.dumps(stage) + r""";
+const f = fixture();
+const targets = {
+  'engine.get': [f.wrapper.NodeIQQNTWrapperEngine, 'get'],
+  'login.get': [f.wrapper.NodeIKernelLoginService, 'get'],
+  'engine.init': [f.engine, 'initWithDeskTopConfig'],
+  'login.init': [f.login, 'initConfig']
+};
+const [target, name] = targets[stage];
+target[name] = () => { f.calls.push([stage]); throw Error(secret); };
+const c = createLoginController(f.options);
+code(() => c.initialize(), 'INITIALIZE_FAILED');
+assert.equal(c.getSnapshot().cleanup_required, 'process_exit');
+assert.equal(c.getSnapshot().listener_id_type, 'not_attempted');
+c.dispose(); c.dispose();
+assert.equal(c.getSnapshot().cleanup_required, 'process_exit');
+assert.equal(f.calls.filter(call => call[0] === 'remove').length, 0);
 """)
 
 

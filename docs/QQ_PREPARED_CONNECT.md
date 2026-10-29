@@ -103,3 +103,31 @@ not successful, not a measured watchdog stall, and not proof of reusable-host
 native behavior. The owner explicitly prohibited retrying this round. No fake
 native evidence artifact was created. Focused fake-only validation passed 95 tests;
 it remains separate from the unavailable actual-native observation.
+
+## Subsequent single isolated observation (2026-10-29)
+
+A later goal round used the reviewed PS5-compatible capture script for one new
+bounded attempt against source commit `d159840`. The immutable sanitized
+[observation](qq-prepared-connect-evidence.json) records:
+
+- Actual QQ invoked in the shared private namespaces, UID 65534, zero capabilities,
+  NoNewPrivs, detached oldroot, DOWN-only loopback and no forwarding routes.
+- Binding returned at 36 ms, prepared host at 38 ms, initialization at 47 ms,
+  and one boolean-returning connect call at 47 ms. The boolean value is deliberately
+  not serialized; phase `connecting` with no failure is not a connected callback.
+- The final valid checkpoint is `after_connect`. No 1/5/8-second timer checkpoint
+  was observed. All seven recorded native login callback counters remain zero.
+- QQ retired under the unchanged 30-second watchdog (`exit_code=-9`, elapsed
+  30.13 s). No final envelope exists: status remains failed, bounded observation
+  incomplete, authentication/session/send-receive unverified.
+- All five pristine software hashes match before/after. Authored entry and staged
+  module hashes are in the artifact. It attributes the **pre-login-retirement-fix**
+  module at `d159840`; later source fixes have not been re-tested in actual QQ.
+
+This disproves the narrow expectation that preparing startup/session factories
+alone would make the fixed offline timers progress in this run. It does not prove
+why progress stopped, a deadlock, an ABI mismatch or a network-dependent cause.
+Missing final records leave older summary flags such as `runtime_versions_verified`
+false; the progress record does not contain version strings, so none are invented.
+The process-wide 16-KiB regular-file limit and offline environment remain unchanged.
+No production account, session, configuration or transport was accessed or changed.

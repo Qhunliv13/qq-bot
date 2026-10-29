@@ -304,15 +304,25 @@ function createLoginController({ wrapper, engineConfig, loginConfig, globalAdapt
     return Object.freeze({ phase, disposed, qr_available: qrAvailable, authenticated: phase === 'authenticated', failure_code: lastCode, initialization_step: initializationStep, failed_stage: failedStage, registration_call_returned: registrationCallReturned, listener_id_type: listenerIdType, listener_handle_available: listenerId !== null, listener_registration_verified: listenerRegistrationVerified, native_listener_removed: nativeListenerRemoved, cleanup_required: cleanupRequired, listener_lifetime: listenerLifetime, connect_call_returned: connectCallReturned, connect_result_type: connectResultType, native_callback_counts: Object.freeze({ ...nativeCallbackCounts }) });
   }
 
+  /** A synchronous native callback may dispose; never continue its outer request. */
+  function requireNotDisposed() {
+    if (disposed) reject(CODES.INVALID_STATE);
+  }
+
   /** Obtain native singletons and register once, without connecting or QR work. */
   function initialize() {
     if (disposed || initAttempted || phase !== 'new') reject(CODES.INVALID_STATE);
     initAttempted = true;
+    // Even a factory can perform native work before throwing or disposing us.
+    // Until a live controller owns a numeric token, only its owner can retire it.
+    cleanupRequired = 'process_exit';
     try {
       initializationStep = 'factory_engine';
       const engine = engineGet.get.call(engineGet.exported);
+      requireNotDisposed();
       initializationStep = 'factory_login';
       const login = loginGet.get.call(loginGet.exported);
+      requireNotDisposed();
       initializationStep = 'validate_methods';
       const engineInit = method(engine, 'initWithDeskTopConfig');
       native = {
@@ -322,15 +332,19 @@ function createLoginController({ wrapper, engineConfig, loginConfig, globalAdapt
       };
       initializationStep = 'engine_config';
       engineInit(config.engine, globalAdapter);
+      requireNotDisposed();
       initializationStep = 'login_config';
       native.init(config.login);
+      requireNotDisposed();
       initializationStep = 'register_listener';
       listenerIdType = 'threw';
-      cleanupRequired = 'process_exit';
       const id = native.add(listener);
       registrationCallReturned = true;
       const returnedType = typeof id;
       listenerIdType = ['number', 'string', 'undefined'].includes(returnedType) ? returnedType : 'other';
+      // Safe return-type telemetry survives disposal, but a late token must not
+      // resurrect ownership or trigger an extra native removal after disposal.
+      requireNotDisposed();
       // A thrown/invalid registration may still have attached a native listener.
       // Only an actual numeric handle authorizes exact-ID removal.
       if (Number.isSafeInteger(id) && id >= 0) {
@@ -346,6 +360,8 @@ function createLoginController({ wrapper, engineConfig, loginConfig, globalAdapt
       phase = 'initialized'; publish('initialized');
       return getSnapshot();
     } catch (_) {
+      // Disposal wins over both a returned result and a later native exception.
+      requireNotDisposed();
       failedStage = initializationStep;
       fail(CODES.INITIALIZE_FAILED); reject(CODES.INITIALIZE_FAILED);
     }
@@ -362,7 +378,12 @@ function createLoginController({ wrapper, engineConfig, loginConfig, globalAdapt
       acknowledged = native.connect();
       connectCallReturned = true;
       connectResultType = ['boolean', 'undefined'].includes(typeof acknowledged) ? typeof acknowledged : 'other';
-    } catch (_) { fail(CODES.CONNECT_FAILED); reject(CODES.CONNECT_FAILED); }
+    } catch (_) {
+      requireNotDisposed();
+      fail(CODES.CONNECT_FAILED); reject(CODES.CONNECT_FAILED);
+    }
+    // Only diagnostic return enums may change after synchronous disposal.
+    requireNotDisposed();
     if (typeof acknowledged !== 'boolean') { fail(CODES.CONNECT_FAILED); reject(CODES.CONNECT_FAILED); }
     if (!acknowledged) fail(CODES.CONNECT_REJECTED);
     return acknowledged;
@@ -375,7 +396,11 @@ function createLoginController({ wrapper, engineConfig, loginConfig, globalAdapt
     phase = 'qr_pending'; publish('qr_pending');
     let acknowledged;
     try { acknowledged = native.qr(); }
-    catch (_) { fail(CODES.QR_REQUEST_FAILED); reject(CODES.QR_REQUEST_FAILED); }
+    catch (_) {
+      requireNotDisposed();
+      fail(CODES.QR_REQUEST_FAILED); reject(CODES.QR_REQUEST_FAILED);
+    }
+    requireNotDisposed();
     if (typeof acknowledged !== 'boolean') { fail(CODES.QR_REQUEST_FAILED); reject(CODES.QR_REQUEST_FAILED); }
     if (!acknowledged) fail(CODES.QR_REQUEST_REJECTED);
     return acknowledged;

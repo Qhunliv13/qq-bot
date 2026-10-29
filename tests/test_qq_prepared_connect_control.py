@@ -200,6 +200,33 @@ def test_exact_auxiliary_whitelist_before_writes(monkeypatch, mode, extra, missi
         shared.stage_control(b"source", b"control", "mount", parents, report, auxiliary=auxiliary, control_mode=mode)
 
 
+def test_recorded_actual_attempt_remains_incomplete():
+    """Validate frozen native evidence without re-running QQ or assuming new-source parity."""
+    artifact = ROOT / 'docs' / 'qq-prepared-connect-evidence.json'
+    report = json.loads(artifact.read_text(encoding='utf-8'), object_pairs_hook=shared.unique_object)
+    progress = report['connect_progress']
+    parsed = control.parse_progress((json.dumps(progress) + '\n').encode(), progress['nonce'])
+    assert parsed['stage'] == 'after_connect'
+    assert report['completion'] == 'watchdog_30s' and report['exit_code'] == -9
+    assert report['status'] == 'failed' and report['process_retired']
+    assert report['native_host_prepared_verified']
+    assert not report['bounded_progress_verified']
+    assert report['host_record'] is None
+    assert not report['native_login_verified'] and not report['full_sendrecv_verified']
+    assert not any(progress['login']['native_callback_counts'].values())
+    assert report['host_software_unchanged']
+    assert len(report['host_software_sha256_before']) == 5
+    assert report['host_software_sha256_before'] == report['host_software_sha256_after']
+    assert all(report['offline_network'].values())
+    for flag in ('network', 'mount', 'pid', 'ipc', 'pivotRoot', 'oldroot_detached',
+                 'unprivileged', 'effective_capabilities_zero', 'no_new_privileges'):
+        assert report['isolation'][flag]
+    # Historical hashes identify that run, not necessarily the current source tree.
+    assert set(report['staged_source_sha256']) == {
+        '/tmp/native_host.js', '/tmp/native_login.js', '/tmp/native_metadata.js',
+        '/tmp/qq-native-pristine-package.json'}
+
+
 def test_fixed_mode_sources_and_no_sensitive_calls(monkeypatch):
     """Only fixed sources enter the unchanged shared namespace/privilege executor."""
     calls = []
