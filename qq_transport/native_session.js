@@ -111,7 +111,7 @@ function method(instance, name) {
 
 /** Construct a dormant, single-attempt session; caller owns login and process exit. */
 function createSessionController(options) {
-  let config, wrapper, depends, dispatcher, mode, sessionName, startArgs;
+  let config, wrapper, depends, dispatcher, mode, sessionName, startArgs, prepared = null;
   try {
     config = cloneJSON(data(options, 'sessionConfig'));
     validate(config, data(options, 'accountIdentity'));
@@ -124,6 +124,21 @@ function createSessionController(options) {
     mode = data(options, 'lifecycleMode');
     if (!['startup', 'legacy'].includes(mode)) reject(CODES.INVALID_CONFIG);
     sessionName = text(data(options, 'sessionName'), 256);
+    if (Object.hasOwn(options, 'preparedHandles')) {
+      // Prepared handles convey factory identity only, never authentication/config.
+      const supplied = data(options, 'preparedHandles');
+      if (!supplied || typeof supplied !== 'object' || Array.isArray(supplied) || types.isProxy(supplied)) reject(CODES.INVALID_CONFIG);
+      const keys = Reflect.ownKeys(supplied);
+      if (keys.length !== 4 || keys.some(key => !['startupSession', 'session', 'lifecycleMode', 'sessionName'].includes(key))) reject(CODES.INVALID_CONFIG);
+      const startupSession = data(supplied, 'startupSession');
+      const session = data(supplied, 'session');
+      if (data(supplied, 'lifecycleMode') !== mode || data(supplied, 'sessionName') !== sessionName) reject(CODES.INVALID_CONFIG);
+      // Keep raw objects without probing methods until explicit initialization.
+      if (!session || typeof session !== 'object' || types.isProxy(session)
+          || (mode === 'startup' && (!startupSession || typeof startupSession !== 'object' || types.isProxy(startupSession)))
+          || (mode === 'legacy' && startupSession !== null)) reject(CODES.INVALID_CONFIG);
+      prepared = Object.freeze({startupSession, session});
+    }
     if (mode === 'legacy') {
       startArgs = cloneJSON(data(options, 'legacyStartArgs'));
       if (!Array.isArray(startArgs) || !(startArgs.length === 0 || (startArgs.length === 1 && startArgs[0] === 0))) reject(CODES.INVALID_CONFIG);
@@ -183,21 +198,27 @@ function createSessionController(options) {
   function initialize() {
     if (phase !== 'new') reject(CODES.INVALID_STATE);
     try {
-      const Session = data(wrapper, 'NodeIQQNTWrapperSession', CODES.INVALID_WRAPPER);
-      let startup;
-      // Resolve both startup factory methods before any potentially partial native work.
-      const create = mode === 'startup'
-        ? method(data(wrapper, 'NodeIQQNTStartupSessionWrapper', CODES.INVALID_WRAPPER), 'create')
-        : method(Session, 'create');
-      const get = mode === 'startup' ? method(Session, 'getNTWrapperSession') : null;
-      cleanup = 'process_exit';
-      if (mode === 'startup') {
-        startup = create();
-        nativeSession = get(sessionName);
-        startNative = method(startup, 'start');
+      if (prepared) {
+        // Host preparation already crossed native factories; never enter them twice.
+        cleanup = 'process_exit';
+        nativeSession = prepared.session;
+        startNative = mode === 'startup' ? method(prepared.startupSession, 'start') : method(nativeSession, 'startNT');
       } else {
-        nativeSession = create();
-        startNative = method(nativeSession, 'startNT');
+        const Session = data(wrapper, 'NodeIQQNTWrapperSession', CODES.INVALID_WRAPPER);
+        // Resolve both factory methods before potentially partial native work.
+        const create = mode === 'startup'
+          ? method(data(wrapper, 'NodeIQQNTStartupSessionWrapper', CODES.INVALID_WRAPPER), 'create')
+          : method(Session, 'create');
+        const get = mode === 'startup' ? method(Session, 'getNTWrapperSession') : null;
+        cleanup = 'process_exit';
+        if (mode === 'startup') {
+          const startup = create();
+          nativeSession = get(sessionName);
+          startNative = method(startup, 'start');
+        } else {
+          nativeSession = create();
+          startNative = method(nativeSession, 'startNT');
+        }
       }
       const init = method(nativeSession, 'init');
       phase = 'initialized';
@@ -244,7 +265,7 @@ function createSessionController(options) {
   /** Logical disposal only: teardown ABI is unknown, so the owner must exit process. */
   function dispose() {
     if (phase === 'disposed') return getSnapshot();
-    phase = 'disposed'; callbackReady = false; nativeSession = null; startNative = null;
+    phase = 'disposed'; callbackReady = false; nativeSession = null; startNative = null; prepared = null;
     subscribers.clear();
     return getSnapshot();
   }

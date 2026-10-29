@@ -219,3 +219,48 @@ h.listener.onOpentelemetryInit(raw); assert(e.isReady());
 e.subscribe(() => {throw new Error(secret);});
 e.dispose(); await tick();
 """)
+
+
+def test_prepared_handles_reuse_exact_objects_without_factory_access(tmp_path):
+    """Prepared startup/legacy paths only init/start captured objects, never factories."""
+    run_node(tmp_path, r"""
+for (const mode of ['startup', 'legacy']) {
+  const f = fixture(mode, [0]);
+  const preparedHandles = Object.freeze({startupSession:mode === 'startup' ? f.startup : null,
+    session:f.session,lifecycleMode:mode,sessionName:f.options.sessionName});
+  const c = createSessionController({...f.options,wrapper:{},preparedHandles});
+  assert.deepEqual(f.calls, []); assert(!c.isReady());
+  c.initialize(); assert.deepEqual(f.calls.map(x => x[0]), ['init']);
+  assert(!c.isReady()); c.start(); f.listener.onOpentelemetryInit({is_init:true});
+  assert.equal(c.getSessionForMessaging(), f.session);
+  assert.deepEqual(f.calls.map(x => x[0]), ['init',mode === 'startup' ? 'startup.start' : 'session.startNT']);
+  c.dispose(); assert.equal(c.getSnapshot().native_cleanup_required, 'process_exit');
+}
+""")
+
+
+def test_prepared_handles_reject_mismatch_and_accessors_before_native(tmp_path):
+    """Prepared handles are own-data capabilities, not a bypass for config/identity."""
+    run_node(tmp_path, r"""
+const mutations = [
+  h => h.sessionName = 'wrong', h => h.lifecycleMode = 'legacy',
+  h => h.session = null, h => h.session = 1, h => h.startupSession = null,
+  h => h.extra = true, h => delete h.session,
+  h => Object.defineProperty(h, 'session', {get() {throw Error(secret);}}),
+  h => h.session = new Proxy({}, {}), h => h.startupSession = new Proxy({}, {})
+];
+for (const mutate of mutations) {
+  const f = fixture(); const h = {startupSession:f.startup,session:f.session,lifecycleMode:'startup',sessionName:f.options.sessionName};
+  mutate(h); code(() => createSessionController({...f.options,preparedHandles:h}), 'INVALID_CONFIG');
+  assert.deepEqual(f.calls, []);
+}
+const f = fixture('legacy', []);
+code(() => createSessionController({...f.options,preparedHandles:{startupSession:f.startup,session:f.session,lifecycleMode:'legacy',sessionName:f.options.sessionName}}), 'INVALID_CONFIG');
+const g = fixture(); const h = {startupSession:g.startup,session:g.session,lifecycleMode:'startup',sessionName:g.options.sessionName};
+g.options.sessionConfig.selfUid = 'wrong';
+code(() => createSessionController({...g.options,preparedHandles:h}), 'INVALID_CONFIG'); assert.deepEqual(g.calls, []);
+const j = fixture(); j.session.init = () => {j.calls.push(['broken']); throw Error(secret);};
+const c = createSessionController({...j.options,preparedHandles:{startupSession:j.startup,session:j.session,lifecycleMode:'startup',sessionName:j.options.sessionName}});
+code(c.initialize, 'INITIALIZE_FAILED'); code(c.initialize, 'INVALID_STATE');
+assert.deepEqual(j.calls.map(x => x[0]), ['broken']); c.dispose();
+""")

@@ -77,6 +77,24 @@ visited values, 20,000 keys per container and 1 MiB combined JS string/key code
 units. Object property definition preserves unusual JSON keys without prototype
 assignment. Adapters are intentionally passed by identity, not JSON-cloned.
 
+## Optional prepared host handles
+
+The trusted owner may supply `preparedHandles` from
+`host.getPreparedSessionHandles()`. It must contain exactly four own data keys:
+`startupSession`, `session`, `lifecycleMode`, `sessionName`; accessors, proxies,
+extra/missing keys and metadata mismatches are rejected before native calls.
+`session` must be a non-null raw object; startup mode requires a non-null raw
+startup object, while legacy requires `startupSession: null`. Function handles are
+not accepted as session instances by this controller. Handles are capabilities,
+not authentication: normal config/identity validation remains mandatory.
+Construction inspects no native methods. Explicit `initialize()` resolves methods
+and calls init on the exact cached session, with no second startup `create`, session
+`getNTWrapperSession`, or session `create`. Start remains separately explicit and
+only a real post-start callback establishes readiness. Without this option, the
+existing factory path is unchanged. Disposal releases references logically only;
+no guessed native close is performed. QQ 53644 actual preparation still requires
+version-specific review; these fake-only checks do not certify its ABI.
+
 ## Lifecycle and observability
 
 - Phases: `new → initialized → starting → ready`; errors are terminal `failed`;

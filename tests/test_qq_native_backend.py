@@ -16,7 +16,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
 const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=';
 const identity = Object.freeze({uin:'10001', uid:'actual-test-uid'});
 const secret = 'never-expose-config-secret';
-function fixture(lifetime = 'process') {
+function fixture(lifetime = 'process', hostOptions) {
   const calls = []; let loginListener, sessionListener, messageListener;
   const handle = lifetime === 'process' ? undefined : 7;
   const login = {
@@ -53,6 +53,7 @@ function fixture(lifetime = 'process') {
     sessionConfigFactory:async account => { calls.push('config.factory'); assert.deepEqual(account, identity); return {selfUin:account.uin,selfUid:account.uid,clientVer:'test',machineId:'',desktopPathConfig:{account_path:'/test/account'},privateSecret:secret}; },
     sessionOptionsFactory:async account => { calls.push('options.factory'); assert.deepEqual(account, identity); return {lifecycleMode:'startup',sessionName:'explicit-test'}; }
   };
+  if (hostOptions !== undefined) options.hostOptions = hostOptions;
   const backend = createNativeBackend(options);
   return {calls,login,msg,options,backend, get loginListener() {return loginListener;}, get sessionListener() {return sessionListener;}, get messageListener() {return messageListener;}};
 }
@@ -190,4 +191,70 @@ assert.equal(snapshot.session.phase, 'disposed'); assert.equal(snapshot.messages
 assert.equal(snapshot.messages.cleanup_required, 'process_exit');
 assert.equal(snapshot.login.cleanup_required, 'none');
 f.backend.dispose(); assert.equal(f.calls.filter(x => x === 'msg.remove').length, 1);
+""")
+
+
+def test_prepared_host_exact_factory_order_and_callback_gates(tmp_path):
+    """Host factories precede init; prepared session is reused without reconnect/start."""
+    run_node(tmp_path, r"""
+const f = fixture('process', {sessionName:'explicit-test', lifecycleMode:'startup'});
+const b = f.backend; b.subscribe(() => {}); b.subscribeQRCode(() => {});
+assert.deepEqual(f.calls, []); assert.equal(b.getSnapshot().login, null);
+assert.equal(b.getSnapshot().host.phase, 'new'); assert.equal(b.isReady(), false);
+assert.throws(b.connect, {code:'INVALID_STATE'}); assert.throws(b.requestQRCode, {code:'INVALID_STATE'});
+await assert.rejects(b.initializeSession(), {code:'INVALID_STATE'});
+b.initialize();
+assert.deepEqual(f.calls, ['engine.get','login.get','startup.create','session.get','engine.init','login.init','login.add']);
+assert.throws(b.initialize, {code:'INVALID_STATE'});
+assert(!f.calls.includes('connect')); assert(!f.calls.includes('start')); assert(!f.calls.includes('msg.get'));
+b.connect(); f.loginListener.onLoginConnected(); await tick(); b.requestQRCode();
+f.loginListener.onQRCodeLoginSucceed(identity); await tick();
+await b.initializeSession();
+for (const name of ['engine.get','login.get','startup.create','session.get','session.init']) assert.equal(f.calls.filter(x => x === name).length, 1);
+assert(!f.calls.includes('start')); assert(!f.calls.includes('msg.get'));
+f.sessionListener.onOpentelemetryInit({is_init:true});
+b.startSession(); assert.equal(b.isReady(), false);
+assert.throws(b.initializeMessaging, {code:'NOT_READY'});
+f.sessionListener.onOpentelemetryInit({is_init:true}); await tick();
+assert(!f.calls.includes('msg.get')); b.initializeMessaging(); assert(b.isReady());
+f.loginListener.onLoginDisConnected(); assert.equal(b.isReady(), false);
+await assert.rejects(b.send(request), {code:'NOT_READY'});
+b.dispose(); assert.equal(b.getSnapshot().host.phase, 'disposed');
+assert.equal(b.getSnapshot().host.cleanup_required, 'process_exit');
+""")
+
+
+def test_prepared_host_failures_are_terminal_and_cleanup_survives(tmp_path):
+    """No partial factory failure, mismatch or login construction failure is retried."""
+    run_node(tmp_path, r"""
+for (const stage of ['engine.get','login.get','startup.create','session.get','login.construct']) {
+  const f = fixture('process', {sessionName:'explicit-test',lifecycleMode:'startup'});
+  const broken = () => {f.calls.push('broken'); throw Error(secret);};
+  if (stage === 'engine.get') f.options.wrapper.NodeIQQNTWrapperEngine.get = broken;
+  if (stage === 'login.get') f.options.wrapper.NodeIKernelLoginService.get = broken;
+  if (stage === 'startup.create') f.options.wrapper.NodeIQQNTStartupSessionWrapper.create = broken;
+  if (stage === 'session.get') f.options.wrapper.NodeIQQNTWrapperSession.getNTWrapperSession = broken;
+  const b = stage === 'login.construct' ? createNativeBackend({...f.options,engineConfig:{}}) : f.backend;
+  assert.throws(b.initialize, e => e.code === 'INITIALIZE_FAILED' && !String(e).includes(secret));
+  const count = f.calls.length; assert.throws(b.initialize, {code:'INVALID_STATE'});
+  assert.equal(f.calls.length, count); assert(!f.calls.includes('session.init'));
+  assert.throws(b.connect, {code:'INVALID_STATE'}); b.dispose(); b.dispose();
+  assert.equal(b.getSnapshot().host.phase, 'disposed');
+  assert.equal(b.getSnapshot().host.cleanup_required, 'process_exit');
+}
+for (const options of [{sessionName:'wrong',lifecycleMode:'startup'}, {sessionName:'explicit-test',lifecycleMode:'legacy',legacyStartArgs:[]}]) {
+  const f = fixture('process', {sessionName:'explicit-test',lifecycleMode:'startup'});
+  const b = createNativeBackend({...f.options,sessionOptionsFactory:async () => options});
+  b.initialize(); b.connect(); f.loginListener.onLoginConnected(); await tick(); b.requestQRCode();
+  f.loginListener.onQRCodeLoginSucceed(identity); await tick();
+  await assert.rejects(b.initializeSession(), {code:'SESSION_INITIALIZE_FAILED'});
+  await assert.rejects(b.initializeSession(), {code:'INVALID_STATE'});
+  assert.equal(f.calls.filter(x => x === 'session.get').length, 1);
+  assert(!f.calls.includes('session.init')); b.dispose();
+}
+const f = fixture('token', {sessionName:'explicit-test',lifecycleMode:'startup'});
+f.msg.removeKernelMsgListener = () => {throw Error(secret);}; await ready(f);
+assert.throws(f.backend.dispose, {code:'DISPOSE_FAILED'});
+assert(f.calls.includes('login.remove')); assert.equal(f.backend.getSnapshot().session.phase, 'disposed');
+assert.equal(f.backend.getSnapshot().host.phase, 'disposed');
 """)

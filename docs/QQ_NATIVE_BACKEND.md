@@ -17,7 +17,16 @@ Optional `sendTimeoutMs` is delegated to the message controller's bounded timeou
 omitting it preserves that controller's existing policy, not a runtime config default.
 No argument is sourced from process environment or another application.
 
-1. `initialize()` delegates only to `login.initialize()`.
+1. `initialize()` delegates to `login.initialize()` in the preserved non-host generic
+   adapter mode. Explicit optional `hostOptions: {sessionName, lifecycleMode}` opts
+   into full native preparation: `host.prepare()` runs engine `get`, login `get`,
+   startup `create`, session `getNTWrapperSession(sessionName)` (or explicit legacy
+   session `create`) exactly once **before** constructing the login controller with
+   `host.getLoginWrapper()`, subscribing its handler, then initializing engine/login.
+   Cached facade getters are not repeated native factory invocations. Construction
+   stays dormant; connect remains a separate action. No initialization failure is
+   retried or switched to another ABI. Invalid login config can fail after native
+   preparation; process cleanup remains required even if login construction fails.
 2. `connect()` delegates only to `login.connect()`. Its return is an acknowledgement,
    not connection or authentication proof; the actual login callback is required.
 3. `requestQRCode()` delegates only to `login.getQRCodePicture()` after the actual
@@ -30,7 +39,10 @@ No argument is sourced from process environment or another application.
    is awaited and must return explicit `lifecycleMode` and `sessionName`, plus
    `legacyStartArgs` for legacy mode. The session module checks exact `selfUin` and
    `selfUid` equality against actual callback identity. Callback nonce/extra fields
-   are not fused into config. The glue cannot supply a missing config.
+   are not fused into config. The glue cannot supply a missing config. In host mode
+   both options must exactly match prepared handle metadata; the session controller
+   receives `preparedHandles: host.getPreparedSessionHandles()` and initializes the
+   exact cached session without repeating startup/session factories.
 6. `startSession()` explicitly delegates to session start. Init/start return values
    are not readiness evidence. The session controller requires its native post-start
    `onOpentelemetryInit({is_init: true})` callback; pre-start truth does not count.
@@ -65,6 +77,10 @@ No QR payload is cached by the backend. It has no logging interface.
 
 `getSnapshot()` exposes safe component snapshots, attempt/failure state, disposal,
 and only an `identity_available` boolean (never identity/config/credentials/QR data).
+Before explicit host-mode initialize, `login` is `null` and `host.phase` is `new`;
+pre-init connect/QR calls reject with fixed `INVALID_STATE`, never a null TypeError.
+Non-host snapshots retain an eagerly constructed dormant login and `host: null`.
+`initialize_failure_code` is fixed `INITIALIZE_FAILED` or null.
 `isReady()` and `send_path_ready` mean **only that the limited session/message send
 path is initialized and callback-ready with login still authenticated**, not that a
 complete production backend exists or that all native QQ capabilities are covered.
@@ -78,7 +94,8 @@ retry. Wrong readiness fails closed before message dispatch.
 ## Cleanup and verification boundary
 
 `dispose()` marks disposed and clears/detaches subscriptions first, then attempts
-messages, session, and login disposal in that order even if one fails. Aggregate
+messages, session, login, and optional host disposal in that order even if one fails.
+Host disposal is logical only; it never guesses close/destroy APIs. Aggregate
 failure exposes only fixed `DISPOSE_FAILED`, not native messages/causes. Further
 operations reject; repeated disposal is locally safe. Component snapshots retain
 `process_exit` requirements. Process-lifetime listeners returning void are never
@@ -98,3 +115,7 @@ modules end to end**. They do not load native QQ, execute login, send real messa
 access the network, prove real QQ compatibility, establish production readiness, or
 claim capability parity. A real host ABI and complete owner-supplied runtime config
 still require separately authorized validation; no such validation occurred here.
+The old non-host generic adapter path is preserved, not certified as sufficient for
+QQ 53644: its actual full native preparation path still requires version-specific
+review. Consumer constructor-before-get ordering in the reviewed primary source
+(base lines 704–728) is observation, not a Tencent ABI guarantee.
