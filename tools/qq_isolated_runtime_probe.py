@@ -586,9 +586,9 @@ def private_display_session(report):
 def validate_synthetic_identity(synthetic_identity, control_mode, filesystem_mode,
                                 private_display, private_runtime_services, extended_startup,
                                 application_observer, userns_control, native_load_control):
-    """Reject identity outside the fixed fully isolated no-QQ mode before any writes."""
+    """Reject identity outside the two fixed fully isolated controls before any writes."""
     if type(synthetic_identity) is not bool or (synthetic_identity and (
-            control_mode != "bus_identity_offline" or filesystem_mode != "pivot-root"
+            control_mode not in ("bus_identity_offline", "host_dispatch_identity_offline") or filesystem_mode != "pivot-root"
             or not private_display or not private_runtime_services or not extended_startup
             or not callable(application_observer) or userns_control or native_load_control)):
         raise ProbeError("synthetic_identity_requires_fixed_private_bus_control")
