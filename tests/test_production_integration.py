@@ -1059,8 +1059,11 @@ def test_vm_drag_denied_before_transport_even_with_click_flag(production, monkey
     assert asyncio.run(plugin._dispatch_tool(name, args, "42", event=Event())) == expected
     assert requests == []
     schemas = {item["function"]["name"]: item["function"] for item in plugin._tool_schemas()}
-    assert "尚未支持" in schemas[name]["description"]
-    assert "preview_and_confirm_required" in schemas[name]["description"]
+    description = schemas[name]["description"]
+    assert "默认未配置可信路径执行后端" in description
+    assert "不能复用单点点击 ticket" in description
+    assert "vm_path_preview/vm_path_confirm" in description
+    assert "preview_and_confirm_required" in description
 
 
 @pytest.mark.parametrize("hold_ms", [-1, -300, 10001])

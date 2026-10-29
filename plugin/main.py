@@ -181,6 +181,10 @@ class HiganPlugin(Star):
         self._stopping = False
         # The local acceptor belongs to this exact plugin and shares its execution lock.
         self._local_runtime = None
+        # Explicit trusted-host capability, never populated from model arguments.
+        # An async adapter receives only the gate's immutable canonical action;
+        # no VM path backend is installed by this plugin or inferred from attributes.
+        self._vm_pointer_executor = None
         # 独立调用模型时显式拼接人设，不依赖框架注入。
 
         self.persona: str = self._load_persona()
@@ -1798,6 +1802,23 @@ class HiganPlugin(Star):
         from .message_transfer import schema as transfer_schema
         from .fact_tools import schemas as fact_schema
         from .group_inspection import schemas as group_inspection_schema
+        from .vm_pointer_runtime import MAX_DIMENSION, MAX_DURATION_MS, MAX_POINTS
+        # Schema metadata shares runtime bounds; canonical_pointer_action remains
+        # the sole validator (including total pixels and strictly increasing times).
+        path_action = {"type": "object", "additionalProperties": False,
+            "required": ["version", "button", "width", "height", "points"],
+            "properties": {
+                "version": {"type": "integer", "enum": [1]},
+                "button": {"type": "string", "enum": ["left"]},
+                "width": {"type": "integer", "minimum": 1, "maximum": MAX_DIMENSION},
+                "height": {"type": "integer", "minimum": 1, "maximum": MAX_DIMENSION},
+                "points": {"type": "array", "minItems": 2, "maxItems": MAX_POINTS,
+                    "items": {"type": "object", "additionalProperties": False,
+                        "required": ["x", "y", "t_ms"], "properties": {
+                            "x": {"type": "integer", "minimum": 0},
+                            "y": {"type": "integer", "minimum": 0},
+                            "t_ms": {"type": "integer", "minimum": 0,
+                                     "maximum": MAX_DURATION_MS}}}}}}
         return neutralize_schemas([
             _f("web_search", "搜索公开网页，返回来源标题、URL和摘要；按需要调用而非固定触发。",
                {"query": {"type": "string"}}, ["query"]),
@@ -1814,6 +1835,12 @@ class HiganPlugin(Star):
             _f("vm_click_preview", "第一步：屏幕截图在坐标处画预点击标点并送视觉模型复核；不满意再预览，满意再带 ticket、坐标、hash 及 viewed=true 调确认。屏幕变化/过期重做。",
                {"x": {"type": "integer"}, "y": {"type": "integer"},
                 "label": {"type": "string"}}, ["x", "y"]),
+            _f("vm_path_preview", "预览完整路径；默认未配置执行后端。",
+               {"action": path_action, "label": {"type": "string"}}, ["action"]),
+            _f("vm_path_confirm", "确认视觉核对后的完整路径；默认执行后端不可用。",
+               {"ticket": {"type": "string"}, "action": path_action,
+                "screen_sha256": {"type": "string"}, "viewed": {"type": "boolean"}},
+               ["ticket", "action", "screen_sha256", "viewed"]),
             _f("vm_click_text", "按文字查找元素但禁止绕过预览直接点击；若支持将先返回待确认坐标，否则请改用屏幕预览。",
                {"text": {"type": "string"}, "exact": {"type": "boolean"},
                 "index": {"type": "integer"}}, ["text"]),
@@ -2339,6 +2366,10 @@ class HiganPlugin(Star):
         """统一工具入口；显式携带事件接口，工具结果不会改变用户身份。"""
         if not isinstance(args, dict):
             return {"ok": False, "error": "arguments_must_be_object"}
+        # These names require the native turn's shared gate and visual transport;
+        # direct dispatch must not route them to a backend or a second gate.
+        if name in ("vm_path_preview", "vm_path_confirm"):
+            return {"ok": False, "error": "preview_and_confirm_required"}
         from .autonomous_turn import AutonomyEvent
         from .qq_social import dispatch as social_dispatch, schema as social_schema
         autonomous = isinstance(event, AutonomyEvent)
@@ -3347,11 +3378,12 @@ class HiganPlugin(Star):
         """调用机器人虚拟机的工具 API，保持显式工具映射、超时和错误处理。"""
         # Pointer gestures must not bypass visual verification. A click ticket
         # binds only one point, not a drag's path/duration: deny direct drags even
-        # with verified_click=True until a full gesture checkpoint is implemented.
+        # with verified_click=True; path confirmation uses the turn-local gate and
+        # an explicitly installed trusted adapter, never these legacy HTTP routes.
         # Raw exec/browser evaluation remain trusted capabilities, not sandboxed
         # by this client-side guard; see the VM checkpoint boundary document.
         if name in ("vm_click", "vm_click_text", "vm_click_preview", "vm_click_confirm",
-                    "vm_hold_drag", "vm_slider_drag"):
+                    "vm_hold_drag", "vm_slider_drag", "vm_path_preview", "vm_path_confirm"):
             if name != "vm_click" or verified_click is not True:
                 return {"ok": False, "error": "preview_and_confirm_required"}
         import asyncio
@@ -3669,18 +3701,30 @@ class HiganPlugin(Star):
                     return {"ok": True, "url": (_r or {}).get("url")}
                 except Exception as exc:  # noqa: BLE001
                     return {"ok": False, "error": repr(exc)[:200]}
-            if name in ("vm_click_preview", "vm_click_confirm"):
+            if name in ("vm_click_preview", "vm_click_confirm", "vm_path_preview", "vm_path_confirm"):
                 if not isinstance(args, dict):
                     return {"ok": False, "error": "invalid_click_arguments"}
                 async def screenshot_for_checkpoint():
                     """Capture the real current screen, not an earlier tool path."""
                     return await self._vm_tool("vm_shot", {})
 
-                if name == "vm_click_preview":
-                    res = await click_gate.preview(args.get("x"), args.get("y"),
-                        args.get("label", ""), screenshot_for_checkpoint)
+                if name in ("vm_click_preview", "vm_path_preview"):
+                    if name == "vm_path_preview":
+                        res = await click_gate.preview_path(args.get("action"),
+                            args.get("label", ""), screenshot_for_checkpoint)
+                    else:
+                        res = await click_gate.preview(args.get("x"), args.get("y"),
+                            args.get("label", ""), screenshot_for_checkpoint)
                     if res.get("ok") is True and res.get("path"):
                         live_refs.append(str(res["path"]))
+                elif name == "vm_path_confirm":
+                    # None is deliberate: the gate consumes the ticket, validates
+                    # observed intent, then returns backend_unavailable before any
+                    # input. Only trusted host code can install this async adapter.
+                    res = await click_gate.confirm_path(args.get("ticket"),
+                        screenshot_for_checkpoint, getattr(self, "_vm_pointer_executor", None),
+                        action=args.get("action"), screen_sha256=args.get("screen_sha256"),
+                        viewed=args.get("viewed"))
                 else:
                     async def click_after_checkpoint(x, y):
                         """Call the native mouse route only after pixel verification."""

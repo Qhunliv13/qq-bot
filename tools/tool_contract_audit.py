@@ -105,6 +105,13 @@ CASES = {
     "vm_click_confirm": {"ticket": "offline-no-ticket", "x": 12, "y": 15,
                          "screen_sha256": "0" * 64, "viewed": True},
     "vm_click_preview": {"x": 12, "y": 15},
+    "vm_path_preview": {"action": {"version": 1, "button": "left", "width": 160,
+        "height": 120, "points": [{"x": 12, "y": 15, "t_ms": 0},
+                                   {"x": 42, "y": 15, "t_ms": 100}]}},
+    "vm_path_confirm": {"ticket": "offline-no-ticket", "screen_sha256": "0" * 64,
+        "viewed": True, "action": {"version": 1, "button": "left", "width": 160,
+        "height": 120, "points": [{"x": 12, "y": 15, "t_ms": 0},
+                                   {"x": 42, "y": 15, "t_ms": 100}]}},
     "vm_click_text": {"text": "contract"}, "vm_click": {"x": 12, "y": 15},
     "vm_type": {"text": "contract"}, "vm_key": {"key": "Return"},
     "vm_job_start": {"code": "# inert audit payload", "lang": "python"},
@@ -162,7 +169,9 @@ EXPECTED_GATED_CLICKS = {
     "vm_click_text": ("preview_and_confirm_required", "preview_and_confirm_required"),
     "vm_click_confirm": ("preview_and_confirm_required", "no_pending_preview"),
     "vm_click_preview": ("preview_and_confirm_required", "preview_unavailable"),
-    # Drag checkpoints are not implemented; denial is not gesture capability success.
+    "vm_path_confirm": ("preview_and_confirm_required", "no_pending_preview"),
+    "vm_path_preview": ("preview_and_confirm_required", "preview_unavailable"),
+    # Legacy drag routes stay denied; a path preview is not backend readiness.
     "vm_hold_drag": ("preview_and_confirm_required", "preview_and_confirm_required"),
     "vm_slider_drag": ("preview_and_confirm_required", "preview_and_confirm_required"),
 }

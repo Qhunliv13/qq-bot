@@ -67,7 +67,7 @@ side effects, timeout propagation, scheduling, release on failed press/movement,
 uncertain release, no retry and private-error redaction. These are offline
 component tests, not end-to-end desktop or permission-isolation acceptance.
 
-## Shared gate boundary (offline, not exposed)
+## Shared gate boundary (native model tools, backend unavailable by default)
 
 `ClickGate.preview_path(action, label, screenshot_callable)` and
 `confirm_path(ticket, screenshot_callable, path_callable, *, action,
@@ -109,10 +109,36 @@ mismatch, missing observation, expiry during capture, changed pixels, replay,
 concurrency, mixed kinds and uncertain callbacks. These tests launch no commands
 and confer no production capability.
 
-No HTTP/model route, tool catalog entry, startup hook or automated runtime adapter
-is enabled. Controlled deployment still requires an actual VM baseline, trusted
-command timeout enforcement and one exclusive GUI owner across **all** input
-channels. The gate lock is turn-local, not a process-wide desktop lock. TTL is
+The model catalog now exposes `vm_path_preview(action, label)` and
+`vm_path_confirm(ticket, action, screen_sha256, viewed)` through the native loop.
+Both reuse that turn's existing `ClickGate`, so click/path previews automatically
+revoke each other. Marked PNGs join the same visual references as click previews;
+observation is recorded only after a successful model request actually contains
+the marker's `image_url`. Same-request preview/confirm batches cannot claim vision.
+Direct dispatcher and VM-tool calls to either path name return the exact
+`preview_and_confirm_required` denial, even with the click-only verified flag.
+No HTTP route, environment endpoint or automatic runtime adapter was added.
+
+The plugin initializes its explicit private trusted-host capability
+`_vm_pointer_executor` to `None`. A reviewed host adapter may supply an async
+callable taking only the gate's stored immutable canonical action and returning a
+structured receipt. It is never resolved from model arguments, URLs or inferred
+attributes; no such adapter is installed by default. Missing capability passes
+`None` into the existing gate: a correct, observed confirmation consumes its ticket
+and returns `backend_unavailable` **before** fresh screenshot or pointer execution.
+This known pre-execution condition is not mislabeled `path_outcome_uncertain`;
+replaying the consumed ticket returns `no_pending_preview`. Catalog/tool discovery
+descriptions explicitly disclose this default, not a claim of live path support.
+
+[Native-loop tests](../tests/test_vm_path_integration.py) transport real marked PNG
+bytes through provider-message fixtures, then gate confirmation into the actual
+pointer primitive using a trusted fake command adapter. They cover exact argv,
+immutable callback input, missing vision, altered action, changed screen, same
+request batches, replay, unconfigured backend, both cross-kind revocation orders,
+and direct bypass denial. These tests do not execute real pointer commands.
+
+Controlled deployment still requires an actual VM baseline, trusted command
+timeout enforcement and one exclusive GUI owner across **all** input channels. The gate lock is turn-local, not a process-wide desktop lock. TTL is
 checked at execution admission, not continuously during the up-to-10-second path.
 Physical screen changes after the final capture and OS scheduling remain races;
 this boundary does not claim physical atomicity, user consent, or complete

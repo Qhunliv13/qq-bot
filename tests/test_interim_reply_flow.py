@@ -108,7 +108,8 @@ def test_model_chosen_ack_progress_finish_share_one_native_transcript(interim, m
     assert len(requests) == 4
     schemas = requests[0]["tools"]
     names = [tool["function"]["name"] for tool in schemas]
-    assert len(names) == len(set(names)) == 108
+    from plugin.tool_catalog import NATIVE_TOOL_COUNT
+    assert len(names) == len(set(names)) == NATIVE_TOOL_COUNT
     assert names.count("reply_now") == 1
     assert all(request["tools"] == schemas for request in requests)
     assert all(plugin.persona in request["messages"][0]["content"] for request in requests)

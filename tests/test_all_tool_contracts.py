@@ -92,14 +92,17 @@ def test_new_native_contracts_use_reviewed_receipts_and_actions(report):
 def test_request_contracts_distinguish_unavailable_from_route_errors(report):
     """All six native handlers execute while exactly three remain honestly unavailable."""
     rows = {row["name"]: row for row in report["tools"]}
-    assert report["result_quality_counts"] == {"acknowledged": 99,
-        "capability_unavailable": 3, "click_checkpoint_required": 6}
+    unavailable = len(AUDIT.EXPECTED_UNAVAILABLE)
+    gated = len(AUDIT.EXPECTED_GATED_CLICKS)
+    assert report["result_quality_counts"] == {
+        "acknowledged": AUDIT.NATIVE_TOOL_COUNT - unavailable - gated,
+        "capability_unavailable": unavailable, "click_checkpoint_required": gated}
     for name, errors in AUDIT.EXPECTED_GATED_CLICKS.items():
         row = rows[name]
         assert row["result"] == {"ok": False, "error": errors[0]}
         assert row["result_quality"]["expected_gated"] is True
         assert not [edge for edge in row["stubbed_edges"] if edge["edge"] == "vm_http_stub"]
-    assert sum(batch["expected_gated_count"] for batch in report["provider_batches"]) == 6
+    assert sum(batch["expected_gated_count"] for batch in report["provider_batches"]) == gated
     for batch in report["provider_batches"]:
         for receipt in batch["failed_results"]:
             assert receipt["name"] not in AUDIT.EXPECTED_GATED_CLICKS
@@ -200,7 +203,7 @@ def test_generic_success_cannot_mask_wrong_transfer_native_action(tmp_path, monk
 def test_imported_workspace_discovery_and_workers_execute_real_contracts(report):
     """All additive classes require native receipts and locally exercised helpers."""
     rows = {row["name"]: row for row in report["tools"]}
-    assert report["effective_schema_count"] == report["canonical_schema_count"] == 108
+    assert report["effective_schema_count"] == report["canonical_schema_count"] == AUDIT.NATIVE_TOOL_COUNT
     assert report["workspace_helpers_executed"] >= 20
     assert report["native_worker_calls"]
     assert {row["status"] for row in report["native_worker_receipts"]} == {"completed", "cancelled"}
@@ -455,7 +458,7 @@ def test_native_provider_honors_explicit_worker_schema_snapshot(tmp_path, monkey
     assert requests[0]["tools"] == snapshot
     assert requests[1]["tools"] == parent
     assert len(requests[0]["tools"]) == 1
-    assert len(requests[1]["tools"]) == 108
+    assert len(requests[1]["tools"]) == AUDIT.NATIVE_TOOL_COUNT
     assert explicit == snapshot
     assert plugin._tool_schemas() == parent
 

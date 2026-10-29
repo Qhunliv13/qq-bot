@@ -25,21 +25,40 @@ from plugin.group_inspection import schemas as group_inspection_schema  # noqa: 
 from plugin.fact_structure import structure_schema  # noqa: E402
 
 
-def literal_with_structure(node):
+def literal_with_structure(node, names=None):
     """Decode reviewed pure schema calls and literal metadata, never host code."""
     if isinstance(node, ast.Call):
         assert isinstance(node.func, ast.Name) and node.func.id == "structure_schema"
         assert not node.args and not node.keywords
         return structure_schema()
+    if isinstance(node, ast.Name):
+        # Only explicitly reviewed metadata bindings are resolved, never eval.
+        assert names is not None and node.id in names
+        return deepcopy(names[node.id])
     if isinstance(node, ast.Dict):
-        return {literal_with_structure(key): literal_with_structure(value)
+        return {literal_with_structure(key, names): literal_with_structure(value, names)
                 for key, value in zip(node.keys, node.values)}
     if isinstance(node, ast.List):
-        return [literal_with_structure(item) for item in node.elts]
+        return [literal_with_structure(item, names) for item in node.elts]
     return ast.literal_eval(node)
 
 IMPORTED_BUILDERS = (social_schema, workspace_schema, discovery_schema, delegation_schema, planning_schema, interim_schema, image_schema, request_schema, transfer_schema, fact_schema, group_inspection_schema)
 from plugin.tool_catalog import NATIVE_TOOL_COUNT, TOOL_DESCRIPTIONS, neutralize_schemas  # noqa: E402
+
+
+def native_schema_metadata(tree):
+    """Resolve only reviewed schema bindings once for all AST-only test readers."""
+    from plugin.vm_pointer_runtime import MAX_DIMENSION, MAX_DURATION_MS, MAX_POINTS
+    metadata = {"MAX_DIMENSION": MAX_DIMENSION, "MAX_DURATION_MS": MAX_DURATION_MS,
+                "MAX_POINTS": MAX_POINTS}
+    method = next(node for node in ast.walk(tree)
+                  if isinstance(node, ast.FunctionDef) and node.name == "_tool_schemas")
+    path_schema = next(node.value for node in method.body
+                       if isinstance(node, ast.Assign) and any(
+                           isinstance(target, ast.Name) and target.id == "path_action"
+                           for target in node.targets))
+    metadata["path_action"] = literal_with_structure(path_schema, metadata)
+    return metadata
 
 
 @pytest.fixture
@@ -53,6 +72,7 @@ def native_schemas():
         and node.name in {"_tool_schemas", "_task_tool_schemas"}
     }
     assert set(methods) == {"_tool_schemas", "_task_tool_schemas"}
+    metadata = native_schema_metadata(tree)
     schemas = []
     for method_name in ("_tool_schemas", "_task_tool_schemas"):
         # Only literal _f declarations are inspected; no host code is compiled,
@@ -64,7 +84,7 @@ def native_schemas():
             key=lambda node: node.lineno,
         )
         for call in calls:
-            args = [literal_with_structure(arg) for arg in call.args]
+            args = [literal_with_structure(arg, metadata) for arg in call.args]
             schemas.append({"type": "function", "function": {
                 "name": args[0], "description": args[1],
                 "parameters": {"type": "object",
@@ -80,7 +100,7 @@ def native_schemas():
 def test_exact_coverage_of_all_native_tool_names(native_schemas):
     """A new or removed native tool requires an explicit metadata review."""
     names = {schema["function"]["name"] for schema in native_schemas}
-    assert len(names) == NATIVE_TOOL_COUNT == 108
+    assert len(names) == NATIVE_TOOL_COUNT == 110
     assert len(TOOL_DESCRIPTIONS) == NATIVE_TOOL_COUNT
     assert set(TOOL_DESCRIPTIONS) == names
     assert all(isinstance(text, str) and text.strip() for text in TOOL_DESCRIPTIONS.values())
