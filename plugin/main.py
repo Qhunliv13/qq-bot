@@ -1917,12 +1917,12 @@ class HiganPlugin(Star):
                 "user_id": {"type": "integer"}, "group_id": {"type": "integer"},
                 "mentions": {"type": "array", "items": {"type": "string"}}},
                ["kind", "text"]),
-            _f("vm_hold_drag", "按住式拖拽：按住(x,y)先停 hold_ms，再拖 distance 像素后松开",
+            _f("vm_hold_drag", "直接拖拽已禁止；完整手势视觉授权尚未实现，单点点击 ticket 不适用",
                {"x": {"type": "integer"}, "y": {"type": "integer"},
                 "distance": {"type": "integer"}, "hold_ms": {"type": "integer"}}, ["x", "y", "distance"]),
             _f("vm_frame_eval", "在匹配 match 的页面/iframe 里执行 JS（读验证码图片 URL 等）",
                {"js": {"type": "string"}, "match": {"type": "string"}}, ["js"]),
-            _f("vm_slider_drag", "拟人拖拽：从 (x,y) 横向拖 distance 像素（过滑块用）",
+            _f("vm_slider_drag", "直接滑块拖拽已禁止；完整手势视觉授权尚未实现，单点点击 ticket 不适用",
                {"x": {"type": "integer"}, "y": {"type": "integer"},
                 "distance": {"type": "integer"}}, ["x", "y", "distance"]),
             _f("autonomy_status", "查看主动观察的启用状态、间隔、下一次机会与已知会话范围。"),
@@ -3345,9 +3345,13 @@ class HiganPlugin(Star):
 
     async def _vm_tool(self, name: str, args: dict, *, verified_click: bool = False) -> dict:
         """调用机器人虚拟机的工具 API，保持显式工具映射、超时和错误处理。"""
-        # Direct clicks and text-based clicks bypass visual verification. Only the
-        # turn-local gate's validated callback may reach the native mouse route.
-        if name in ("vm_click", "vm_click_text", "vm_click_preview", "vm_click_confirm"):
+        # Pointer gestures must not bypass visual verification. A click ticket
+        # binds only one point, not a drag's path/duration: deny direct drags even
+        # with verified_click=True until a full gesture checkpoint is implemented.
+        # Raw exec/browser evaluation remain trusted capabilities, not sandboxed
+        # by this client-side guard; see the VM checkpoint boundary document.
+        if name in ("vm_click", "vm_click_text", "vm_click_preview", "vm_click_confirm",
+                    "vm_hold_drag", "vm_slider_drag"):
             if name != "vm_click" or verified_click is not True:
                 return {"ok": False, "error": "preview_and_confirm_required"}
         import asyncio
@@ -3355,16 +3359,6 @@ class HiganPlugin(Star):
 
         from .browser_eval import build_eval_wrapper, decode_eval_response
         args = dict(args)
-        if name == "vm_hold_drag":
-            try:
-                distance = int(args.get("distance") or 0)
-                hold_ms = int(args.get("hold_ms", 600))
-                if not distance or not 0 <= hold_ms <= 10000:
-                    return {"ok": False, "error": "invalid_drag_distance_or_hold"}
-                args["hold_ms"] = hold_ms
-                args["steps"] = max(20, min(80, int(args.get("steps") or 40)))
-            except (ValueError, TypeError):
-                return {"ok": False, "error": "invalid_drag_arguments"}
         if name in ("vm_eval", "vm_frame_eval"):
             args["js"] = build_eval_wrapper(str(args.get("js") or ""))
         mapping = {
@@ -3400,11 +3394,6 @@ class HiganPlugin(Star):
             "mail_recent": ("POST", "/vm/mail/recent", {"limit": int(args.get("limit") or 5)}),
             "mail_web_login": ("POST", "/vm/mail/web_login", {}),
             "mail_web_read": ("POST", "/vm/mail/web_read", {"limit": int(args.get("limit") or 2500)}),
-            "vm_hold_drag": ("POST", "/vm/hold_drag", {"x": int(args.get("x") or 0),
-                             "y": int(args.get("y") or 0),
-                              "distance": int(args.get("distance") or 0),
-                             "hold_ms": int(args.get("hold_ms", 600)),
-                             "steps": int(args.get("steps") or 28)}),
             "vm_frame_eval": ("POST", "/vm/frame_eval", {"js": str(args.get("js") or ""),
                               "match": str(args.get("match") or "")}),
             "mail_list": ("POST", "/vm/mail/list", {"limit": int(args.get("limit") or 10),
@@ -3413,9 +3402,6 @@ class HiganPlugin(Star):
             "vm_eval": ("POST", "/vm/eval", {"js": str(args.get("js") or "")}),
             "vm_slider_gap": ("POST", "/vm/slider/gap", {"bg_url": str(args.get("bg_url") or ""),
                                                          "piece_url": str(args.get("piece_url") or "")}),
-            "vm_slider_drag": ("POST", "/vm/slider/drag", {"x": int(args.get("x") or 0),
-                                                           "y": int(args.get("y") or 0),
-                                                           "distance": int(args.get("distance") or 0)}),
         }
         if name not in mapping:
             return {"ok": False, "error": "unknown tool %s" % name}

@@ -6,6 +6,7 @@ import copy
 import hashlib
 import io
 import json
+import urllib.request
 
 from PIL import Image
 import pytest
@@ -189,6 +190,38 @@ def test_same_native_batch_cannot_claim_preview_was_seen(click_host, monkeypatch
     assert clicks == [] and len(shots) == 1
     assert _results(requests[-1])[-1]["result"]["error"] == "preview_image_not_seen_by_model"
     assert not _image_bytes(requests[0]) and _image_bytes(requests[-1])
+
+
+def test_native_bulk_typing_preserves_multiline_unicode_in_one_post(production, monkeypatch):
+    """The native model loop sends complete literal text once, without key/character loops."""
+    host, requests, model_calls = production(), [], []
+    text = "第一行：你好 👋\nsecond line\r\n\t'quoted' \\\"literal\\\" $HOME; $(no-shell)\n末行\n"
+
+    def urlopen(request, timeout):
+        """Inspect the actual HTTP payload rather than mocking the VM dispatcher."""
+        requests.append((request.full_url, request.get_method(),
+                         json.loads(request.data.decode("utf-8"))))
+        return io.BytesIO(b'{"ok":true}')
+
+    async def model(_system, _prompt, _refs, messages, allow_tools):
+        """Issue one whole-text tool call and observe its native paired receipt."""
+        model_calls.append(copy.deepcopy(messages))
+        if len(model_calls) == 1:
+            assert allow_tools
+            return "", [_call("vm_type", {"text": text}, "bulk-text")]
+        observations = _results(messages)
+        assert len(observations) == 1
+        assert observations[0]["tool_name"] == "vm_type"
+        assert observations[0]["result"] == {"ok": True}
+        return json.dumps({"reply_to": [], "text": "Bulk text submitted."}), []
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    host._llm_tools = model
+    _assert_unattributed_final(
+        asyncio.run(host._decide_tools_first(Event(), "42", "current question", False)),
+        "Bulk text submitted.")
+    assert requests == [("http://127.0.0.1:18003/vm/type", "POST", {"text": text})]
+    assert len(model_calls) == 2
 
 
 def test_original_vm_guard_denies_direct_and_text_clicks(production):

@@ -162,6 +162,9 @@ EXPECTED_GATED_CLICKS = {
     "vm_click_text": ("preview_and_confirm_required", "preview_and_confirm_required"),
     "vm_click_confirm": ("preview_and_confirm_required", "no_pending_preview"),
     "vm_click_preview": ("preview_and_confirm_required", "preview_unavailable"),
+    # Drag checkpoints are not implemented; denial is not gesture capability success.
+    "vm_hold_drag": ("preview_and_confirm_required", "preview_and_confirm_required"),
+    "vm_slider_drag": ("preview_and_confirm_required", "preview_and_confirm_required"),
 }
 # These expectations are independent of the social router and its schema metadata.
 EXPECTED_SOCIAL_ACTIONS = {
@@ -185,8 +188,8 @@ EXPECTED_VM_PATHS = {
     "mail_recent": "/vm/mail/recent", "mail_list": "/vm/mail/list",
     "mail_web_login": "/vm/mail/web_login", "mail_web_read": "/vm/mail/web_read",
     "mail_code": "/vm/mail/code", "vm_fetch": "/vm/download",
-    "send_shot": "/vm/qq/send_shot", "vm_hold_drag": "/vm/hold_drag",
-    "vm_frame_eval": "/vm/frame_eval", "vm_slider_drag": "/vm/slider/drag",
+    "send_shot": "/vm/qq/send_shot",
+    "vm_frame_eval": "/vm/frame_eval",
 }
 
 
@@ -266,7 +269,8 @@ def _handler_inventory():
     for method in klass.body:
         if not isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
-        if method.name == "_dispatch_tool":
+        # Guards are real handlers even when they deliberately have no HTTP mapping.
+        if method.name in ("_dispatch_tool", "_vm_tool"):
             for node in ast.walk(method):
                 if isinstance(node, ast.If):
                     tests = node.test.values if isinstance(node.test, ast.BoolOp) else [node.test]
@@ -274,7 +278,7 @@ def _handler_inventory():
                         if isinstance(test, ast.Compare) and isinstance(test.left, ast.Name) and test.left.id == "name":
                             for value in ast.walk(test.comparators[0]):
                                 if isinstance(value, ast.Constant) and isinstance(value.value, str):
-                                    result.setdefault(value.value, {"handler": "_dispatch_tool", "branch_line": node.lineno,
+                                    result.setdefault(value.value, {"handler": method.name, "branch_line": node.lineno,
                                         "body_lines": [child.lineno for child in node.body]})
         if method.name == "_vm_tool":
             for node in ast.walk(method):

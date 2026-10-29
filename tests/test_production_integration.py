@@ -1040,32 +1040,35 @@ def test_vm_eval_http_failure_preserves_structured_error_without_retry(productio
     assert len(requests) == 1
 
 
-@pytest.mark.parametrize("name, endpoint", [("vm_hold_drag", "/vm/hold_drag"), ("vm_slider_drag", "/vm/slider/drag")])
-def test_vm_drag_uses_distance_payload_without_legacy_dx(production, monkeypatch, name, endpoint):
-    """Signed displacement reaches the actual endpoint as distance, not an ignored legacy dx key."""
+@pytest.mark.parametrize("name", ["vm_hold_drag", "vm_slider_drag"])
+@pytest.mark.parametrize("verified_click", [False, True])
+def test_vm_drag_denied_before_transport_even_with_click_flag(production, monkeypatch, name, verified_click):
+    """A point-click grant cannot authorize an unbound drag path or duration."""
     plugin, requests = production(), []
 
     def urlopen(request, timeout):
-        """Capture the real production JSON mapping and return a local accepted result."""
-        requests.append((request.full_url, json.loads(request.data.decode("utf-8"))))
+        """Record accidental transport access without ever touching a live VM."""
+        requests.append(request.full_url)
         return io.BytesIO(b'{"ok":true}')
 
     monkeypatch.setattr(urllib.request, "urlopen", urlopen)
-    assert asyncio.run(plugin._vm_tool(name, {"x": 100, "y": 200, "distance": -73, "hold_ms": 350})) == {"ok": True}
-    url, payload = requests[0]
-    assert url == "http://127.0.0.1:18003" + endpoint
-    assert payload["x"] == 100 and payload["y"] == 200 and payload["distance"] == -73
-    assert "dx" not in payload and len(requests) == 1
-    if name == "vm_hold_drag":
-        assert payload["hold_ms"] == 350
+    args = {"x": 100, "y": 200, "distance": -73, "hold_ms": 350,
+            "verified_click": True}
+    expected = {"ok": False, "error": "preview_and_confirm_required"}
+    assert asyncio.run(plugin._vm_tool(name, args, verified_click=verified_click)) == expected
+    assert asyncio.run(plugin._dispatch_tool(name, args, "42", event=Event())) == expected
+    assert requests == []
+    schemas = {item["function"]["name"]: item["function"] for item in plugin._tool_schemas()}
+    assert "尚未支持" in schemas[name]["description"]
+    assert "preview_and_confirm_required" in schemas[name]["description"]
 
 
 @pytest.mark.parametrize("hold_ms", [-1, -300, 10001])
 def test_vm_negative_or_excessive_hold_rejected_before_transport(production, hold_ms):
-    """Invalid timing never gets as far as the fixture's fail-closed HTTP boundary."""
+    """Every direct drag is denied before argument processing or VM transport."""
     assert asyncio.run(production()._vm_tool("vm_hold_drag", {
         "x": 100, "y": 200, "distance": 70, "hold_ms": hold_ms})) == {
-        "ok": False, "error": "invalid_drag_distance_or_hold"}
+        "ok": False, "error": "preview_and_confirm_required"}
 
 
 @pytest.mark.parametrize("scope, args, expected", [

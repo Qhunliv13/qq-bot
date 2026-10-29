@@ -92,14 +92,14 @@ def test_new_native_contracts_use_reviewed_receipts_and_actions(report):
 def test_request_contracts_distinguish_unavailable_from_route_errors(report):
     """All six native handlers execute while exactly three remain honestly unavailable."""
     rows = {row["name"]: row for row in report["tools"]}
-    assert report["result_quality_counts"] == {"acknowledged": 101,
-        "capability_unavailable": 3, "click_checkpoint_required": 4}
+    assert report["result_quality_counts"] == {"acknowledged": 99,
+        "capability_unavailable": 3, "click_checkpoint_required": 6}
     for name, errors in AUDIT.EXPECTED_GATED_CLICKS.items():
         row = rows[name]
         assert row["result"] == {"ok": False, "error": errors[0]}
         assert row["result_quality"]["expected_gated"] is True
         assert not [edge for edge in row["stubbed_edges"] if edge["edge"] == "vm_http_stub"]
-    assert sum(batch["expected_gated_count"] for batch in report["provider_batches"]) == 4
+    assert sum(batch["expected_gated_count"] for batch in report["provider_batches"]) == 6
     for batch in report["provider_batches"]:
         for receipt in batch["failed_results"]:
             assert receipt["name"] not in AUDIT.EXPECTED_GATED_CLICKS
@@ -128,6 +128,21 @@ def test_request_contracts_distinguish_unavailable_from_route_errors(report):
 def test_expected_unavailable_quality_never_weakens_other_errors(name, result):
     """Mutation controls reject generic, unauthorized, or wrong-capability receipts."""
     assert AUDIT._quality(result, name)["contract_satisfied"] is False
+
+
+@pytest.mark.parametrize("via_provider", [False, True])
+@pytest.mark.parametrize("name,result", [
+    ("vm_hold_drag", {"ok": False, "error": "permission_denied"}),
+    ("vm_slider_drag", {"ok": False, "error": "unknown tool vm_slider_drag"}),
+    ("vm_hold_drag", {"ok": 0, "error": "preview_and_confirm_required"}),
+    ("vm_slider_drag", {"error": "preview_and_confirm_required"}),
+    ("vm_browse", {"ok": False, "error": "preview_and_confirm_required"}),
+])
+def test_expected_pointer_gate_does_not_hide_other_failures(name, result, via_provider):
+    """Only a reviewed pointer name and exact false/error receipt qualify as gated."""
+    quality = AUDIT._quality(result, name, via_provider=via_provider)
+    assert quality["expected_gated"] is False
+    assert quality["contract_satisfied"] is False
 
 
 def test_generic_success_stub_for_unavailable_request_action_is_a_route_gap(tmp_path, monkeypatch):
@@ -397,9 +412,13 @@ def test_result_failure_and_handler_exception_are_not_hidden(tmp_path, monkeypat
     original = AUDIT.AuditHarness.prepare
 
     def prepare_bad_coordinate(self, name):
-        """Make one VM mapping fail before transport without replacing its router."""
+        """Inject malformed surplus input into an accessible eager VM mapping.
+
+        vm_browse has no x schema parameter: this intentionally malformed-input
+        control tests honest handler failure, not a supported browsing contract.
+        """
         args, event = original(self, name)
-        if name == "vm_slider_drag":
+        if name == "vm_browse":
             args["x"] = "not-an-integer"
         return args, event
 
@@ -413,8 +432,8 @@ def test_result_failure_and_handler_exception_are_not_hidden(tmp_path, monkeypat
         result = AUDIT.audit(tmp_path, edges)
     rows = {row["name"]: row for row in result["tools"]}
     assert rows["web_fetch"]["result_quality"]["ok"] is False
-    assert rows["vm_slider_drag"]["exception"]["type"] == "ValueError"
-    assert {"web_fetch", "vm_slider_drag"} <= {gap["name"] for gap in result["gaps"]}
+    assert rows["vm_browse"]["exception"]["type"] == "ValueError"
+    assert {"web_fetch", "vm_browse"} <= {gap["name"] for gap in result["gaps"]}
     assert result["route_contracts_pass"] is False
 
 
