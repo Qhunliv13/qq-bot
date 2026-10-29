@@ -150,6 +150,24 @@ class ClickGateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.clicks, [])
         self.assertEqual((await self.approve(preview))["error"], "no_pending_preview")
 
+    async def test_backend_exception_text_is_never_returned_or_replayed(self):
+        """A backend failure exposes only a fixed outcome, not private diagnostic text."""
+        async def sensitive_failure(*args):
+            """Simulate a backend exception containing private runtime data."""
+            raise RuntimeError('private-token /private/account/session')
+
+        for fail_capture in (True, False):
+            with self.subTest(fail_capture=fail_capture):
+                preview = await self.checkpoint()
+                result = await self.gate.confirm(
+                    preview['ticket'], sensitive_failure if fail_capture else self.screenshot,
+                    self.click if fail_capture else sensitive_failure,
+                    x=20, y=25, screen_sha256=preview['screen_sha256'], viewed=True)
+                self.assertEqual(result, {'ok': False, 'error':
+                    'screenshot_unavailable' if fail_capture else 'click_outcome_uncertain'})
+                self.assertEqual((await self.approve(preview))['error'], 'no_pending_preview')
+        self.assertEqual(self.clicks, [])
+
     async def test_bad_png_bounds_and_fail_closed_screenshots(self):
         """Neither malformed images nor failed backend captures create tickets."""
         for x, y in ((-1, 0), (80, 0), (0, 60), (True, 0), (0, False)):

@@ -178,8 +178,10 @@ class ClickGate:
                 return {"ok": False, "error": "backend_unavailable"}
             try:
                 picture, digest = self._image(await screenshot_callable())
-            except Exception as exc:
-                return {"ok": False, "error": "screenshot_unavailable", "detail": str(exc)}
+            except Exception:
+                # Backend exceptions may contain private paths, credentials or
+                # screen data. Preserve the fixed outcome without echoing them.
+                return {"ok": False, "error": "screenshot_unavailable"}
             # Capturing/decoding can itself span the deadline. Recheck after
             # that await so an old checkpoint never authorizes a delayed click.
             if time.monotonic() >= expires:
@@ -189,8 +191,10 @@ class ClickGate:
             try:
                 # No optimistic success: failures may still have clicked, and replay is forbidden.
                 receipt = await click_callable(x, y)
-            except Exception as exc:
-                return {"ok": False, "error": "click_outcome_uncertain", "detail": str(exc)}
+            except Exception:
+                # Retain uncertainty and the consumed ticket, never exception
+                # contents or permission to retry the potentially completed click.
+                return {"ok": False, "error": "click_outcome_uncertain"}
             if not isinstance(receipt, dict) or receipt.get("ok") is not True:
                 return {"ok": False, "error": "click_outcome_uncertain", "receipt": receipt}
             return {"ok": True, "x": x, "y": y, "receipt": receipt}
