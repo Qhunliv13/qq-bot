@@ -1,5 +1,38 @@
 # Local isolated QQ runtime experiment
 
+## Current measured milestones (2026-10-29)
+
+Later experiments below supersede earlier **unknown** native-host conclusions; older
+failure records remain historical evidence, not the latest capability assessment.
+
+- `tools/qq_application_observation.py` genuinely launches the default pristine app.
+  Private X window PID properties correlate with the actual QQ executable/process;
+  this is not authentication or login readiness. See
+  `qq-application-observation-evidence.json`.
+- `tools/qq_ephemeral_host_entry.py` genuinely loads `wrapper.node` **inside the QQ
+  executable**, with Electron 40.0.0, Node 24.11.1, module ABI 143 and N-API 10.
+  Engine, LoginService, WrapperSession and StartupSession candidate exports exist.
+  Its only modifications are read-only file overlays inside the detached private
+  mount namespace; all five original software hashes match before and after.
+  See `qq-ephemeral-host-entry-evidence.json`.
+- `tools/qq_native_init_control.py` genuinely obtains engine/login services, initializes
+  their explicit same-build configurations and calls listener registration. The actual
+  registration return is **undefined**, contradicting the consumer number annotation.
+  Explicit process-lifetime policy accepts this without inventing an unregister token,
+  asserting callback registration proof or claiming native listener removal. Actual
+  process exit retires the owner. See `qq-native-init-evidence.json`.
+- Independently authored `qq_transport/native_login.js`, `native_session.js` and
+  `native_messages.js` implement owner-driven lifecycles with offline test coverage.
+  Native session configuration, real account authentication, session-ready callbacks,
+  message send/receive, full feature parity and production cutover are **not verified**.
+
+An inspector attempt did not discover an endpoint; it is not the successful loading
+path and does not identify why this build did not expose the requested endpoint.
+The corrected normal Electron main path uses an existing **relative** launcher file:
+Electron joins the app directory with `package.main`. The initial absolute temporary
+path was not read, while the corrected relative launcher was read and produced the
+nonce-bound real host record. No sandbox/fuse patch or security bypass was involved.
+
 This is not a working QQ transport or proof of personal-account feature parity.
 Production NapCat, its persistent volumes, QQ login state and AstrBot remain unchanged.
 

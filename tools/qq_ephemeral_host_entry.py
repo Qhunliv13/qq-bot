@@ -47,7 +47,7 @@ VERSION_KEYS = {"node", "electron", "modules", "napi", "chrome", "v8", "uv"}
 
 def validate_mode(control_mode):
     """Only two internally authored controls exist; reject script/path injection."""
-    if control_mode not in ("wrapper", "initialize"):
+    if control_mode not in ("wrapper", "initialize", "connect_offline"):
         raise runtime.ProbeError("control_mode_invalid")
     return control_mode
 
@@ -61,7 +61,7 @@ def fixed_sources(control_mode):
     module_directory = directory.parent / "qq_transport"
     if not module_directory.is_dir():
         module_directory = directory
-    return {MAIN: directory / "qq_native_init_entry.js",
+    return {MAIN: directory / ("qq_native_connect_entry.js" if control_mode == "connect_offline" else "qq_native_init_entry.js"),
             "/tmp/native_login.js": module_directory / "native_login.js",
             "/tmp/native_metadata.js": module_directory / "native_metadata.js"}
 
@@ -76,9 +76,11 @@ def base_report(control_mode="wrapper"):
                   full_sendrecv_verified=False, host_record=None,
                   invocation={"argv": ["/opt/QQ/qq"], "electron_run_as_node_present": False},
                   bounds_seconds={"qq": QQ_TIMEOUT, "outer": OUTER_TIMEOUT})
-    if control_mode == "initialize":
+    if control_mode in ("initialize", "connect_offline"):
         report.update(mode="ephemeral_native_init", native_initialize_verified=False,
                       native_listener_registered=False, native_listener_disposed=False)
+    if control_mode == "connect_offline":
+        report.update(mode="ephemeral_native_connect_offline", native_connect_observation_verified=False)
     return report
 
 
@@ -162,6 +164,42 @@ def parse_record(raw, nonce):
     return record
 
 
+def validate_login_snapshot(snapshot, *, context="initialize", require_diagnostics=False):
+    """Validate one shared safe projection, with context-specific lifecycle limits."""
+    keys = {"phase", "disposed", "qr_available", "authenticated", "failure_code", "initialization_step", "failed_stage", "registration_call_returned", "listener_id_type", "listener_handle_available", "listener_registration_verified", "native_listener_removed", "cleanup_required"}
+    diagnostics = {"connect_call_returned", "connect_result_type", "native_callback_counts", "listener_lifetime"}
+    callbacks = {"onLoginConnected", "onLoginConnecting", "onLoginDisConnected", "onQRCodeGetPicture", "onQRCodeLoginSucceed", "onLoginFailed", "onQRCodeSessionFailed"}
+    if not isinstance(snapshot, dict) or set(snapshot) not in (keys, keys | diagnostics) or (require_diagnostics and not diagnostics.issubset(snapshot)):
+        raise runtime.ProbeError("login_snapshot_invalid")
+    if (any(type(snapshot[key]) is not bool for key in ("disposed", "qr_available", "authenticated", "registration_call_returned", "listener_handle_available", "listener_registration_verified", "native_listener_removed"))
+            or snapshot["qr_available"] or snapshot["authenticated"]
+            or snapshot["cleanup_required"] not in ("none", "remove_listener", "process_exit")
+            or snapshot["listener_id_type"] not in ("not_attempted", "threw", "number", "string", "undefined", "other")
+            or snapshot["registration_call_returned"] != (snapshot["listener_id_type"] in ("number", "string", "undefined", "other"))
+            or (snapshot["listener_handle_available"] and snapshot["listener_id_type"] != "number")
+            or (snapshot["listener_id_type"] == "undefined" and (snapshot["listener_handle_available"] or snapshot["native_listener_removed"] or snapshot["cleanup_required"] != "process_exit"))):
+        raise runtime.ProbeError("login_snapshot_invalid")
+    if diagnostics.issubset(snapshot):
+        counts = snapshot["native_callback_counts"]
+        if (snapshot["listener_lifetime"] not in ("token", "process")
+                or type(snapshot["connect_call_returned"]) is not bool
+                or snapshot["connect_result_type"] not in ("not_attempted", "threw", "boolean", "undefined", "other")
+                or snapshot["connect_call_returned"] != (snapshot["connect_result_type"] in ("boolean", "undefined", "other"))
+                or not isinstance(counts, dict) or set(counts) != callbacks
+                or any(type(value) is not int or not 0 <= value <= 2147483647 for value in counts.values())
+                or snapshot["listener_registration_verified"] != any(counts.values())
+                or (context == "initialize" and (snapshot["connect_result_type"] != "not_attempted" or any(counts.values())))):
+            raise runtime.ProbeError("login_snapshot_invalid")
+    if context in ("connect", "disposed"):
+        if (snapshot["initialization_step"] != "initialized" or snapshot["failed_stage"] is not None
+                or snapshot["phase"] not in ("connecting", "connected", "disconnected", "failed")
+                or snapshot["disposed"] != (context == "disposed")
+                or (context == "disposed" and snapshot["phase"] != "disconnected")
+                or snapshot["failure_code"] not in (None, "CONNECT_FAILED", "CONNECT_REJECTED", "LOGIN_FAILED", "QR_SESSION_FAILED", "INVALID_EVENT", "REMOVE_LISTENER_FAILED")):
+            raise runtime.ProbeError("login_snapshot_invalid")
+    return snapshot
+
+
 def parse_initialize_record(raw, nonce):
     """Project only fixed stage codes and actual safe controller status, never raw."""
     prefix = ("QQ_NATIVE_INIT_" + nonce + ":").encode("ascii")
@@ -186,8 +224,8 @@ def parse_initialize_record(raw, nonce):
     snapshot = init["snapshot"]
     steps = {"factory_engine", "factory_login", "validate_methods", "engine_config", "login_config", "register_listener", "initialized"}
     if snapshot is not None:
+        validate_login_snapshot(snapshot)
         if (not isinstance(snapshot, dict)
-                or set(snapshot) != {"phase", "disposed", "qr_available", "authenticated", "failure_code", "initialization_step", "failed_stage", "registration_call_returned", "listener_id_type", "listener_handle_available", "listener_registration_verified", "native_listener_removed", "cleanup_required"}
                 or any(type(snapshot[key]) is not bool for key in ("listener_handle_available", "listener_registration_verified", "native_listener_removed"))
                 or snapshot["cleanup_required"] not in ("none", "remove_listener", "process_exit")
                 or type(snapshot["registration_call_returned"]) is not bool
@@ -352,6 +390,9 @@ def observe_host(command, env, output, errors, timeout, report, *, source, contr
     report.update({key: value for key, value in base_report(control_mode).items() if key not in report})
     report["mode"] = base_report(control_mode)["mode"]
     stage_control(source, control, mount, parent_ids, report, auxiliary=auxiliary)
+    if control_mode == "connect_offline":
+        import qq_native_connect_control
+        qq_native_connect_control.verify_offline_network(report)
     child_env = dict(env, QQ_WRAPPER_HOST_NONCE=nonce)
     start = time.monotonic()
     watch_fd, watches = start_read_watches()
@@ -375,13 +416,27 @@ def observe_host(command, env, output, errors, timeout, report, *, source, contr
     report.update(experiment_completed=True, exit_code=process.returncode,
                   elapsed_seconds=round(time.monotonic() - start, 2),
                   private_output_categories=diagnostic_categories(output, errors))
+    if control_mode == "connect_offline":
+        # Retirement is an actual process observation even if native code never returns.
+        report["process_retired"] = process.returncode is not None
+        try:
+            with Path("/tmp/qq-native-connect-progress.json").open("rb") as stream:
+                report["connect_progress"] = qq_native_connect_control.parse_progress(stream.read(LIMIT + 1), nonce)
+        except (OSError, ValueError, UnicodeError):
+            report["connect_progress"] = None
     # Missing control output is a refusal/nonready result, not permission to patch.
     try:
         with Path(RESULT).open("rb") as stream:
             parser = parse_record if control_mode == "wrapper" else parse_initialize_record
+            if control_mode == "connect_offline":
+                import qq_native_connect_control
+                parser = qq_native_connect_control.parse_record
             report["host_record"] = parser(stream.read(LIMIT + 1), nonce)
     except (OSError, ValueError, UnicodeError):
         report.update(status="failed", errors=["custom_main_no_valid_record"])
+        return
+    if control_mode == "connect_offline":
+        qq_native_connect_control.project_report(report, report["host_record"], process.returncode)
         return
     if control_mode == "initialize":
         observed = report["host_record"]
@@ -410,12 +465,15 @@ def child_main(args):
     """Capture fixed bytes before pivot, then use the unmodified shared runtime."""
     root = runtime.validate_root(args.qq_root)
     control_mode = validate_mode(getattr(args, "control_mode", "wrapper"))
+    if control_mode == "connect_offline":
+        # Cache fixed validator before pivot detaches Python's staged module path.
+        __import__("qq_native_connect_control")
     sources = fixed_sources(control_mode)
     source = sources.pop(MAIN).read_bytes()
     auxiliary = {target: path.read_bytes() for target, path in sources.items()}
     pristine = (root / "resources/app/package.json").read_bytes()
     control = validate_manifest(pristine)
-    if control_mode == "initialize":
+    if control_mode in ("initialize", "connect_offline"):
         auxiliary["/tmp/qq-native-pristine-package.json"] = pristine
     parent_ids = json.loads(args.parent_ns)
     def observer(command, env, output, errors, timeout, report):
@@ -457,7 +515,8 @@ def observe(qq_root, *, execute=False, control_mode="wrapper"):
             stage = Path(temporary)
             jail = stage / "root"
             jail.mkdir()
-            for source in (Path(__file__).resolve(), Path(runtime.__file__).resolve(), *sources.values()):
+            helpers = (Path(__file__).with_name("qq_native_connect_control.py"),) if control_mode == "connect_offline" else ()
+            for source in (Path(__file__).resolve(), Path(runtime.__file__).resolve(), *sources.values(), *helpers):
                 shutil.copyfile(source, stage / source.name)
             command = [tools["unshare"], "--ipc", "--mount", "--net", "--pid", "--fork", "--kill-child",
                        "--mount-proc", "/usr/bin/python3", str(stage / Path(__file__).name), "--child",
@@ -509,7 +568,7 @@ def main(argv=None):
     parser.add_argument("--qq-root", required=True)
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--child", action="store_true", help=argparse.SUPPRESS)
-    parser.add_argument("--control-mode", choices=("wrapper", "initialize"), default="wrapper", help=argparse.SUPPRESS)
+    parser.add_argument("--control-mode", choices=("wrapper", "initialize", "connect_offline"), default="wrapper", help=argparse.SUPPRESS)
     for name in ("jail", "nonce", "parent-ns", "mount-tool", "pivot-tool", "umount-tool"):
         parser.add_argument("--" + name, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
