@@ -5,6 +5,7 @@ import itertools
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import time
 
@@ -207,8 +208,35 @@ def observe_wait(process, env, timeout=30, report=None, *, window_sampler=None):
         MAIN_PID, MAIN_START, WINDOW_SAMPLER = None, None, None
 
 
-def capture_categories(output, errors, report):
-    """Before cleanup classify bounded stderr only and fstat actual capture sizes."""
+def detailed_categories(bounded):
+    """Project fixed tokens per bounded stderr line; absence is not proof of no error."""
+    categories = dict.fromkeys(("system_bus_socket_missing", "private_session_bus_connect_failure",
+                               "dbus_scope_unknown", "resource_emfile", "resource_efbig",
+                               "resource_enospc", "profile_create_or_open_failed", "sandbox_fatal"), False)
+    for line in bounded.lower().splitlines():
+        # Path boundaries exclude lookalikes/suffixed paths; never join separate lines.
+        system = bool(re.search(rb"(?<![a-z0-9_./-])/run/dbus/system_bus_socket(?![a-z0-9_./-])", line)
+                      and re.search(rb"\b(?:enoent|no such file or directory)\b", line))
+        private = bool(re.search(rb"(?<![a-z0-9_./-])/tmp/runtime/bus(?![a-z0-9_./-])", line)
+                       and re.search(rb"\b(?:failed to connect|connection refused|connection failed|could not connect|unable to connect|enoent|no such file or directory)\b", line))
+        categories["system_bus_socket_missing"] |= system
+        categories["private_session_bus_connect_failure"] |= private
+        categories["dbus_scope_unknown"] |= bool(re.search(rb"\b(?:dbus|d-bus)\b", line)
+                                                 and re.search(rb"\b(?:failed|failure|error|unavailable|refused|could not|unable to)\b", line)
+                                                 and not (system or private))
+        for category, tokens in (
+                ("resource_emfile", rb"\b(?:emfile|too many open files)\b"),
+                ("resource_efbig", rb"\b(?:efbig|file too large|file size limit exceeded)\b"),
+                ("resource_enospc", rb"\b(?:enospc|no space left on device)\b"),
+                ("profile_create_or_open_failed", rb"\b(?:failed to create profile|failed to open profile|cannot create profile|cannot open profile)\b"),
+                ("sandbox_fatal", rb"\b(?:no usable sandbox|sandbox initialization failed)\b")):
+            categories[category] |= bool(re.search(tokens, line))
+        categories["sandbox_fatal"] |= bool(re.search(rb"\bfatal\b", line) and re.search(rb"\bsandbox\b", line))
+    return categories
+
+
+def capture_categories(output, errors, report, detailed=False):
+    """Classify existing private handles only; default report remains byte-compatible."""
     output.flush()
     errors.flush()
     errors.seek(0)
@@ -221,6 +249,12 @@ def capture_categories(output, errors, report):
         "stderr_size_bytes": os.fstat(errors.fileno()).st_size,
         "resource_bounds_unchanged": {"file_size_bytes": 16384, "open_files": 128, "cpu_seconds": 30},
     }
+    if detailed:
+        capture = report["stall_capture"]
+        capture["stderr_categories"].update(detailed_categories(bounded))
+        capture.update(stdout_cap_reached=capture["stdout_size_bytes"] >= control.LIMIT,
+                       stderr_cap_reached=capture["stderr_size_bytes"] >= control.LIMIT,
+                       category_false_means_no_error=False, root_cause_proven=False)
 
 
 def observe(qq_root, *, execute=False):
