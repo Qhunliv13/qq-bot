@@ -8,7 +8,17 @@
 python3 tools/bootstrap.py up
 ```
 
-首次交互配置模型，自动创建仓库之外的私有数据目录并构建内嵌 AstrBot 镜像；需要 Linux、Docker Compose v2 和首次构建网络。详见[开箱部署](docs/QUICKSTART.md)和[第三方声明](THIRD_PARTY_NOTICES.md)。这不会迁移或替换现有生产，也不会自动安装 NapCat。本地无 Docker daemon，当前验证覆盖初始化与回归，尚未完成整镜像构建验收。
+首次交互配置模型，自动创建仓库之外的私有数据目录并构建内嵌 AstrBot 镜像；完整 Linux 版本需要 Linux、Docker Compose v2 和首次构建网络。Windows 完整入口使用 WSL2／Docker Desktop，轻量文字入口不需要 Docker；详见下文版本表。详见[开箱部署](docs/QUICKSTART.md)和[第三方声明](THIRD_PARTY_NOTICES.md)。这不会迁移或替换现有生产，也不会自动安装 NapCat。本地无 Docker daemon，当前验证覆盖初始化与回归，尚未完成整镜像构建验收。
+
+## 选择运行版本
+
+| 版本 | 平台与启动 | 包含内容 | 不包含 |
+|---|---|---|---|
+| 完整 Linux | Linux + Docker Compose，`python3 tools/bootstrap.py up` | 内嵌 AstrBot、本地入口、插件能力与独立状态 | 默认不安装或登录 QQ |
+| 完整 Windows | Windows + WSL2 + Docker Desktop，`./tools/windows.ps1 up` | **复用同一** Linux 安装器和完整容器，不另起一套核心 | 不是原生 Windows QQ；需要 WSL 与 Docker |
+| Lite 文字版 | Windows / Linux，`python tools/lite.py --system-file persona.txt --interactive` | 仅 Python 标准库和已有模型 HTTP 适配器，进程内最多保留可配置轮数 | 不提供 QQ、AstrBot、工具、持久记忆、后台任务或网页面板 |
+
+分别参见[Windows 操作说明](docs/WINDOWS.md)与[Lite 操作说明](docs/LITE.md)。这三个入口均不接管现有生产实例；Lite 不是删减生产配置，也不承诺处理无标记的模型内部规划。首次安装需用户自己的模型地址、模型名与凭据；真实 QQ 登录与独立原生 QQ 接入仍未完成。
 
 ## 当前能力与边界
 
