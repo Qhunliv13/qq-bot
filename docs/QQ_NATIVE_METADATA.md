@@ -147,6 +147,22 @@ this resolver does not reproduce that consumer's fallback behavior or host disco
 Production must supply its own explicitly reviewed exact manifest entry; test appids
 and qua strings are intentionally synthetic and never production defaults.
 
+### Actual source divergence for the measured 53644 artifact
+
+The pristine Tencent `resources/app/package.json` (SHA-256
+`e7d8f160704a8704a4f531ef97602ea6fea8338f738f74ee9b10155cb9fc0a85`)
+contains `appid.linux` as the **string** `537391511` and no `qua` field. The pinned
+independent consumer's exact-version table instead supplies the **number**
+`537391664` with `V1_LNX_NQ_3.2.34_53644_GW_B` for x64. These are different
+sources, not interchangeable aliases. The initialize/connect controls explicitly
+used the latter observed consumer entry, and that choice is recorded in their
+fixed sources; native initialization returning does **not** prove server-side
+acceptance or compatibility of those values. Do not silently change/coerce either
+value, construct a missing QUA or claim the Tencent manifest authenticates the
+consumer table. The pure resolver intentionally requires its owner to select and
+review the supplied version entry. See `qq-pristine-package-evidence.json` and
+`qq-native-init-evidence.json` for artifact and measured-control provenance.
+
 ## Verification
 
 ```text
