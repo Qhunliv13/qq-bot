@@ -81,3 +81,38 @@ External evidence basenames under `C:\qhunliv13_web\_inbox\`:
 - `qq_code_cache_xref_20261030.json`, `qq_code_cache_window_20261030.txt`: separate exact literal xref and 384-byte decode.
 
 The original software file was not modified. No runtime filesystem state, exact expanded directory, caller reaction, upstream function name, or SIGTRAP cause is claimed. These remain outside this static result.
+
+## Subsequent upstream-source corroboration
+
+A read-only comparison against Fontconfig tag **2.14.2** found a strong multi-part
+source fingerprint. The tag is a comparison reference, **not a verified version
+of the library embedded in QQ**:
+
+- [fccache.c](https://gitlab.freedesktop.org/fontconfig/fontconfig/-/raw/2.14.2/src/fccache.c),
+  `FcDirCacheWrite`, calls `write(fd, cache, cache->size)`, checks returned length
+  against `cache->size`, prints `perror("write cache")` on mismatch, then closes,
+  unlocks, destroys the atomic-file object, frees the path and returns `FcFalse`.
+- [fcint.h](https://gitlab.freedesktop.org/fontconfig/fontconfig/-/raw/2.14.2/src/fcint.h)
+  defines `FC_CACHE_MAGIC_MMAP` as `0xFC02FC04`. Its cache header starts with
+  `unsigned int magic`, `int version`, `intptr_t size`, matching the observed
+  size-at-offset-eight layout under the x86-64 ABI. Its atomic object puts the
+  `new` pointer at offset eight, matching the inspected accessor.
+- [fcatomic.c](https://gitlab.freedesktop.org/fontconfig/fontconfig/-/raw/2.14.2/src/fcatomic.c)
+  constructs the exact `.NEW`, `.LCK` and `.TMP-XXXXXX` variants and returns
+  `atomic->new` from `FcAtomicNewFile`.
+
+Together these support Fontconfig-cache attribution far more strongly than
+string adjacency or nearest-symbol labels. They do not establish the vendor's
+source revision, actual runtime pathname, file contents, failed write length or
+SIGTRAP trigger. Upstream [fcdir.c](https://gitlab.freedesktop.org/fontconfig/fontconfig/-/raw/2.14.2/src/fcdir.c)
+explicitly ignores cache-write trouble in `FcDirCacheScan`/`FcDirCacheRescan` and
+retains the constructed cache. That is upstream caller behavior; the vendor's
+caller has not been traced.
+
+[write(2)](https://man7.org/linux/man-pages/man2/write.2.html) lists a file-size
+resource limit among possible short-write causes. This makes the experimental
+16 KiB regular-file cap relevant to a hypothesis, not proof of the actual failure.
+No universal cache-size minimum was established and no resource limit was changed.
+[Fontconfig's documentation](https://fontconfig.pages.freedesktop.org/fontconfig/fontconfig-user.html)
+describes `FONTCONFIG_USE_MMAP` as controlling mmap access, not disabling writes;
+it must not be proposed as a demonstrated cache-write fix.

@@ -1,7 +1,7 @@
 """Offline tests for the turn-local VM screenshot click checkpoint."""
 
 import asyncio
-import importlib.util
+import importlib
 from pathlib import Path
 import tempfile
 import unittest
@@ -9,10 +9,7 @@ import unittest
 from PIL import Image
 
 
-_MODULE_PATH = Path(__file__).resolve().parents[1] / "plugin" / "vm_click_gate.py"
-_SPEC = importlib.util.spec_from_file_location("vm_click_gate_test_subject", _MODULE_PATH)
-gate_module = importlib.util.module_from_spec(_SPEC)
-_SPEC.loader.exec_module(gate_module)
+gate_module = importlib.import_module("plugin.vm_click_gate")
 ClickGate = gate_module.ClickGate
 
 

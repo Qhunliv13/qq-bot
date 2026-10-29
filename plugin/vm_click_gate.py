@@ -1,4 +1,4 @@
-"""Turn-local, fail-closed screenshot checkpoint for VM mouse clicks.
+"""Turn-local, fail-closed shared screenshot checkpoint for VM clicks and paths.
 
 Only the caller can assert that a model actually saw the returned preview image.
 A click ticket is not user authorization, and pixel comparison cannot prevent a
@@ -18,6 +18,8 @@ import uuid
 
 from PIL import Image, ImageDraw, UnidentifiedImageError
 
+from .vm_pointer_runtime import canonical_pointer_action
+
 # Limit bytes before decoding and pixels before rendering to bound untrusted VM PNGs.
 MAX_SCREEN_BYTES = 16 * 1024 * 1024
 MAX_SCREEN_PIXELS = 16 * 1024 * 1024
@@ -35,7 +37,7 @@ def _same_text(actual, expected):
 
 
 class ClickGate:
-    """Hold exactly one opaque click checkpoint within one plugin model turn."""
+    """Hold exactly one kind-bound click or path checkpoint in one plugin model turn."""
 
     def __init__(self, images_root, ttl_seconds=DEFAULT_TTL_SECONDS):
         """Bind a gate to a trusted images directory, never a shared process-global ticket."""
@@ -101,46 +103,107 @@ class ClickGate:
         ).hexdigest()
         return picture, digest
 
+    @staticmethod
+    def _canonical(kind, action):
+        """Use the runtime's sole path schema, retaining exact legacy click integers."""
+        if kind == "path":
+            return canonical_pointer_action(action)
+        x, y = action
+        if type(x) is not int or type(y) is not int:
+            raise ValueError("invalid_preview_arguments")
+        return (x, y)
+
+    @staticmethod
+    def _fits(kind, action, picture):
+        """Bind path coordinates to exactly the captured pixel space, never scale them."""
+        if kind == "path":
+            return (action.width, action.height) == picture.size
+        x, y = action
+        return 0 <= x < picture.width and 0 <= y < picture.height
+
+    @staticmethod
+    def _render(picture, kind, action, label):
+        """Paint a copy only; full path geometry and ordered times never authorize input."""
+        marker = picture.copy()
+        draw = ImageDraw.Draw(marker)
+        if kind == "click":
+            x, y = action
+            draw.ellipse((x - 12, y - 12, x + 12, y + 12), outline="red", width=3)
+            draw.line((x - 16, y, x + 16, y), fill="yellow", width=2)
+            draw.line((x, y - 16, x, y + 16), fill="yellow", width=2)
+            draw.text((min(x + 18, picture.width - 1), max(0, y - 12)), label[:80], fill="red")
+        else:
+            draw.line([(p.x, p.y) for p in action.points], fill="red", width=3)
+            for index, point in enumerate(action.points):
+                # Index + scheduled offset gives direction even for crossing/held paths.
+                draw.ellipse((point.x - 2, point.y - 2, point.x + 2, point.y + 2), fill="yellow")
+                draw.text((point.x + 4, max(0, point.y - 12)),
+                          f"{index}:{point.t_ms}ms", fill="red")
+            first, last = action.points[0], action.points[-1]
+            draw.ellipse((first.x - 7, first.y - 7, first.x + 7, first.y + 7), outline="green", width=3)
+            draw.rectangle((last.x - 7, last.y - 7, last.x + 7, last.y + 7), outline="blue", width=3)
+            # Bounded text legend also survives vertex overlap and tiny screenshots
+            # in the structured response; image dimensions never change to fit it.
+            draw.text((0, 0), "START green -> END blue; index:ms", fill="blue")
+        return marker
+
     async def preview(self, x, y, label, screenshot_callable):
-        """Issue a 60-second single-use ticket and immutable visible marker PNG."""
+        """Keep the public click API as an adapter to the shared single-slot gate."""
+        return await self._preview("click", (x, y), label, screenshot_callable)
+
+    async def preview_path(self, action, label, screenshot_callable):
+        """Bind a complete immutable canonical path to the same observed-image gate."""
+        return await self._preview("path", action, label, screenshot_callable)
+
+    async def _preview(self, kind, action, label, screenshot_callable):
+        """Revoke any kind of old ticket, capture/render safely and store one checkpoint."""
         async with self._lock:
-            self._pending = None  # A new checkpoint revokes any earlier one.
+            self._pending = None
             self._observed = False
-            if type(x) is not int or type(y) is not int or not isinstance(label, str):
+            try:
+                canonical = self._canonical(kind, action)
+            except ValueError:
+                return {"ok": False, "error": "invalid_preview_arguments"}
+            if not isinstance(label, str):
                 return {"ok": False, "error": "invalid_preview_arguments"}
             if not callable(screenshot_callable):
                 return {"ok": False, "error": "screenshot_unavailable"}
             try:
                 picture, digest = self._image(await screenshot_callable())
-                if not 0 <= x < picture.width or not 0 <= y < picture.height:
+                if not self._fits(kind, canonical, picture):
                     return {"ok": False, "error": "coordinates_out_of_bounds"}
-                # Paint only a copy; the captured source remains unchanged for verification.
-                marker = picture.copy()
-                draw = ImageDraw.Draw(marker)
-                draw.ellipse((x - 12, y - 12, x + 12, y + 12), outline="red", width=3)
-                draw.line((x - 16, y, x + 16, y), fill="yellow", width=2)
-                draw.line((x, y - 16, x, y + 16), fill="yellow", width=2)
-                draw.text((min(x + 18, picture.width - 1), max(0, y - 12)), label[:80], fill="red")
+                marker = self._render(picture, kind, canonical, label)
                 output = io.BytesIO()
                 marker.save(output, format="PNG")
                 data = output.getvalue()
                 if len(data) > MAX_SCREEN_BYTES:
                     raise ValueError("marker PNG exceeds byte limit")
-                # O_EXCL prevents replacing any file; random basename remains within images_root.
+                # O_EXCL prevents replacing any file; random basename stays in images_root.
                 path = self._root() / f"pre-{uuid.uuid4().hex}.png"
                 flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
                 fd = os.open(path, flags, 0o600)
                 with os.fdopen(fd, "wb") as handle:
                     handle.write(data)
                 ticket = secrets.token_urlsafe(32)
-                self._pending = (ticket, x, y, digest, time.monotonic() + self.ttl_seconds, str(path))
-                return {"ok": True, "ticket": ticket, "x": x, "y": y,
-                        "screen_sha256": digest, "path": str(path),
-                        "width": picture.width, "height": picture.height,
-                        "message": "Inspect the marked screenshot before explicitly confirming."}
+                x, y = canonical if kind == "click" else (None, None)
+                # Preserve legacy tuple positions; kind and immutable action bind both APIs.
+                self._pending = (ticket, x, y, digest, time.monotonic() + self.ttl_seconds,
+                                 str(path), kind, canonical)
+                result = {"ok": True, "ticket": ticket, "screen_sha256": digest,
+                          "path": str(path), "width": picture.width, "height": picture.height,
+                          "message": "Inspect the marked screenshot before explicitly confirming."}
+                if kind == "click":
+                    result.update(x=x, y=y)
+                else:
+                    # This detached wire copy is descriptive, never the stored authority.
+                    result["action"] = dict(version=canonical.version, button=canonical.button,
+                        width=canonical.width, height=canonical.height,
+                        points=[dict(x=p.x, y=p.y, t_ms=p.t_ms) for p in canonical.points])
+                    result["legend"] = [f"{i}: ({p.x},{p.y}) at {p.t_ms}ms"
+                                        for i, p in enumerate(canonical.points)]
+                return result
             except Exception:
-                # Storage failures, untrusted paths and corrupt pixels are
-                # implementation diagnostics, not paths to disclose in a model turn.
+                # Untrusted paths, corrupt pixels and storage diagnostics stay private.
                 return {"ok": False, "error": "preview_unavailable"}
 
     @property
@@ -163,7 +226,19 @@ class ClickGate:
 
     async def confirm(self, ticket, screenshot_callable, click_callable, *, x, y,
                       screen_sha256, viewed):
-        """Consume a matching visible checkpoint before any potentially uncertain click."""
+        """Keep legacy click arguments and receipts on the common confirmation path."""
+        return await self._confirm("click", ticket, screenshot_callable, click_callable,
+                                   (x, y), screen_sha256, viewed)
+
+    async def confirm_path(self, ticket, screenshot_callable, path_callable, *, action,
+                           screen_sha256, viewed):
+        """Execute only the stored immutable path after exact, observed confirmation."""
+        return await self._confirm("path", ticket, screenshot_callable, path_callable,
+                                   action, screen_sha256, viewed)
+
+    async def _confirm(self, kind, ticket, screenshot_callable, execute_callable,
+                       action, screen_sha256, viewed):
+        """Consume/recheck once under the same lock for clicks and full pointer paths."""
         async with self._lock:
             pending = self._pending
             # Consume even on failure: a rejected or ambiguous attempt needs a fresh preview.
@@ -172,10 +247,13 @@ class ClickGate:
             self._observed = False
             if pending is None:
                 return {"ok": False, "error": "no_pending_preview"}
-            expected_ticket, expected_x, expected_y, expected_digest, expires, _path = pending
-            if (not isinstance(ticket, str) or not _same_text(ticket, expected_ticket)
-                    or type(x) is not int or type(y) is not int
-                    or (x, y) != (expected_x, expected_y)
+            expected_ticket, _x, _y, expected_digest, expires, _path, expected_kind, stored = pending
+            try:
+                canonical = self._canonical(kind, action)
+            except ValueError:
+                return {"ok": False, "error": "preview_confirmation_mismatch"}
+            if (kind != expected_kind or canonical != stored
+                    or not isinstance(ticket, str) or not _same_text(ticket, expected_ticket)
                     or not isinstance(screen_sha256, str)
                     or not _same_text(screen_sha256, expected_digest)
                     or viewed is not True):
@@ -184,7 +262,7 @@ class ClickGate:
                 return {"ok": False, "error": "preview_image_not_seen_by_model"}
             if time.monotonic() >= expires:
                 return {"ok": False, "error": "preview_expired"}
-            if not callable(screenshot_callable) or not callable(click_callable):
+            if not callable(screenshot_callable) or not callable(execute_callable):
                 return {"ok": False, "error": "backend_unavailable"}
             try:
                 picture, digest = self._image(await screenshot_callable())
@@ -196,15 +274,20 @@ class ClickGate:
             # that await so an old checkpoint never authorizes a delayed click.
             if time.monotonic() >= expires:
                 return {"ok": False, "error": "preview_expired"}
-            if digest != expected_digest or not 0 <= x < picture.width or not 0 <= y < picture.height:
+            if digest != expected_digest or not self._fits(kind, stored, picture):
                 return {"ok": False, "error": "screen_changed"}
+            uncertain = f"{kind}_outcome_uncertain"
             try:
-                # No optimistic success: failures may still have clicked, and replay is forbidden.
-                receipt = await click_callable(x, y)
+                # Pass the stored record, never mutable confirmation arguments.
+                receipt = await execute_callable(*stored) if kind == "click" else await execute_callable(stored)
             except Exception:
-                # Retain uncertainty and the consumed ticket, never exception
-                # contents or permission to retry the potentially completed click.
-                return {"ok": False, "error": "click_outcome_uncertain"}
+                # Uncertain execution consumes the ticket and never exposes exception text.
+                return {"ok": False, "error": uncertain}
             if not isinstance(receipt, dict) or receipt.get("ok") is not True:
-                return {"ok": False, "error": "click_outcome_uncertain", "receipt": receipt}
-            return {"ok": True, "x": x, "y": y, "receipt": receipt}
+                result = {"ok": False, "error": uncertain}
+                if kind == "click":
+                    result["receipt"] = receipt  # Preserve the public legacy click envelope.
+                return result
+            if kind == "click":
+                return {"ok": True, "x": stored[0], "y": stored[1], "receipt": receipt}
+            return {"ok": True, "receipt": receipt}

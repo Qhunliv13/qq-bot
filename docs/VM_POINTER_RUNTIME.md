@@ -50,7 +50,8 @@ owner must bind the complete immutable action to the marked preview, verify that
 the model received the image in an earlier request, consume an exact single-use
 ticket, check freshness and screenshot pixels, then hold its GUI lock through
 execution. The existing [click gate](../plugin/vm_click_gate.py) was not weakened
-or replaced. Generalized path-preview/ticket integration is still pending.
+or replaced. The shared path-preview/ticket boundary is now implemented as described
+below; production adapter and deployment integration remain pending.
 
 The actual VM adapter, command timeout implementation, GUI capability separation,
 service deployment and real-desktop acceptance are not implemented or verified
@@ -65,3 +66,54 @@ capabilities. They check immutable copying, exact argv, strict rejection before
 side effects, timeout propagation, scheduling, release on failed press/movement,
 uncertain release, no retry and private-error redaction. These are offline
 component tests, not end-to-end desktop or permission-isolation acceptance.
+
+## Shared gate boundary (offline, not exposed)
+
+`ClickGate.preview_path(action, label, screenshot_callable)` and
+`confirm_path(ticket, screenshot_callable, path_callable, *, action,
+screen_sha256, viewed)` use the same preview/render/store and confirmation,
+consumption, image validation, observation flag, TTL and lock as the existing
+click API. There is exactly one pending slot: every new preview, including an
+invalid one, revokes any earlier click or path ticket. Wrong-kind confirmation
+also consumes the ticket. Existing click arguments, receipts and errors remain
+compatible.
+
+The runtime's `canonical_pointer_action` is the only path schema validator. Its
+immutable action and point tuples are copied before screenshot awaits. Dimensions
+must exactly equal decoded screenshot dimensions. Confirmation must canonicalize
+to the complete stored record, with exact integers (not booleans or floats), the
+same ticket and pixel digest, and `viewed=True`; the existing `mark_observed(path)`
+must already have recorded model image delivery. Neither label text nor merely
+returning an image path constitutes observation or authorization.
+
+The preview preserves screenshot dimensions and paints the complete polyline,
+numbered point timestamps, green start and blue end markers. Numbered time order
+indicates direction. A bounded, complete ordered legend and detached structured
+action accompany the PNG, since point text can overlap or clip on small images
+or dense paths. Mutating that response cannot change the stored action. The
+original screenshot is never painted. Timing denotes scheduled offsets after
+button-down, not measured physical motion.
+
+After consuming and validating, the gate captures fresh pixels and rechecks TTL
+**after** capture, then passes only the stored immutable record to the trusted
+path callback while retaining its lock. Callback exceptions/failed receipts
+return `path_outcome_uncertain`, without raw failure details or replay permission.
+A test-only trusted callback converts the record to a wire dict and calls the
+actual `execute_pointer_path`, which revalidates through the same schema. No
+second execution implementation or production adapter was introduced.
+
+[Shared gate tests](../tests/test_vm_pointer_gate.py) exercise the full gate to
+actual primitive with a fake command runner: positive exact argv, immutable
+binding, mutations during capture, altered path/times/button/types, dimension
+mismatch, missing observation, expiry during capture, changed pixels, replay,
+concurrency, mixed kinds and uncertain callbacks. These tests launch no commands
+and confer no production capability.
+
+No HTTP/model route, tool catalog entry, startup hook or automated runtime adapter
+is enabled. Controlled deployment still requires an actual VM baseline, trusted
+command timeout enforcement and one exclusive GUI owner across **all** input
+channels. The gate lock is turn-local, not a process-wide desktop lock. TTL is
+checked at execution admission, not continuously during the up-to-10-second path.
+Physical screen changes after the final capture and OS scheduling remain races;
+this boundary does not claim physical atomicity, user consent, or complete
+mediation of raw execution/browser evaluation.
