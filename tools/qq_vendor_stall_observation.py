@@ -21,6 +21,9 @@ except ModuleNotFoundError as exc:
 # Fixed budgets match the authorized common runner; never relax child limits.
 MAX_SAMPLES = 30
 MAX_THREADS = 64
+# Inspect at most 256 numeric descriptor entries plus one truncation sentinel.
+MAX_FD = 256
+DETAILED_RESOURCES = False
 MAIN_PID = None
 MAIN_START = None
 WINDOW_SAMPLER = None
@@ -80,6 +83,62 @@ def numeric_limits(root):
     return result
 
 
+def fd_resources(root):
+    """Count bounded numeric names only; never follow links or read descriptor targets."""
+    result = {"visibility": "unavailable", "count": None, "maxfd": None, "truncated": False}
+    try:
+        # scandir streams entries (unlike listdir); the extra entry only detects truncation.
+        with os.scandir(root / "fd") as entries:
+            names = [entry.name for entry in itertools.islice(entries, MAX_FD + 1)]
+        numbers = [int(name) for name in names[:MAX_FD] if name.isascii() and name.isdigit()]
+        result.update(visibility="readable", count=len(numbers), maxfd=max(numbers, default=None),
+                      truncated=len(names) > MAX_FD)
+    except PermissionError:
+        # A denied directory is unknown, never a measured zero descriptors.
+        result["visibility"] = "denied"
+    except OSError:
+        pass
+    return result
+
+
+def resource_threads(root):
+    """Aggregate visibility without IDs/symbols, retaining read failures despite stat races."""
+    threads = []
+    counts = dict.fromkeys(("sampled", "wchan_zero", "wchan_empty", "wchan_read_denied",
+                            "wchan_unavailable", "wchan_nonzero", "stat_unavailable"), 0)
+    try:
+        for entry in itertools.islice((root / "task").iterdir(), MAX_THREADS):
+            if not entry.name.isdigit():
+                continue
+            counts["sampled"] += 1
+            category = "unknown"
+            try:
+                raw = bounded_text(entry / "wchan", 128)
+                value = raw.strip()
+                # Per-thread booleans are immediately aggregated, never persisted with TIDs.
+                zero, empty = value == "0", value == ""
+                counts["wchan_zero"] += zero
+                counts["wchan_empty"] += empty
+                counts["wchan_nonzero"] += not (zero or empty)
+                category = coarse_wchan(raw)
+            except PermissionError:
+                counts["wchan_read_denied"] += 1
+            except (OSError, ValueError):
+                counts["wchan_unavailable"] += 1
+            try:
+                stat = parse_stat(bounded_text(entry / "stat"))
+                again = parse_stat(bounded_text(entry / "stat"))
+                if again["start_ticks"] != stat["start_ticks"]:
+                    counts["stat_unavailable"] += 1
+                    continue
+                threads.append({"state": stat["state"], "wait_category": category})
+            except (OSError, ValueError, IndexError):
+                counts["stat_unavailable"] += 1
+    except OSError:
+        return threads, counts, False
+    return threads, counts, True
+
+
 def trusted_sample():
     """Run via the existing bounded UID65534 sampler, restricted to the main QQ PID."""
     result = {"main": None, "windows": None, "identity_verified": False}
@@ -89,20 +148,33 @@ def trusted_sample():
             or (MAIN_START is not None and before["start_ticks"] != MAIN_START)):
         return result
     root = Path("/proc") / str(MAIN_PID)
-    main = parse_stat(bounded_text(root / "stat"))
+    try:
+        raw_stat = bounded_text(root / "stat")
+        main = parse_stat(raw_stat)
+    except (OSError, ValueError, IndexError):
+        return result
     threads = []
-    # Only the first fixed 64 directory entries are inspected, not an unbounded list.
-    for entry in itertools.islice((root / "task").iterdir(), MAX_THREADS):
-        if not entry.name.isdigit():
-            continue
+    if DETAILED_RESOURCES:
+        threads, visibility, task_readable = resource_threads(root)
+        # tail starts at Linux stat field 3: flags field 9 is tail[6], not tail[9].
         try:
-            stat = parse_stat(bounded_text(entry / "stat"))
-            category = coarse_wchan(bounded_text(entry / "wchan", 128))
-            again = parse_stat(bounded_text(entry / "stat"))
-            if again["start_ticks"] == stat["start_ticks"]:
-                threads.append({"state": stat["state"], "wait_category": category})
-        except (OSError, ValueError, IndexError):
-            continue
+            main["flags"] = int(raw_stat[raw_stat.rfind(")") + 2:].split()[6])
+        except (ValueError, IndexError):
+            main["flags"] = None
+        main.update(fd=fd_resources(root), wchan_visibility=visibility, task_directory_readable=task_readable)
+    else:
+        # Old modes retain their original record schema and read-failure behavior.
+        for entry in itertools.islice((root / "task").iterdir(), MAX_THREADS):
+            if not entry.name.isdigit():
+                continue
+            try:
+                stat = parse_stat(bounded_text(entry / "stat"))
+                category = coarse_wchan(bounded_text(entry / "wchan", 128))
+                again = parse_stat(bounded_text(entry / "stat"))
+                if again["start_ticks"] == stat["start_ticks"]:
+                    threads.append({"state": stat["state"], "wait_category": category})
+            except (OSError, ValueError, IndexError):
+                continue
     main.update(threads=threads, threads_truncated=main["num_threads"] > MAX_THREADS,
                 limits=numeric_limits(root))
     x = None
@@ -159,9 +231,11 @@ def summarize(records, ticks_per_second):
     return result
 
 
-def observe_wait(process, env, timeout=30, report=None, *, window_sampler=None):
+def observe_wait(process, env, timeout=30, report=None, *, window_sampler=None, detailed_resources=False):
     """Observe fixed prepared/vendor waits with <=30 external samples; retain deadline."""
-    global MAIN_PID, MAIN_START, WINDOW_SAMPLER
+    global MAIN_PID, MAIN_START, WINDOW_SAMPLER, DETAILED_RESOURCES
+    if type(detailed_resources) is not bool:
+        raise control.runtime.ProbeError("resource_detail_invalid")
     if window_sampler is not None:
         try:
             from tools import qq_private_window_roles
@@ -174,6 +248,7 @@ def observe_wait(process, env, timeout=30, report=None, *, window_sampler=None):
     if timeout != 30 or report is None:
         raise control.runtime.ProbeError("stall_wait_bounds_invalid")
     MAIN_PID, MAIN_START, WINDOW_SAMPLER = process.pid, None, window_sampler
+    DETAILED_RESOURCES = detailed_resources
     records = []
     start = time.monotonic()
     original = application.sample_identity
@@ -206,6 +281,7 @@ def observe_wait(process, env, timeout=30, report=None, *, window_sampler=None):
         application.sample_identity = original
         report["stall_observation"]["summary"] = summarize(records, os.sysconf("SC_CLK_TCK"))
         MAIN_PID, MAIN_START, WINDOW_SAMPLER = None, None, None
+        DETAILED_RESOURCES = False
 
 
 def detailed_categories(bounded):
