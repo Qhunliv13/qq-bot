@@ -1,0 +1,35 @@
+{
+  "child_sigxfsz_ignored_for_errno_only": true,
+  "observations": [
+    {
+      "child_limit_bytes": 16384,
+      "kind": "tmpfs",
+      "outcome": "efbig",
+      "size": 0
+    },
+    {
+      "child_limit_bytes": 65536,
+      "kind": "tmpfs",
+      "outcome": "resized",
+      "size": 32768
+    },
+    {
+      "child_limit_bytes": 16384,
+      "kind": "memfd",
+      "outcome": "efbig",
+      "size": 0
+    },
+    {
+      "child_limit_bytes": 65536,
+      "kind": "memfd",
+      "outcome": "resized",
+      "size": 32768
+    }
+  ],
+  "parent_limit_unchanged": true,
+  "qq_executed": false,
+  "qq_limits_changed": false,
+  "qq_root_cause_proven": false,
+  "schema_version": 1,
+  "target_bytes": 32768
+}
