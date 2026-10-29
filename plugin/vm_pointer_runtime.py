@@ -59,6 +59,22 @@ def canonical_pointer_action(action):
     return _Action(1, "left", width, height, tuple(copied))
 
 
+def frozen_pointer_action_payload(action):
+    """Convert only this runtime's exact immutable records; callers revalidate schema.
+
+    Namedtuple constructors are public Python capabilities, not validation. The
+    resulting detached wire payload must still pass canonical_pointer_action.
+    """
+    if (type(action) is not _Action or type(action.points) is not tuple
+            or not 2 <= len(action.points) <= MAX_POINTS
+            or any(type(point) is not _Point for point in action.points)):
+        raise ValueError("invalid_pointer_action")
+    return {"version": action.version, "button": action.button,
+            "width": action.width, "height": action.height,
+            "points": [{"x": point.x, "y": point.y, "t_ms": point.t_ms}
+                       for point in action.points]}
+
+
 def _checked_run(runner, argv, timeout_s=COMMAND_TIMEOUT_SECONDS):
     """Require an explicit integer zero; truthy envelopes and bools are not exit codes."""
     result = runner(argv, timeout_s=timeout_s)

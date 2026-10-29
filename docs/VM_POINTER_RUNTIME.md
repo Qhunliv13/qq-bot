@@ -53,9 +53,9 @@ execution. The existing [click gate](../plugin/vm_click_gate.py) was not weakene
 or replaced. The shared path-preview/ticket boundary is now implemented as described
 below; production adapter and deployment integration remain pending.
 
-The actual VM adapter, command timeout implementation, GUI capability separation,
-service deployment and real-desktop acceptance are not implemented or verified
-by this module. Raw execution/browser evaluation remains outside the complete
+An opt-in command adapter and deadline implementation are now supplied below.
+GUI capability separation, service deployment and real-desktop acceptance remain
+unimplemented/unverified. Raw execution/browser evaluation remains outside the complete
 mediation boundary described in [the checkpoint document](VM_CLICK_CHECKPOINT_20261028.md).
 No production route was enabled and no real pointer commands were executed.
 
@@ -100,7 +100,8 @@ path callback while retaining its lock. Callback exceptions/failed receipts
 return `path_outcome_uncertain`, without raw failure details or replay permission.
 A test-only trusted callback converts the record to a wire dict and calls the
 actual `execute_pointer_path`, which revalidates through the same schema. No
-second execution implementation or production adapter was introduced.
+second path execution implementation was introduced; the opt-in transport below
+now provides a host callback without installing it.
 
 [Shared gate tests](../tests/test_vm_pointer_gate.py) exercise the full gate to
 actual primitive with a fake command runner: positive exact argv, immutable
@@ -137,9 +138,69 @@ immutable callback input, missing vision, altered action, changed screen, same
 request batches, replay, unconfigured backend, both cross-kind revocation orders,
 and direct bypass denial. These tests do not execute real pointer commands.
 
-Controlled deployment still requires an actual VM baseline, trusted command
-timeout enforcement and one exclusive GUI owner across **all** input channels. The gate lock is turn-local, not a process-wide desktop lock. TTL is
+Controlled deployment still requires an actual VM baseline, host installation of
+the trusted transport and one exclusive GUI owner across **all** input channels. The gate lock is turn-local, not a process-wide desktop lock. TTL is
 checked at execution admission, not continuously during the up-to-10-second path.
 Physical screen changes after the final capture and OS scheduling remain races;
 this boundary does not claim physical atomicity, user consent, or complete
 mediation of raw execution/browser evaluation.
+
+## Opt-in POSIX command adapter (not installed)
+
+[VmPointerAdapter](../plugin/vm_pointer_adapter.py) takes explicit trusted-host
+`executable_path=Path(...)`, `env={...}` and `cwd=Path(...)` constructor arguments.
+A reviewed host can assign that instance to `_vm_pointer_executor`; this change
+adds no assignment in startup, environment switch, HTTP endpoint, or model field.
+Construction/import does not execute anything. Exact canonical runtime records
+are detached and validated by the existing single schema before execution.
+
+The executable must be an absolute, canonical, regular nonsymlink executable
+file; cwd must be an absolute canonical directory. The host must keep these
+paths and their ancestors administrator-owned and stable (the checks do not
+solve malicious filesystem replacement races). Environment is an explicit
+cloned trusted dictionary, never merged with ambient environment. It can contain
+trusted display/auth configuration; never copy model-provided environment keys.
+The public `runner` is a trusted runtime capability, not a model authorization API.
+Only exact tuple logical `xdotool mousemove X Y`, `mousedown 1`, and `mouseup 1`
+commands are accepted; the executable is replaced with the configured absolute
+path, without PATH lookup. No shell or PIPE is used; all three streams go to
+DEVNULL and no raw command output is returned. Non-POSIX launch is refused before
+Popen, since Windows direct-child kill would not meet group teardown semantics.
+
+Each command starts a new session. A deadline or cancellation kills only its
+managed PID's process group, then waits to reap the direct child before returning.
+No command/action retries occur. Timed blocking waits check cancellation at most
+every 50 ms while running; the scheduled path sleeper wakes on the stop event.
+An exact safety `mouseup 1` remains permitted after cancellation. The runtime
+attempts it once if press was attempted, and sends no later path input. Release
+failure still means uncertainty, not guaranteed physical recovery. This is not
+a sandbox for arbitrary daemonizing executables; the configured binary is trusted.
+Uninterruptible kernel states can delay reap indefinitely: cleanup retains the
+lock rather than silently admitting another action with an unretired process.
+
+An instance's async callable owns one asyncio lock on its owning event loop.
+Concurrent calls fail immediately with `pointer_runtime_busy` instead of queuing
+an action whose screenshot has already been captured. Cancellation signals the
+worker, then shields and drains it even under repeated task cancellation before
+unlocking and propagating CancelledError. This does **not** serialize other
+instances, processes, click channels or raw input. Screenshot validation occurs
+before adapter admission; this lock does not make validation/input atomic. The
+frozen action carries no ticket deadline, and thread-pool scheduling can itself
+delay work after admission. This adapter does not recheck screenshot freshness or
+ticket TTL; a future host must close that gap under its external exclusive GUI
+owner across all channels before claiming safe production activation.
+
+[Mock adapter tests](../tests/test_vm_pointer_adapter.py) exercise transport
+contracts, invalid argv, Windows refusal, kill/reap failures and cancellation with
+held-lock retirement; they launch no process. The explicitly invoked
+[POSIX fixture checks](../tests/pointer_adapter_posix_check.py) use only a temporary
+fixed harmless Python executable, never real xdotool, desktop or production access.
+
+Local verification (2026-10-30): focused mock/runtime tests **66 passed in 0.36s**;
+pyflakes and compileall passed. With explicit parent approval, the POSIX fixture
+ran once under WSL `Ubuntu-TSC` as root: **2 tests passed in 0.435s**, using only
+its temporary fixed executable and empty environment. It verified actual zero
+and nonzero exits, deadline-triggered group kill, and direct-child reap via
+`waitpid` raising `ChildProcessError`. The descendant check accepts absent or
+zombie state (not running); it does **not** claim the adapter reaps grandchildren
+or proves zero zombies. No desktop, QQ, or production operation was performed.
