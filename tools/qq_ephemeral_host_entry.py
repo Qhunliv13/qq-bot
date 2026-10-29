@@ -47,7 +47,7 @@ VERSION_KEYS = {"node", "electron", "modules", "napi", "chrome", "v8", "uv"}
 
 def validate_mode(control_mode):
     """Accept only explicit internally authored controls; reject script/path injection."""
-    if control_mode not in ("wrapper", "initialize", "connect_offline", "connect_ready_offline"):
+    if control_mode not in ("wrapper", "initialize", "connect_offline", "connect_ready_offline", "vendor_bootstrap"):
         raise runtime.ProbeError("control_mode_invalid")
     return control_mode
 
@@ -58,6 +58,8 @@ def fixed_sources(control_mode):
     if control_mode == "wrapper":
         return {MAIN: SOURCE}
     directory = Path(__file__).parent
+    if control_mode == "vendor_bootstrap":
+        return {MAIN: directory / "qq_vendor_bootstrap_entry.js"}
     module_directory = directory.parent / "qq_transport"
     if not module_directory.is_dir():
         module_directory = directory
@@ -83,6 +85,8 @@ def base_report(control_mode="wrapper"):
         report.update(mode="ephemeral_native_connect_offline", native_connect_observation_verified=False)
     if control_mode == "connect_ready_offline":
         report.update(mode="ephemeral_native_connect_ready_offline", native_connect_observation_verified=False, electron_ready_verified=False)
+    if control_mode == "vendor_bootstrap":
+        report.update(mode="ephemeral_vendor_bootstrap", electron_ready_verified=False, vendor_bootstrap_observation_complete=False)
     return report
 
 
@@ -397,6 +401,11 @@ def observe_host(command, env, output, errors, timeout, report, *, source, contr
         import qq_native_connect_control
         diagnostic = __import__("qq_native_ready_control") if control_mode == "connect_ready_offline" else qq_native_connect_control
         qq_native_connect_control.verify_offline_network(report)
+    if control_mode == "vendor_bootstrap":
+        import qq_native_connect_control
+        import qq_vendor_bootstrap_control
+        diagnostic = qq_vendor_bootstrap_control
+        qq_native_connect_control.verify_offline_network(report)
     child_env = dict(env, QQ_WRAPPER_HOST_NONCE=nonce)
     start = time.monotonic()
     watch_fd, watches = start_read_watches()
@@ -424,17 +433,20 @@ def observe_host(command, env, output, errors, timeout, report, *, source, contr
         # Retirement is an actual process observation even if native code never returns.
         report["process_retired"] = process.returncode is not None
         try:
-            with Path(diagnostic.PROGRESS_PATH if control_mode == "connect_ready_offline" else "/tmp/qq-native-connect-progress.json").open("rb") as stream:
-                report["connect_progress"] = diagnostic.parse_progress(stream.read(LIMIT + 1), nonce)
+            with Path(diagnostic.PROGRESS_PATH if control_mode in ("connect_ready_offline", "vendor_bootstrap") else "/tmp/qq-native-connect-progress.json").open("rb") as stream:
+                report["vendor_progress" if control_mode == "vendor_bootstrap" else "connect_progress"] = diagnostic.parse_progress(stream.read(LIMIT + 1), nonce)
         except (OSError, ValueError, UnicodeError):
-            report["connect_progress"] = None
-    if control_mode == "connect_ready_offline":
+            report["vendor_progress" if control_mode == "vendor_bootstrap" else "connect_progress"] = None
+    if control_mode in ("connect_ready_offline", "vendor_bootstrap"):
         try:
-            with Path("/tmp/qq-native-ready-fatal.json").open("rb") as stream:
-                report["ready_fatal"] = diagnostic.parse_fatal(stream.read(1025), nonce)
+            with Path(diagnostic.FATAL_PATH if control_mode == "vendor_bootstrap" else "/tmp/qq-native-ready-fatal.json").open("rb") as stream:
+                report["vendor_fatal" if control_mode == "vendor_bootstrap" else "ready_fatal"] = diagnostic.parse_fatal(stream.read(1025), nonce)
         except (OSError, ValueError, UnicodeError):
-            report["ready_fatal"] = None
-    # Missing control output is a refusal/nonready result, not permission to patch.
+            report["vendor_fatal" if control_mode == "vendor_bootstrap" else "ready_fatal"] = None
+    if control_mode == "vendor_bootstrap":
+        # A genuine ready event is proof even if later vendor work blocks final timers.
+        diagnostic.project_progress(report, report.get("vendor_progress"))
+    # Missing final output remains incomplete, not permission to patch or claim login.
     try:
         with Path(RESULT).open("rb") as stream:
             parser = parse_record if control_mode == "wrapper" else parse_initialize_record
@@ -479,6 +491,11 @@ def child_main(args):
         __import__("qq_native_connect_control")
         if control_mode == "connect_ready_offline":
             __import__("qq_native_ready_control")
+    if control_mode == "vendor_bootstrap":
+        # Import before pivot; validate the original outer bytes before overlay.
+        __import__("qq_native_connect_control")
+        vendor = __import__("qq_vendor_bootstrap_control")
+        vendor.validate_vendor_entry((root / "resources/app/app_launcher/index.js").read_bytes())
     sources = fixed_sources(control_mode)
     source = sources.pop(MAIN).read_bytes()
     auxiliary = {target: path.read_bytes() for target, path in sources.items()}
@@ -527,7 +544,8 @@ def observe(qq_root, *, execute=False, control_mode="wrapper"):
             jail = stage / "root"
             jail.mkdir()
             helpers = tuple(Path(__file__).with_name(name) for name in
-                            (("qq_native_connect_control.py", "qq_native_ready_control.py") if control_mode == "connect_ready_offline" else
+                            (("qq_native_connect_control.py", "qq_vendor_bootstrap_control.py") if control_mode == "vendor_bootstrap" else
+                              ("qq_native_connect_control.py", "qq_native_ready_control.py") if control_mode == "connect_ready_offline" else
                              ("qq_native_connect_control.py",) if control_mode == "connect_offline" else ()))
             for source in (Path(__file__).resolve(), Path(runtime.__file__).resolve(), *sources.values(), *helpers):
                 shutil.copyfile(source, stage / source.name)
@@ -581,7 +599,7 @@ def main(argv=None):
     parser.add_argument("--qq-root", required=True)
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--child", action="store_true", help=argparse.SUPPRESS)
-    parser.add_argument("--control-mode", choices=("wrapper", "initialize", "connect_offline", "connect_ready_offline"), default="wrapper", help=argparse.SUPPRESS)
+    parser.add_argument("--control-mode", choices=("wrapper", "initialize", "connect_offline", "connect_ready_offline", "vendor_bootstrap"), default="wrapper", help=argparse.SUPPRESS)
     for name in ("jail", "nonce", "parent-ns", "mount-tool", "pivot-tool", "umount-tool"):
         parser.add_argument("--" + name, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)

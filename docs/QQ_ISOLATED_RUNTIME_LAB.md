@@ -38,6 +38,15 @@ failure records remain historical evidence, not the latest capability assessment
   timeout a demonstrated native-connect block or ABI error; the custom-main host
   lifecycle still needs evidence-based integration with Tencent's normal bootstrap.
 
+- `qq-vendor-bootstrap-evidence.json` then performs the exact 56-byte Tencent outer
+  launcher expression in the original module context. The vendor call returns, the
+  zero-delay timer fires and the actual Electron ready callback reports
+  `app.isReady() === true`. The later five/eight-second timers remain unobserved and
+  the watchdog still retires the process; overall observation is incomplete. This
+  confirms the vendor handoff matters to readiness in the measured host, without
+  explaining the subsequent stall or proving login. Authored code does not initialize
+  the engine again, inspect account state or call a login/session API.
+
 An inspector attempt did not discover an endpoint; it is not the successful loading
 path and does not identify why this build did not expose the requested endpoint.
 The corrected normal Electron main path uses an existing **relative** launcher file:
