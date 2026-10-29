@@ -52,6 +52,37 @@ function createNativeBackend({ wrapper, engineConfig, loginConfig, globalAdapter
   /** No owner operation may enter once logical disposal has begun. */
   function active() { if (disposed) throw new NativeBackendError('DISPOSED'); }
 
+  /** Construction may reenter owner code; never adopt a component born after dispose. */
+  function retain(controller) {
+    if (disposed) {
+      // This dormant component was not visible to dispose's component sweep.
+      controller.dispose();
+      active();
+    }
+    return controller;
+  }
+
+  /** Require the same live native identity, including callbacks not yet forwarded. */
+  function requireIdentity(expected) {
+    active();
+    if (identity !== expected || !login.getSnapshot().authenticated || login.getIdentity() !== expected) {
+      throw new NativeBackendError('INVALID_STATE');
+    }
+  }
+
+  /** Snapshot only lifecycle data; trusted factories must not smuggle executable getters. */
+  function lifecycleOptions(options) {
+    if (!options || typeof options !== 'object' || types.isProxy(options)) throw new NativeBackendError('INVALID_CONFIG');
+    const result = {};
+    for (const key of ['lifecycleMode', 'sessionName', 'legacyStartArgs']) {
+      const descriptor = Object.getOwnPropertyDescriptor(options, key);
+      if (!descriptor) continue; // The session controller validates required fields.
+      if (!Object.hasOwn(descriptor, 'value')) throw new NativeBackendError('INVALID_CONFIG');
+      result[key] = descriptor.value;
+    }
+    return result;
+  }
+
   /** Frozen component projections only; consumer failures cannot leak or recurse. */
   function deliver(callbacks, envelope) {
     for (const callback of [...callbacks]) {
@@ -83,9 +114,11 @@ function createNativeBackend({ wrapper, engineConfig, loginConfig, globalAdapter
     try {
       if (nativeHost) {
         nativeHost.prepare();
-        login = createLoginController({wrapper: nativeHost.getLoginWrapper(), engineConfig, loginConfig, globalAdapter, listenerLifetime});
+        active();
+        login = retain(createLoginController({wrapper: nativeHost.getLoginWrapper(), engineConfig, loginConfig, globalAdapter, listenerLifetime}));
         detach.push(login.subscribe(event => forward('login', event)));
       }
+      active();
       return login.initialize();
     } catch (_) {
       initializeFailure = 'INITIALIZE_FAILED';
@@ -105,23 +138,23 @@ function createNativeBackend({ wrapper, engineConfig, loginConfig, globalAdapter
     const authenticatedIdentity = identity;
     try {
       const sessionConfig = await sessionConfigFactory(authenticatedIdentity);
-      active();
-      if (identity !== authenticatedIdentity || !login.getSnapshot().authenticated) throw new NativeBackendError('INVALID_STATE');
-      const options = await sessionOptionsFactory(authenticatedIdentity);
-      active();
-      if (identity !== authenticatedIdentity || !login.getSnapshot().authenticated) throw new NativeBackendError('INVALID_STATE');
+      requireIdentity(authenticatedIdentity);
+      const suppliedOptions = await sessionOptionsFactory(authenticatedIdentity);
+      requireIdentity(authenticatedIdentity);
+      const options = lifecycleOptions(suppliedOptions);
       // Only lifecycle fields are accepted from options: factories cannot replace
       // the authenticated identity, wrapper, adapters or supplied secret config.
       const preparedHandles = nativeHost ? nativeHost.getPreparedSessionHandles() : null;
       // Never substitute a differently named/mode session after trusted async work.
       if (preparedHandles && (options.lifecycleMode !== preparedHandles.lifecycleMode || options.sessionName !== preparedHandles.sessionName)) throw new NativeBackendError('INVALID_CONFIG');
-      sessionIdentity = authenticatedIdentity;
-      session = createSessionController({ wrapper, sessionConfig, accountIdentity: authenticatedIdentity,
+      requireIdentity(authenticatedIdentity);
+      session = retain(createSessionController({ wrapper, sessionConfig, accountIdentity: authenticatedIdentity,
         dependsAdapter, dispatcherAdapter, lifecycleMode: options.lifecycleMode,
         sessionName: options.sessionName, legacyStartArgs: options.legacyStartArgs,
-        ...(preparedHandles ? {preparedHandles} : {}) });
+        ...(preparedHandles ? {preparedHandles} : {}) }));
+      sessionIdentity = authenticatedIdentity;
       detach.push(session.subscribe(event => forward('session', event)));
-      active();
+      requireIdentity(authenticatedIdentity);
       return session.initialize();
     } catch (_) {
       sessionFailure = disposed ? 'DISPOSED' : 'SESSION_INITIALIZE_FAILED';
@@ -132,7 +165,8 @@ function createNativeBackend({ wrapper, engineConfig, loginConfig, globalAdapter
   /** Synchronous login state closes authorization before queued event forwarding. */
   function authenticatedSession() {
     return !disposed && identity !== null && identity === sessionIdentity
-      && login !== null && login.getSnapshot().authenticated;
+      // Bind every operation to the live identity, not only queued composer state.
+      && login !== null && login.getSnapshot().authenticated && login.getIdentity() === sessionIdentity;
   }
 
   /** Starting is a separate owner action; initialization cannot authorize it. */
@@ -147,10 +181,11 @@ function createNativeBackend({ wrapper, engineConfig, loginConfig, globalAdapter
     active();
     if (!session || !session.isReady() || messagingAttempted || !authenticatedSession()) throw new NativeBackendError('NOT_READY');
     messagingAttempted = true;
-    messages = createMessageController({ session: session.getSessionForMessaging(),
+    messages = retain(createMessageController({ session: session.getSessionForMessaging(),
       accountIdentity: sessionIdentity, isReady: () => authenticatedSession() && session.isReady(),
-      listenerLifetime, ...(sendTimeoutMs === undefined ? {} : { sendTimeoutMs }) });
+      listenerLifetime, ...(sendTimeoutMs === undefined ? {} : { sendTimeoutMs }) }));
     detach.push(messages.subscribe(event => forward('messages', event)));
+    active();
     return messages.initialize();
   }
 

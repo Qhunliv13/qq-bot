@@ -60,6 +60,37 @@ so late resolution cannot initialize native sessions. Drain asynchronous compone
 callbacks before taking a subsequent owner action (e.g. use the authenticated event,
 not a native callback invocation immediately followed by initializeSession).
 
+## Reentrant composition and live identity checks
+
+Construction itself can reenter trusted caller code (for example through config
+inspection). A freshly constructed component is first held locally: if the owner
+was disposed during construction, that dormant component is disposed rather than
+adopted. Initialization rechecks owner liveness after host preparation and before
+entering controller initialization. Disposal cannot resurrect a later login,
+session or messaging controller outside the owner's cleanup sweep.
+
+Session lifecycle options are copied from own data descriptors only. Proxies and
+accessor fields are rejected without invoking their getters. Required fields and
+native lifecycle remain validated by the existing session controller; the
+composition layer supplies no missing values. After each asynchronous factory and
+before session initialization, the exact currently authenticated identity must
+still match the saved identity, including the login controller's synchronous
+identity rather than only an event that may still be queued.
+
+Start, messaging and send authorization also require live login identity equality
+with the session identity. The real login controller already rejects a second
+successful-authentication callback while authenticated, synchronously failing and
+clearing identity. Tests do **not** invent a reachable authenticated-A-to-B swap;
+they verify this real failure blocks subsequent native calls before the queued
+failure event reaches the composer. The extra equality is defensive consistency.
+
+Delayed send acknowledgements after disposal remain uncertain, not retried or
+promoted to delivery. Tests cover reentrant component construction/native calls,
+configuration and options futures resolved after disconnect/dispose, subscriber
+disposal, late callbacks and repeated authentication callbacks. These are offline
+composition tests with the real controllers and substituted native boundaries,
+not a real login or send/receive acceptance result.
+
 ## Events and privacy
 
 `subscribe(fn)` forwards immutable `{source: 'login'|'session'|'messages', event}`

@@ -83,6 +83,125 @@ def run_node(tmp_path, source):
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+@pytest.mark.parametrize("field", ["lifecycleMode", "sessionName", "legacyStartArgs"])
+def test_options_accessors_never_execute_or_resurrect(tmp_path, field):
+    """Reject executable lifecycle options before construction, even from trusted factories."""
+    run_node(tmp_path, "const field = " + repr(field) + ";" + r"""
+const f = fixture(); let reads = 0;
+const options = {lifecycleMode:'startup', sessionName:'explicit-test'};
+Object.defineProperty(options, field, {get() { reads++; b.dispose(); return field === 'lifecycleMode' ? 'startup' : 'explicit-test'; }});
+const b = createNativeBackend({...f.options, sessionOptionsFactory:async () => options});
+await authenticate({...f, backend:b, get loginListener() { return f.loginListener; }});
+await assert.rejects(b.initializeSession(), {code:'SESSION_INITIALIZE_FAILED'});
+assert.equal(reads, 0); assert.equal(b.getSnapshot().session, null);
+assert(!f.calls.includes('startup.create')); assert(!f.calls.includes('session.init'));
+b.dispose(); assert.equal(b.getSnapshot().session, null);
+""")
+
+
+def test_prepared_login_construction_disposal_never_adopts(tmp_path):
+    """A config descriptor trap can dispose during real login construction, not after init."""
+    run_node(tmp_path, r"""
+const f = fixture('process', {sessionName:'explicit-test', lifecycleMode:'startup'});
+let fired = false, b;
+const engineConfig = new Proxy(f.options.engineConfig, {
+  getOwnPropertyDescriptor(target, key) {
+    if (!fired) { fired = true; b.dispose(); }
+    return Reflect.getOwnPropertyDescriptor(target, key);
+  }
+});
+b = createNativeBackend({...f.options, engineConfig});
+assert.throws(b.initialize, {code:'INITIALIZE_FAILED'});
+assert(fired); assert.equal(b.getSnapshot().disposed, true);
+assert.equal(b.getSnapshot().login, null);
+assert.equal(b.getSnapshot().host.phase, 'disposed');
+assert.equal(b.getSnapshot().host.cleanup_required, 'process_exit');
+assert.deepEqual(f.calls, ['engine.get','login.get','startup.create','session.get']);
+b.dispose(); assert.equal(f.calls.length, 4);
+""")
+
+
+@pytest.mark.parametrize("stage", ["config", "options"])
+@pytest.mark.parametrize("invalidation", ["disconnect", "dispose"])
+def test_async_factory_identity_loss_before_continuation(tmp_path, stage, invalidation):
+    """Real disconnect or disposal invalidates pending factory work before event fanout."""
+    run_node(tmp_path, "const stage = " + repr(stage) + "; const invalidation = " + repr(invalidation) + ";" + r"""
+const f = fixture(); let release, entered;
+const waiting = new Promise(resolve => { entered = resolve; });
+const key = stage === 'config' ? 'sessionConfigFactory' : 'sessionOptionsFactory';
+const b = createNativeBackend({...f.options, [key]:account => new Promise(resolve => {
+  release = async () => resolve(await f.options[key](account)); entered();
+})});
+await authenticate({...f, backend:b, get loginListener() { return f.loginListener; }});
+const pending = b.initializeSession(); await waiting;
+if (invalidation === 'dispose') b.dispose(); else f.loginListener.onLoginDisConnected();
+release();
+await assert.rejects(pending, {code:invalidation === 'dispose' ? 'DISPOSED' : 'SESSION_INITIALIZE_FAILED'});
+assert.equal(b.getSnapshot().session, null); assert(!f.calls.includes('session.get'));
+if (stage === 'config') assert(!f.calls.includes('options.factory'));
+b.dispose();
+""")
+
+
+@pytest.mark.parametrize("stage", ["host", "login", "session", "messaging"])
+def test_composed_native_reentrant_disposal_stops_next_call(tmp_path, stage):
+    """Dispose inside a real native boundary, preserving process ownership and no late work."""
+    run_node(tmp_path, "const stage = " + repr(stage) + ";" + r"""
+const f = fixture('token', stage === 'host' ? {sessionName:'explicit-test', lifecycleMode:'startup'} : undefined);
+const b = f.backend;
+if (stage === 'host') {
+  f.options.wrapper.NodeIQQNTWrapperEngine.get = () => {f.calls.push('engine.get'); b.dispose(); return {};};
+  assert.throws(b.initialize, {code:'INITIALIZE_FAILED'});
+  assert.deepEqual(f.calls, ['engine.get']); assert.equal(b.getSnapshot().login, null);
+} else if (stage === 'login') {
+  f.login.initConfig = () => {f.calls.push('login.init'); b.dispose();};
+  assert.throws(b.initialize, {code:'INITIALIZE_FAILED'});
+  assert(!f.calls.includes('login.add'));
+} else {
+  await authenticate(f);
+  if (stage === 'session') {
+    f.options.wrapper.NodeIQQNTStartupSessionWrapper.create = () => {f.calls.push('startup.create'); b.dispose(); return {start(){}};};
+    await assert.rejects(b.initializeSession(), {code:'DISPOSED'});
+    assert(!f.calls.includes('session.get')); assert(!f.calls.includes('session.init'));
+  } else {
+    await b.initializeSession(); b.startSession(); f.sessionListener.onOpentelemetryInit({is_init:true}); await tick();
+    f.msg.addKernelMsgListener = listener => {f.calls.push('msg.add'); b.dispose(); listener.onRecvMsg([]); return 7;};
+    assert.throws(b.initializeMessaging, {code:'INVALID_STATE'});
+    assert.equal(b.getSnapshot().messages.phase, 'disposed');
+    assert.equal(b.getSnapshot().messages.cleanup_required, 'process_exit');
+    assert(!f.calls.includes('msg.remove')); // Returned token arrived after logical disposal.
+  }
+}
+assert.equal(b.getSnapshot().disposed, true); const count = f.calls.length;
+b.dispose(); await tick(); assert.equal(f.calls.length, count); assert.equal(b.isReady(), false);
+assert(f.calls.filter(x => x === 'login.remove').length <= 1);
+""")
+
+
+def test_subscriber_disposal_drains_late_callbacks_and_uncertain_send(tmp_path):
+    """Actual authentication/message callbacks cannot revive disposed composed controllers."""
+    run_node(tmp_path, r"""
+const f = fixture('token'); const events = [];
+f.backend.subscribe(event => {if (event.event.type === 'authenticated') f.backend.dispose();});
+f.backend.subscribe(event => events.push(event));
+await authenticate(f);
+assert.equal(f.backend.getSnapshot().disposed, true);
+assert(!events.some(event => event.event.type === 'authenticated'));
+f.loginListener.onQRCodeLoginSucceed(identity); await tick();
+await assert.rejects(f.backend.initializeSession(), {code:'DISPOSED'});
+assert(!f.calls.includes('config.factory')); assert.equal(f.calls.filter(x => x === 'login.remove').length, 1);
+let complete;
+// A separate valid fixture captures the deferred native method during initialize.
+const h = fixture('token'); h.msg.sendMsg = () => {h.calls.push('send'); return new Promise(resolve => {complete=resolve;});};
+await ready(h); const pending = h.backend.send(request); h.backend.dispose(); complete({result:0,errMsg:''});
+await assert.rejects(pending, {code:'SEND_UNCERTAIN'});
+h.messageListener.onRecvMsg([{msgId:'late',chatType:1,peerUid:'p',elements:[]}]);
+h.sessionListener.onOpentelemetryInit({is_init:true}); await tick();
+assert.equal(h.backend.isReady(), false); assert.equal(h.calls.filter(x => x === 'send').length, 1);
+h.backend.dispose(); assert.equal(h.calls.filter(x => x === 'msg.remove').length, 1);
+""")
+
+
 def test_real_controllers_explicit_lifecycle(tmp_path):
     """Connect/QR/auth/session/start/message operations require separate owner calls."""
     run_node(tmp_path, r"""
@@ -137,6 +256,36 @@ b.dispose(); release({}); await assert.rejects(pending, {code:'DISPOSED'});
 assert(!g.calls.includes('startup.create'));
 assert.throws(() => b.initialize(), {code:'DISPOSED'});
 assert.throws(() => b.subscribe(() => {}), {code:'DISPOSED'});
+""")
+
+
+@pytest.mark.parametrize("stage", ["start", "messaging", "send"])
+def test_duplicate_authentication_blocks_operations_before_forwarding(tmp_path, stage):
+    """Real duplicate QR success fails synchronously; it never authenticates a second account."""
+    run_node(tmp_path, "const stage = " + repr(stage) + ";" + r"""
+const f = fixture(); const b = f.backend;
+await authenticate(f); await b.initializeSession();
+if (stage !== 'start') {
+  b.startSession(); f.sessionListener.onOpentelemetryInit({is_init:true}); await tick();
+}
+if (stage === 'send') b.initializeMessaging();
+const count = f.calls.length;
+f.loginListener.onQRCodeLoginSucceed({uin:'20002',uid:'different-test-uid'});
+// No await: composer still caches A, but actual login rejects B and clears authorization.
+const snapshot = b.getSnapshot();
+assert.equal(snapshot.identity_available, true);
+assert.equal(snapshot.login.phase, 'failed');
+assert.equal(snapshot.login.authenticated, false);
+assert.equal(snapshot.login.failure_code, 'INVALID_EVENT');
+assert.equal(b.isReady(), false);
+if (stage === 'start') assert.throws(b.startSession, {code:'INVALID_STATE'});
+if (stage === 'messaging') assert.throws(b.initializeMessaging, {code:'NOT_READY'});
+const pending = b.send(request);
+assert.equal(f.calls.length, count); // send enters synchronously, before forwarding drains.
+await assert.rejects(pending, {code:'NOT_READY'});
+assert.equal(b.getSnapshot().identity_available, false);
+assert(!f.calls.includes('allocate')); assert(!f.calls.includes('send'));
+b.dispose();
 """)
 
 
