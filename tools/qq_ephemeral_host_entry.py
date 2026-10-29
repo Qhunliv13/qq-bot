@@ -49,7 +49,7 @@ VERSION_KEYS = {"node", "electron", "modules", "napi", "chrome", "v8", "uv"}
 
 def validate_mode(control_mode):
     """Accept only explicit internally authored controls; reject script/path injection."""
-    if control_mode not in ("wrapper", "initialize", "initialize_factories", "connect_offline", "connect_ready_offline", "prepared_connect_offline", "prepared_phase_offline", "host_dispatch_offline", "host_dispatch_roles_offline", "host_dispatch_capture_offline", "host_dispatch_identity_offline", "host_dispatch_resources_offline", "host_dispatch_waits_offline", "host_dispatch_exit_offline", "host_dispatch_fatal_offline", "host_dispatch_logging_offline", "host_dispatch_fsize_offline", "vendor_bootstrap", "vendor_stall", "vendor_window_roles", "bus_admission_offline", "bus_admission_capture_offline", "bus_identity_offline"):
+    if control_mode not in ("wrapper", "initialize", "initialize_factories", "connect_offline", "connect_ready_offline", "prepared_connect_offline", "prepared_connect_fsize_offline", "prepared_phase_offline", "host_dispatch_offline", "host_dispatch_roles_offline", "host_dispatch_capture_offline", "host_dispatch_identity_offline", "host_dispatch_resources_offline", "host_dispatch_waits_offline", "host_dispatch_exit_offline", "host_dispatch_fatal_offline", "host_dispatch_logging_offline", "host_dispatch_fsize_offline", "vendor_bootstrap", "vendor_stall", "vendor_window_roles", "bus_admission_offline", "bus_admission_capture_offline", "bus_identity_offline"):
         raise runtime.ProbeError("control_mode_invalid")
     return control_mode
 
@@ -70,10 +70,10 @@ def fixed_sources(control_mode):
     module_directory = directory.parent / "qq_transport"
     if not module_directory.is_dir():
         module_directory = directory
-    sources = {MAIN: directory / ({"initialize_factories": "qq_native_factory_entry.js", "connect_offline": "qq_native_connect_entry.js", "connect_ready_offline": "qq_native_ready_entry.js", "prepared_connect_offline": "qq_prepared_connect_entry.js", "prepared_phase_offline": "qq_prepared_connect_entry.js"}.get(control_mode, "qq_native_init_entry.js")),
+    sources = {MAIN: directory / ({"initialize_factories": "qq_native_factory_entry.js", "connect_offline": "qq_native_connect_entry.js", "connect_ready_offline": "qq_native_ready_entry.js", "prepared_connect_offline": "qq_prepared_connect_entry.js", "prepared_connect_fsize_offline": "qq_prepared_connect_entry.js", "prepared_phase_offline": "qq_prepared_connect_entry.js"}.get(control_mode, "qq_native_init_entry.js")),
                "/tmp/native_login.js": module_directory / "native_login.js",
                "/tmp/native_metadata.js": module_directory / "native_metadata.js"}
-    if control_mode in ("prepared_connect_offline", "prepared_phase_offline"):
+    if control_mode in ("prepared_connect_offline", "prepared_connect_fsize_offline", "prepared_phase_offline"):
         sources["/tmp/native_host.js"] = module_directory / "native_host.js"
     return sources
 
@@ -88,7 +88,7 @@ def base_report(control_mode="wrapper"):
                   full_sendrecv_verified=False, host_record=None,
                   invocation={"argv": ["/opt/QQ/qq"], "electron_run_as_node_present": False},
                   bounds_seconds={"qq": QQ_TIMEOUT, "outer": OUTER_TIMEOUT})
-    if control_mode in ("initialize", "initialize_factories", "connect_offline", "connect_ready_offline", "prepared_connect_offline", "prepared_phase_offline"):
+    if control_mode in ("initialize", "initialize_factories", "connect_offline", "connect_ready_offline", "prepared_connect_offline", "prepared_connect_fsize_offline", "prepared_phase_offline"):
         report.update(mode="ephemeral_native_init", native_initialize_verified=False,
                       native_listener_registered=False, native_listener_disposed=False)
     if control_mode == "initialize_factories":
@@ -98,9 +98,13 @@ def base_report(control_mode="wrapper"):
         report.update(mode="ephemeral_native_connect_offline", native_connect_observation_verified=False)
     if control_mode == "connect_ready_offline":
         report.update(mode="ephemeral_native_connect_ready_offline", native_connect_observation_verified=False, electron_ready_verified=False)
-    if control_mode in ("prepared_connect_offline", "prepared_phase_offline"):
+    if control_mode in ("prepared_connect_offline", "prepared_connect_fsize_offline", "prepared_phase_offline"):
         report.update(mode="ephemeral_" + control_mode, native_connect_observation_verified=False,
                       native_host_prepared_verified=False, bounded_progress_verified=False)
+    if control_mode == "prepared_connect_fsize_offline":
+        # Three host-profile differences versus old prepared, not a single-variable contrast.
+        report["comparison_design"] = "successor_verified_host_profile"
+        report["changed_from_old_prepared"] = ["synthetic_identity", "electron_logging", "file_size_1mib"]
     if control_mode in ("vendor_bootstrap", "vendor_stall", "vendor_window_roles"):
         report.update(mode={"vendor_stall": "ephemeral_vendor_stall", "vendor_window_roles": "ephemeral_vendor_window_roles"}.get(control_mode, "ephemeral_vendor_bootstrap"), electron_ready_verified=False, vendor_bootstrap_observation_complete=False)
     if control_mode in ("host_dispatch_offline", "host_dispatch_roles_offline", "host_dispatch_capture_offline", "host_dispatch_identity_offline", "host_dispatch_resources_offline", "host_dispatch_waits_offline", "host_dispatch_exit_offline", "host_dispatch_fatal_offline", "host_dispatch_logging_offline", "host_dispatch_fsize_offline"):
@@ -305,12 +309,12 @@ def stage_control(source, control, mount, parent_ids, report, *, auxiliary=None,
     validate_mode(control_mode)
     if control_mode in ("host_dispatch_offline", "host_dispatch_roles_offline", "host_dispatch_capture_offline", "host_dispatch_identity_offline", "host_dispatch_resources_offline", "host_dispatch_waits_offline", "host_dispatch_exit_offline", "host_dispatch_fatal_offline", "host_dispatch_logging_offline", "host_dispatch_fsize_offline") and auxiliary:
         raise runtime.ProbeError("ephemeral_auxiliary_invalid")
-    if control_mode in ("prepared_connect_offline", "prepared_phase_offline") and not auxiliary:
+    if control_mode in ("prepared_connect_offline", "prepared_connect_fsize_offline", "prepared_phase_offline") and not auxiliary:
         raise runtime.ProbeError("ephemeral_auxiliary_invalid")
     if auxiliary is not None and auxiliary:
         # The extra module is mandatory only for this exact fixed experiment mode.
         expected = {"/tmp/native_login.js", "/tmp/native_metadata.js", "/tmp/qq-native-pristine-package.json"}
-        if control_mode in ("prepared_connect_offline", "prepared_phase_offline"):
+        if control_mode in ("prepared_connect_offline", "prepared_connect_fsize_offline", "prepared_phase_offline"):
             expected.add("/tmp/native_host.js")
         if (set(auxiliary) != expected
                 or any(not isinstance(content, bytes) or not content or len(content) > 256 * 1024 for content in auxiliary.values())
@@ -325,7 +329,7 @@ def stage_control(source, control, mount, parent_ids, report, *, auxiliary=None,
         info = Path(target).stat()
         if info.st_uid != 0 or stat.S_IMODE(info.st_mode) != 0o444:
             raise runtime.ProbeError("ephemeral_file_permissions_failed")
-        if control_mode in ("prepared_connect_offline", "prepared_phase_offline", "host_dispatch_offline", "host_dispatch_roles_offline", "host_dispatch_capture_offline", "host_dispatch_identity_offline", "host_dispatch_resources_offline", "host_dispatch_waits_offline", "host_dispatch_exit_offline", "host_dispatch_fatal_offline", "host_dispatch_logging_offline", "host_dispatch_fsize_offline") and Path(target).read_bytes() != content:
+        if control_mode in ("prepared_connect_offline", "prepared_connect_fsize_offline", "prepared_phase_offline", "host_dispatch_offline", "host_dispatch_roles_offline", "host_dispatch_capture_offline", "host_dispatch_identity_offline", "host_dispatch_resources_offline", "host_dispatch_waits_offline", "host_dispatch_exit_offline", "host_dispatch_fatal_offline", "host_dispatch_logging_offline", "host_dispatch_fsize_offline") and Path(target).read_bytes() != content:
             raise runtime.ProbeError("ephemeral_source_readback_failed")
     if auxiliary:
         # Fresh data only, owned by the eventual nobody runtime, never host state.
@@ -464,7 +468,7 @@ def observe_host(command, env, output, errors, timeout, report, *, source, contr
         import qq_host_dispatch_control
         diagnostic = qq_host_dispatch_control
         qq_native_connect_control.verify_offline_network(report)
-    if control_mode in ("prepared_connect_offline", "prepared_phase_offline"):
+    if control_mode in ("prepared_connect_offline", "prepared_connect_fsize_offline", "prepared_phase_offline"):
         import qq_native_connect_control
         import qq_prepared_connect_control
         diagnostic = __import__("qq_prepared_phase_control") if control_mode == "prepared_phase_offline" else qq_prepared_connect_control
@@ -489,10 +493,10 @@ def observe_host(command, env, output, errors, timeout, report, *, source, contr
     if control_mode == "prepared_phase_offline":
         child_env["QQ_PREPARED_PHASE_CONTROL"] = "1"
     # The runtime allowlist already excludes ambient logging; only this fixed contrast enables it.
-    if control_mode in ("host_dispatch_logging_offline", "host_dispatch_fsize_offline"):
+    if control_mode in ("host_dispatch_logging_offline", "host_dispatch_fsize_offline", "prepared_connect_fsize_offline"):
         child_env["ELECTRON_ENABLE_LOGGING"] = "1"
     preexec = child_limits
-    if control_mode == "host_dispatch_fsize_offline":
+    if control_mode in ("host_dispatch_fsize_offline", "prepared_connect_fsize_offline"):
         import resource
         # Never raise a supervisor hard cap: the existing runtime must already provide it.
         soft, hard = resource.getrlimit(resource.RLIMIT_FSIZE)
@@ -509,14 +513,14 @@ def observe_host(command, env, output, errors, timeout, report, *, source, contr
         report.update(application_invoked=True, runtime_executed=True)
         report["isolation"].update(unprivileged=True, no_new_privileges=True, effective_capabilities_zero=True)
         try:
-            if control_mode in ("prepared_connect_offline", "prepared_phase_offline", "host_dispatch_offline", "host_dispatch_roles_offline", "host_dispatch_capture_offline", "host_dispatch_identity_offline", "host_dispatch_resources_offline", "host_dispatch_waits_offline", "host_dispatch_exit_offline", "host_dispatch_fatal_offline", "host_dispatch_logging_offline", "host_dispatch_fsize_offline", "vendor_stall", "vendor_window_roles"):
+            if control_mode in ("prepared_connect_offline", "prepared_connect_fsize_offline", "prepared_phase_offline", "host_dispatch_offline", "host_dispatch_roles_offline", "host_dispatch_capture_offline", "host_dispatch_identity_offline", "host_dispatch_resources_offline", "host_dispatch_waits_offline", "host_dispatch_exit_offline", "host_dispatch_fatal_offline", "host_dispatch_logging_offline", "host_dispatch_fsize_offline", "vendor_stall", "vendor_window_roles"):
                 # Prepared mode shares count-only external facts, not new JS timers.
                 import qq_vendor_stall_observation
                 if control_mode in ("vendor_window_roles", "host_dispatch_roles_offline"):
                     import qq_private_window_roles
                     qq_vendor_stall_observation.observe_wait(process, child_env, timeout=QQ_TIMEOUT, report=report,
                                                              window_sampler=qq_private_window_roles.sample_roles)
-                elif control_mode in ("host_dispatch_exit_offline", "host_dispatch_fatal_offline", "host_dispatch_logging_offline", "host_dispatch_fsize_offline"):
+                elif control_mode in ("host_dispatch_exit_offline", "host_dispatch_fatal_offline", "host_dispatch_logging_offline", "host_dispatch_fsize_offline", "prepared_connect_fsize_offline"):
                     # Only exit mode adds bounded public exit metadata to the same waiter.
                     qq_vendor_stall_observation.observe_wait(process, child_env, timeout=QQ_TIMEOUT, report=report,
                                                              detailed_resources=True, wait_symbols=True, exit_status=True)
@@ -543,12 +547,12 @@ def observe_host(command, env, output, errors, timeout, report, *, source, contr
         if control_mode in ("prepared_connect_offline", "prepared_phase_offline", "vendor_stall", "vendor_window_roles"):
             import qq_vendor_stall_observation
             qq_vendor_stall_observation.capture_categories(output, errors, report)
-        if control_mode in ("host_dispatch_capture_offline", "host_dispatch_identity_offline", "host_dispatch_resources_offline", "host_dispatch_waits_offline", "host_dispatch_exit_offline", "host_dispatch_fatal_offline", "host_dispatch_logging_offline", "host_dispatch_fsize_offline"):
+        if control_mode in ("host_dispatch_capture_offline", "host_dispatch_identity_offline", "host_dispatch_resources_offline", "host_dispatch_waits_offline", "host_dispatch_exit_offline", "host_dispatch_fatal_offline", "host_dispatch_logging_offline", "host_dispatch_fsize_offline", "prepared_connect_fsize_offline"):
             import qq_vendor_stall_observation
             qq_vendor_stall_observation.capture_categories(output, errors, report, detailed=True)
-            if control_mode == "host_dispatch_fsize_offline":
+            if control_mode in ("host_dispatch_fsize_offline", "prepared_connect_fsize_offline"):
                 fsize_resource_profile(report)
-        if control_mode in ("host_dispatch_fatal_offline", "host_dispatch_logging_offline", "host_dispatch_fsize_offline"):
+        if control_mode in ("host_dispatch_fatal_offline", "host_dispatch_logging_offline", "host_dispatch_fsize_offline", "prepared_connect_fsize_offline"):
             report["_private_fatal_capture"] = private_fatal_envelope(output, errors)
         report["private_control_reads"] = finish_read_watches(watch_fd, watches)
     report.update(experiment_completed=True, exit_code=process.returncode,
@@ -568,7 +572,7 @@ def observe_host(command, env, output, errors, timeout, report, *, source, contr
         # Retirement is an actual process observation even if native code never returns.
         report["process_retired"] = process.returncode is not None
         try:
-            with Path(diagnostic.PROGRESS_PATH if control_mode in ("initialize_factories", "connect_ready_offline", "prepared_connect_offline", "prepared_phase_offline", "host_dispatch_offline", "host_dispatch_roles_offline", "host_dispatch_capture_offline", "host_dispatch_identity_offline", "host_dispatch_resources_offline", "host_dispatch_waits_offline", "host_dispatch_exit_offline", "host_dispatch_fatal_offline", "host_dispatch_logging_offline", "host_dispatch_fsize_offline", "vendor_bootstrap", "vendor_stall", "vendor_window_roles") else "/tmp/qq-native-connect-progress.json").open("rb") as stream:
+            with Path(diagnostic.PROGRESS_PATH if control_mode in ("initialize_factories", "connect_ready_offline", "prepared_connect_offline", "prepared_connect_fsize_offline", "prepared_phase_offline", "host_dispatch_offline", "host_dispatch_roles_offline", "host_dispatch_capture_offline", "host_dispatch_identity_offline", "host_dispatch_resources_offline", "host_dispatch_waits_offline", "host_dispatch_exit_offline", "host_dispatch_fatal_offline", "host_dispatch_logging_offline", "host_dispatch_fsize_offline", "vendor_bootstrap", "vendor_stall", "vendor_window_roles") else "/tmp/qq-native-connect-progress.json").open("rb") as stream:
                 report["factory_progress" if control_mode == "initialize_factories" else "vendor_progress" if control_mode in ("vendor_bootstrap", "vendor_stall", "vendor_window_roles") else "connect_progress"] = diagnostic.parse_progress(stream.read(LIMIT + 1), nonce)
         except (OSError, ValueError, UnicodeError):
             report["factory_progress" if control_mode == "initialize_factories" else "vendor_progress" if control_mode in ("vendor_bootstrap", "vendor_stall", "vendor_window_roles") else "connect_progress"] = None
@@ -581,7 +585,7 @@ def observe_host(command, env, output, errors, timeout, report, *, source, contr
     if control_mode in ("vendor_bootstrap", "vendor_stall", "vendor_window_roles"):
         # A genuine ready event is proof even if later vendor work blocks final timers.
         diagnostic.project_progress(report, report.get("vendor_progress"))
-    if control_mode in ("prepared_connect_offline", "prepared_phase_offline"):
+    if control_mode in ("prepared_connect_offline", "prepared_connect_fsize_offline", "prepared_phase_offline"):
         diagnostic.project_progress(report, report.get("connect_progress"))
     # Missing final output remains incomplete, not permission to patch or claim login.
     try:
@@ -634,7 +638,7 @@ def child_main(args):
                                    application_observer=diagnostic.observe_bus,
                                    synthetic_identity=control_mode == "bus_identity_offline",
                                    control_mode=control_mode)
-    if control_mode in ("prepared_connect_offline", "prepared_phase_offline"):
+    if control_mode in ("prepared_connect_offline", "prepared_connect_fsize_offline", "prepared_phase_offline"):
         __import__("qq_native_connect_control")
         __import__("qq_prepared_connect_control")
         if control_mode == "prepared_phase_offline":
@@ -675,7 +679,7 @@ def child_main(args):
     auxiliary = {target: path.read_bytes() for target, path in sources.items()}
     pristine = (root / "resources/app/package.json").read_bytes()
     control = validate_manifest(pristine)
-    if control_mode in ("initialize", "initialize_factories", "connect_offline", "connect_ready_offline", "prepared_connect_offline", "prepared_phase_offline"):
+    if control_mode in ("initialize", "initialize_factories", "connect_offline", "connect_ready_offline", "prepared_connect_offline", "prepared_connect_fsize_offline", "prepared_phase_offline"):
         auxiliary["/tmp/qq-native-pristine-package.json"] = pristine
     parent_ids = json.loads(args.parent_ns)
     def observer(command, env, output, errors, timeout, report):
@@ -684,7 +688,7 @@ def child_main(args):
                      control=control, mount=args.mount_tool, parent_ids=parent_ids, nonce=args.nonce,
                      control_mode=control_mode, auxiliary=auxiliary)
     identity_options = ({"synthetic_identity": True, "control_mode": control_mode}
-                        if control_mode in ("host_dispatch_identity_offline", "host_dispatch_resources_offline", "host_dispatch_waits_offline", "host_dispatch_exit_offline", "host_dispatch_fatal_offline", "host_dispatch_logging_offline", "host_dispatch_fsize_offline") else {})
+                        if control_mode in ("host_dispatch_identity_offline", "host_dispatch_resources_offline", "host_dispatch_waits_offline", "host_dispatch_exit_offline", "host_dispatch_fatal_offline", "host_dispatch_logging_offline", "host_dispatch_fsize_offline", "prepared_connect_fsize_offline") else {})
     return runtime.child_probe(root, Path(args.jail), args.nonce, parent_ids, args.mount_tool,
                                filesystem_mode="pivot-root", pivot_tool=args.pivot_tool,
                                umount_tool=args.umount_tool, private_display=True,
@@ -740,9 +744,9 @@ def observe(qq_root, *, execute=False, control_mode="wrapper", private_capture_p
     root = None
     private_fd = None
     try:
-        if private_capture_path is not None and control_mode not in ("host_dispatch_fatal_offline", "host_dispatch_logging_offline", "host_dispatch_fsize_offline"):
+        if private_capture_path is not None and control_mode not in ("host_dispatch_fatal_offline", "host_dispatch_logging_offline", "host_dispatch_fsize_offline", "prepared_connect_fsize_offline"):
             raise runtime.ProbeError("private_capture_requires_fixed_fatal_mode")
-        if execute and control_mode in ("host_dispatch_fatal_offline", "host_dispatch_logging_offline", "host_dispatch_fsize_offline") and private_capture_path is None:
+        if execute and control_mode in ("host_dispatch_fatal_offline", "host_dispatch_logging_offline", "host_dispatch_fsize_offline", "prepared_connect_fsize_offline") and private_capture_path is None:
             raise runtime.ProbeError("private_capture_path_required")
         if sys.platform != "linux":
             raise runtime.ProbeError("linux_required")
@@ -754,7 +758,7 @@ def observe(qq_root, *, execute=False, control_mode="wrapper", private_capture_p
         before = {name: digest(root / name) for name in names}
         if not execute:
             return report
-        if control_mode in ("host_dispatch_fatal_offline", "host_dispatch_logging_offline", "host_dispatch_fsize_offline"):
+        if control_mode in ("host_dispatch_fatal_offline", "host_dispatch_logging_offline", "host_dispatch_fsize_offline", "prepared_connect_fsize_offline"):
             # Reserve before launching anything; never pass the private fd into QQ.
             private_fd = runtime.open_private_diagnostics(private_capture_path)
         sources = fixed_sources(control_mode)
@@ -775,7 +779,7 @@ def observe(qq_root, *, execute=False, control_mode="wrapper", private_capture_p
                               ("qq_native_connect_control.py", "qq_vendor_bootstrap_control.py", "qq_application_observation.py", "qq_vendor_stall_observation.py", "qq_private_window_roles.py") if control_mode == "vendor_window_roles" else
                               ("qq_native_connect_control.py", "qq_vendor_bootstrap_control.py", "qq_application_observation.py", "qq_vendor_stall_observation.py") if control_mode == "vendor_stall" else
                               ("qq_native_connect_control.py", "qq_vendor_bootstrap_control.py") if control_mode == "vendor_bootstrap" else
-                              (("qq_prepared_phase_control.py",) if control_mode == "prepared_phase_offline" else ()) + ("qq_native_connect_control.py", "qq_prepared_connect_control.py", "qq_application_observation.py", "qq_vendor_stall_observation.py") if control_mode in ("prepared_connect_offline", "prepared_phase_offline") else
+                              (("qq_prepared_phase_control.py",) if control_mode == "prepared_phase_offline" else ()) + ("qq_native_connect_control.py", "qq_prepared_connect_control.py", "qq_application_observation.py", "qq_vendor_stall_observation.py") if control_mode in ("prepared_connect_offline", "prepared_connect_fsize_offline", "prepared_phase_offline") else
                                ("qq_native_connect_control.py", "qq_native_ready_control.py") if control_mode == "connect_ready_offline" else
                              ("qq_native_connect_control.py", "qq_native_factory_control.py") if control_mode == "initialize_factories" else
                               ("qq_native_connect_control.py",) if control_mode == "connect_offline" else ()))
@@ -812,7 +816,7 @@ def observe(qq_root, *, execute=False, control_mode="wrapper", private_capture_p
             parsed = json.loads(raw)
             if not isinstance(parsed, dict):
                 raise runtime.ProbeError("ephemeral_child_report_invalid")
-            if control_mode in ("host_dispatch_fatal_offline", "host_dispatch_logging_offline", "host_dispatch_fsize_offline"):
+            if control_mode in ("host_dispatch_fatal_offline", "host_dispatch_logging_offline", "host_dispatch_fsize_offline", "prepared_connect_fsize_offline"):
                 persist_private_fatal(parsed, private_fd)
             elif "_private_fatal_capture" in parsed:
                 parsed.pop("_private_fatal_capture")
@@ -845,7 +849,7 @@ def main(argv=None):
     parser.add_argument("--qq-root", required=True)
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--child", action="store_true", help=argparse.SUPPRESS)
-    parser.add_argument("--control-mode", choices=("wrapper", "initialize", "initialize_factories", "connect_offline", "connect_ready_offline", "prepared_connect_offline", "prepared_phase_offline", "host_dispatch_offline", "host_dispatch_roles_offline", "host_dispatch_capture_offline", "host_dispatch_identity_offline", "host_dispatch_resources_offline", "host_dispatch_waits_offline", "host_dispatch_exit_offline", "host_dispatch_fatal_offline", "host_dispatch_logging_offline", "host_dispatch_fsize_offline", "vendor_bootstrap", "vendor_stall", "vendor_window_roles", "bus_admission_offline", "bus_admission_capture_offline", "bus_identity_offline"), default="wrapper", help=argparse.SUPPRESS)
+    parser.add_argument("--control-mode", choices=("wrapper", "initialize", "initialize_factories", "connect_offline", "connect_ready_offline", "prepared_connect_offline", "prepared_connect_fsize_offline", "prepared_phase_offline", "host_dispatch_offline", "host_dispatch_roles_offline", "host_dispatch_capture_offline", "host_dispatch_identity_offline", "host_dispatch_resources_offline", "host_dispatch_waits_offline", "host_dispatch_exit_offline", "host_dispatch_fatal_offline", "host_dispatch_logging_offline", "host_dispatch_fsize_offline", "vendor_bootstrap", "vendor_stall", "vendor_window_roles", "bus_admission_offline", "bus_admission_capture_offline", "bus_identity_offline"), default="wrapper", help=argparse.SUPPRESS)
     for name in ("jail", "nonce", "parent-ns", "mount-tool", "pivot-tool", "umount-tool"):
         parser.add_argument("--" + name, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)

@@ -588,7 +588,7 @@ def validate_synthetic_identity(synthetic_identity, control_mode, filesystem_mod
                                 application_observer, userns_control, native_load_control):
     """Reject identity outside the fixed fully isolated controls before any writes."""
     if type(synthetic_identity) is not bool or (synthetic_identity and (
-            control_mode not in ("bus_identity_offline", "host_dispatch_identity_offline", "host_dispatch_resources_offline", "host_dispatch_waits_offline", "host_dispatch_exit_offline", "host_dispatch_fatal_offline", "host_dispatch_logging_offline", "host_dispatch_fsize_offline") or filesystem_mode != "pivot-root"
+            control_mode not in ("bus_identity_offline", "host_dispatch_identity_offline", "host_dispatch_resources_offline", "host_dispatch_waits_offline", "host_dispatch_exit_offline", "host_dispatch_fatal_offline", "host_dispatch_logging_offline", "host_dispatch_fsize_offline", "prepared_connect_fsize_offline") or filesystem_mode != "pivot-root"
             or not private_display or not private_runtime_services or not extended_startup
             or not callable(application_observer) or userns_control or native_load_control)):
         raise ProbeError("synthetic_identity_requires_fixed_private_bus_control")
