@@ -67,6 +67,7 @@ def path_host(click_host):
 
 @pytest.mark.parametrize("failure,expected,shot_count", [
     (None, None, 2),
+    ("authorized", None, 2),
     ("wrong_action", "preview_confirmation_mismatch", 1),
     ("missing_vision", "preview_image_not_seen_by_model", 1),
     ("changed_screen", "screen_changed", 2),
@@ -81,6 +82,24 @@ def test_native_path_visual_gate_to_real_runtime(path_host, failure, expected, s
         host._as_llm_url = lambda _ref: ""
     if failure == "unavailable":
         host._vm_pointer_executor = None
+    if failure == "authorized":
+        legacy = host._vm_pointer_executor
+
+        class AuthorizedAdapter:
+            """Prove main selects the explicit lease method without signature fallback."""
+
+            async def __call__(self, canonical):
+                """Reject accidental use of the legacy invocation route."""
+                raise AssertionError("legacy route must not run")
+
+            async def execute_authorized(self, canonical, *, lease):
+                """Inspect trusted timing authority before the existing fake runtime."""
+                assert type(lease) is vm_click_gate.ExecutionLease
+                assert lease.deadline > lease.clock()
+                lease.check()
+                return await legacy(canonical)
+
+        host._vm_pointer_executor = AuthorizedAdapter()
 
     async def model(_system, _prompt, _refs, messages, allow_tools):
         """Observe transported PNG pixels then confirm in a distinct successful request."""

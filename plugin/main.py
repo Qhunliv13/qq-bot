@@ -3721,10 +3721,14 @@ class HiganPlugin(Star):
                     # None is deliberate: the gate consumes the ticket, validates
                     # observed intent, then returns backend_unavailable before any
                     # input. Only trusted host code can install this async adapter.
+                    executor = getattr(self, "_vm_pointer_executor", None)
+                    # Explicit trusted-host protocol; legacy action-only callbacks
+                    # retain their signature but cannot claim worker-queue freshness.
                     res = await click_gate.confirm_path(args.get("ticket"),
-                        screenshot_for_checkpoint, getattr(self, "_vm_pointer_executor", None),
+                        screenshot_for_checkpoint, executor,
                         action=args.get("action"), screen_sha256=args.get("screen_sha256"),
-                        viewed=args.get("viewed"))
+                        viewed=args.get("viewed"),
+                        authorized_path_callable=getattr(executor, "execute_authorized", None))
                 else:
                     async def click_after_checkpoint(x, y):
                         """Call the native mouse route only after pixel verification."""

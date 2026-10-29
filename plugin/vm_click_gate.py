@@ -18,6 +18,7 @@ import uuid
 
 from PIL import Image, ImageDraw, UnidentifiedImageError
 
+from .vm_execution_lease import ExecutionLease
 from .vm_pointer_runtime import canonical_pointer_action
 
 # Limit bytes before decoding and pixels before rendering to bound untrusted VM PNGs.
@@ -231,13 +232,13 @@ class ClickGate:
                                    (x, y), screen_sha256, viewed)
 
     async def confirm_path(self, ticket, screenshot_callable, path_callable, *, action,
-                           screen_sha256, viewed):
-        """Execute only the stored immutable path after exact, observed confirmation."""
+                           screen_sha256, viewed, authorized_path_callable=None):
+        """Optionally hand trusted executors a lease without changing legacy callbacks."""
         return await self._confirm("path", ticket, screenshot_callable, path_callable,
-                                   action, screen_sha256, viewed)
+                                   action, screen_sha256, viewed, authorized_path_callable)
 
     async def _confirm(self, kind, ticket, screenshot_callable, execute_callable,
-                       action, screen_sha256, viewed):
+                       action, screen_sha256, viewed, authorized_path_callable=None):
         """Consume/recheck once under the same lock for clicks and full pointer paths."""
         async with self._lock:
             pending = self._pending
@@ -262,7 +263,10 @@ class ClickGate:
                 return {"ok": False, "error": "preview_image_not_seen_by_model"}
             if time.monotonic() >= expires:
                 return {"ok": False, "error": "preview_expired"}
-            if not callable(screenshot_callable) or not callable(execute_callable):
+            # Opt-in is explicit, never a TypeError retry or model-controlled flag.
+            executor = (authorized_path_callable if authorized_path_callable is not None
+                        else execute_callable)
+            if not callable(screenshot_callable) or not callable(executor):
                 return {"ok": False, "error": "backend_unavailable"}
             try:
                 picture, digest = self._image(await screenshot_callable())
@@ -279,7 +283,12 @@ class ClickGate:
             uncertain = f"{kind}_outcome_uncertain"
             try:
                 # Pass the stored record, never mutable confirmation arguments.
-                receipt = await execute_callable(*stored) if kind == "click" else await execute_callable(stored)
+                if authorized_path_callable is not None:
+                    # Capture the original deadline and its clock, not a renewed TTL.
+                    lease = ExecutionLease(expires, time.monotonic)
+                    receipt = await executor(stored, lease=lease)
+                else:
+                    receipt = await executor(*stored) if kind == "click" else await executor(stored)
             except Exception:
                 # Uncertain execution consumes the ticket and never exposes exception text.
                 return {"ok": False, "error": uncertain}

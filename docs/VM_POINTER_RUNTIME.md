@@ -123,8 +123,10 @@ No HTTP route, environment endpoint or automatic runtime adapter was added.
 The plugin initializes its explicit private trusted-host capability
 `_vm_pointer_executor` to `None`. A reviewed host adapter may supply an async
 callable taking only the gate's stored immutable canonical action and returning a
-structured receipt. It is never resolved from model arguments, URLs or inferred
-attributes; no such adapter is installed by default. Missing capability passes
+structured receipt. An adapter may explicitly implement `execute_authorized(action,
+*, lease)`; the native loop passes that trusted method through the gate's optional
+`authorized_path_callable` argument. No capability is resolved from model arguments
+or URLs, and no adapter is installed by default. Missing capability passes
 `None` into the existing gate: a correct, observed confirmation consumes its ticket
 and returns `backend_unavailable` **before** fresh screenshot or pointer execution.
 This known pre-execution condition is not mislabeled `path_outcome_uncertain`;
@@ -144,6 +146,33 @@ checked at execution admission, not continuously during the up-to-10-second path
 Physical screen changes after the final capture and OS scheduling remain races;
 this boundary does not claim physical atomicity, user consent, or complete
 mediation of raw execution/browser evaluation.
+
+## Worker-queue deadline handoff
+
+The authorized callback receives a frozen `ExecutionLease` containing the original
+preview expiry and the issuing gate's monotonic clock callable. The lease is not an
+action-schema field, cannot be supplied by the model, and never renews TTL after
+model observation, confirmation capture, or thread submission. `VmPointerAdapter`
+passes its check through the runtime's optional trusted `before_start` hook, which
+runs **inside the worker immediately before the first mousemove**, after executor
+queue delay and runtime validation. An expired lease produces no input, including
+no mouseup when no press was attempted; gate errors remain sanitized and tickets
+remain consumed. Once input starts, lease expiry does not suppress safety release.
+Cancellation still drains the worker while holding the adapter and gate locks.
+
+Legacy action-only callbacks and standalone adapter `__call__` retain their APIs;
+they do not gain worker-queue freshness automatically. There is no TypeError-based
+signature fallback. The installed adapter's explicit authorized method is selected
+by the native loop; the default executor remains `None`.
+
+This bounds admission age, **not screen ownership**: there is no new worker-side
+screenshot or atomic screenshot/input transaction. Screen changes, other turns,
+raw execution, other adapters, and scheduling/filesystem/process-launch delays
+after the check remain outside this turn-local lock. An exclusive global GUI owner
+is still required; neither TTL nor matching captured pixels proves live identity.
+[Queue tests](../tests/test_vm_execution_lease.py) saturate a real one-worker
+executor with an event barrier and use fake commands only, covering gate-to-adapter
+expiry at the exact boundary, fresh success, and release despite later expiry.
 
 ## Opt-in POSIX command adapter (not installed)
 
@@ -185,10 +214,11 @@ worker, then shields and drains it even under repeated task cancellation before
 unlocking and propagating CancelledError. This does **not** serialize other
 instances, processes, click channels or raw input. Screenshot validation occurs
 before adapter admission; this lock does not make validation/input atomic. The
-frozen action carries no ticket deadline, and thread-pool scheduling can itself
-delay work after admission. This adapter does not recheck screenshot freshness or
-ticket TTL; a future host must close that gap under its external exclusive GUI
-owner across all channels before claiming safe production activation.
+frozen action carries no ticket deadline: the authorized method instead receives
+the separate immutable lease and checks its original TTL after thread-pool queueing.
+Legacy standalone calls have no lease. Neither path recaptures pixels inside the
+worker; a future host must provide external exclusive GUI ownership across all
+channels before claiming safe production activation.
 
 [Mock adapter tests](../tests/test_vm_pointer_adapter.py) exercise transport
 contracts, invalid argv, Windows refusal, kill/reap failures and cancellation with
@@ -204,3 +234,12 @@ and nonzero exits, deadline-triggered group kill, and direct-child reap via
 `waitpid` raising `ChildProcessError`. The descendant check accepts absent or
 zombie state (not running); it does **not** claim the adapter reaps grandchildren
 or proves zero zombies. No desktop, QQ, or production operation was performed.
+
+Queue-lease verification (2026-10-30): 105 focused tests passed, followed by the
+full suite with 4334 passed, 40 skipped and 287 subtests passed. The existing
+harmless POSIX fixture also passed both tests in 0.427s. One initial fresh-queue
+positive case returned failure without retaining its error receipt/command list;
+it passed in isolation, two subsequent focused runs and the full suite. Its cause
+remains unknown; these reruns do not establish a diagnosis or real-time reliability.
+The separate fake-clock regression in a release test was corrected in the test,
+not by relaxing runtime timing checks. No real desktop acceptance was performed.

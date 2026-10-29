@@ -19,6 +19,7 @@ import subprocess
 import threading
 import time
 
+from .vm_execution_lease import ExecutionLease
 from .vm_pointer_runtime import (
     COMMAND_TIMEOUT_SECONDS, MAX_DIMENSION, canonical_pointer_action,
     execute_pointer_path, frozen_pointer_action_payload,
@@ -130,7 +131,7 @@ class VmPointerAdapter:
             if not finished:
                 _kill_and_reap(process)
 
-    def _execute(self, payload, stop):
+    def _execute(self, payload, stop, lease=None):
         """Use the single runtime implementation with cooperative runner and sleeper."""
         def run(argv, timeout_s):
             """Permit runtime safety release even after cancellation."""
@@ -141,9 +142,27 @@ class VmPointerAdapter:
             if stop.wait(seconds):
                 raise RuntimeError("pointer_cancelled")
 
-        return execute_pointer_path(payload, runner=run, sleep=sleep, clock=time.monotonic)
+        def before_start():
+            """Check cancellation and the original gate deadline after thread queueing."""
+            if stop.is_set():
+                raise RuntimeError("pointer_cancelled")
+            if lease is not None:
+                lease.check()
+
+        return execute_pointer_path(payload, runner=run, sleep=sleep, clock=time.monotonic,
+                                    before_start=before_start)
 
     async def __call__(self, canonical):
+        """Preserve the standalone trusted-host API; it does not grant gate freshness."""
+        return await self._submit(canonical)
+
+    async def execute_authorized(self, canonical, *, lease):
+        """Accept explicit gate-only timing authority, never a field in model actions."""
+        if type(lease) is not ExecutionLease:
+            return {"ok": False, "error": "invalid_execution_lease"}
+        return await self._submit(canonical, lease=lease)
+
+    async def _submit(self, canonical, *, lease=None):
         """Retain the instance lock until cancelled worker cleanup actually finishes."""
         try:
             payload = frozen_pointer_action_payload(canonical)
@@ -156,7 +175,7 @@ class VmPointerAdapter:
             return {"ok": False, "error": "pointer_runtime_busy"}
         async with self._lock:
             stop = threading.Event()
-            worker = asyncio.create_task(asyncio.to_thread(self._execute, payload, stop))
+            worker = asyncio.create_task(asyncio.to_thread(self._execute, payload, stop, lease))
             try:
                 return await asyncio.shield(worker)
             except asyncio.CancelledError:

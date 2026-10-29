@@ -90,7 +90,7 @@ def _now(clock):
     return value
 
 
-def execute_pointer_path(action, *, runner, sleep, clock):
+def execute_pointer_path(action, *, runner, sleep, clock, before_start=None):
     """Execute copied argv points once, checking every result and releasing on uncertainty.
 
     The trusted runner must execute argv without a shell, synchronously wait for
@@ -105,7 +105,8 @@ def execute_pointer_path(action, *, runner, sleep, clock):
         canonical = canonical_pointer_action(action)
     except ValueError:
         return {"ok": False, "error": "invalid_pointer_action"}
-    if not all(callable(capability) for capability in (runner, sleep, clock)):
+    if (not all(callable(capability) for capability in (runner, sleep, clock))
+            or (before_start is not None and not callable(before_start))):
         return {"ok": False, "error": "pointer_runtime_unavailable"}
     press_attempted = False
     succeeded = False
@@ -114,6 +115,10 @@ def execute_pointer_path(action, *, runner, sleep, clock):
         # Validate the clock before the first movement; copy is already complete.
         previous = _now(clock)
         first = canonical.points[0]
+        # The trusted hook runs inside the worker, after queueing and validation.
+        # It gates start only: expiry must never suppress a later safety release.
+        if before_start is not None:
+            before_start()
         _checked_run(runner, ("xdotool", "mousemove", str(first.x), str(first.y)))
         press_attempted = True
         _checked_run(runner, ("xdotool", "mousedown", "1"))
