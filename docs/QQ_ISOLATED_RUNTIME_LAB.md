@@ -46,6 +46,16 @@ failure records remain historical evidence, not the latest capability assessment
   confirms the vendor handoff matters to readiness in the measured host, without
   explaining the subsequent stall or proving login. Authored code does not initialize
   the engine again, inspect account state or call a login/session API.
+- `qq-vendor-stall-evidence.json` samples the unchanged vendor observer from an external
+  unprivileged helper: 30 identity-validated process samples, bounded thread states,
+  aggregate process CPU counters, private X PID/window counts, resource limits and
+  bounded output categories. The 30-second observation records about 3.37 aggregate
+  CPU seconds, not a demonstrated all-CPU spin. Wait-channel categories are unavailable/
+  `other`, window roles were not queried, and dialog presence is unknown. QQ stderr is
+  below its file bound; a D-Bus-unavailable category is present, without identifying
+  its bus or proving the later stall's cause. No memory, titles, screenshots, session
+  state, host sockets or production process were inspected. This narrows observations,
+  not the unresolved root cause or account-login readiness.
 
 An inspector attempt did not discover an endpoint; it is not the successful loading
 path and does not identify why this build did not expose the requested endpoint.

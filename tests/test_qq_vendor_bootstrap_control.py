@@ -1,4 +1,5 @@
 """Strict vendor lifecycle projections and fixed-source security regression tests."""
+import ast
 import copy
 import hashlib
 import json
@@ -103,7 +104,21 @@ def test_source_only_observes_then_exact_vendor_expression():
     assert "app.exit(0)" in source
     assert "process.exit(1)" in source
     shared_source = Path(shared.__file__).read_text(encoding="utf-8")
-    assert shared_source.index('qq_native_connect_control.verify_offline_network(report)', shared_source.index('if control_mode == "vendor_bootstrap":', shared_source.index('def observe_host'))) < shared_source.index('process = subprocess.Popen(command, env=child_env')
+    # Check the actual guarded call structurally, not whitespace or tuple spelling.
+    observe = next(node for node in ast.parse(shared_source).body
+                   if isinstance(node, ast.FunctionDef) and node.name == 'observe_host')
+    launch = next(node for node in ast.walk(observe) if isinstance(node, ast.Call)
+                  and isinstance(node.func, ast.Attribute) and node.func.attr == 'Popen')
+    vendor_gate = next(node for node in observe.body if isinstance(node, ast.If)
+                       and isinstance(node.test, ast.Compare)
+                       and isinstance(node.test.left, ast.Name)
+                       and node.test.left.id == 'control_mode'
+                       and any(isinstance(value, ast.Constant) and value.value == 'vendor_bootstrap'
+                               for value in ast.walk(node.test)))
+    checks = [node for node in ast.walk(vendor_gate) if isinstance(node, ast.Call)
+              and isinstance(node.func, ast.Attribute)
+              and node.func.attr == 'verify_offline_network']
+    assert len(checks) == 1 and checks[0].lineno < launch.lineno
     assert shared.QQ_TIMEOUT == 30 and shared.OUTER_TIMEOUT == 45
 
 
