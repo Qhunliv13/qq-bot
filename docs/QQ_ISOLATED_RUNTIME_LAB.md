@@ -284,3 +284,39 @@ a validated vendor interface or further safe evidence, not a fabricated backend.
 
 Mock-only focused tests: 59 passed, 1 Windows-specific skipped. They verify
 gating and report propagation but cannot verify Tencent startup.
+
+## Private runtime services and independent GUI surface (2026-10-29)
+
+The additional **explicit** `--private-runtime-services` flag requires the private
+authenticated display and detached pivot root; `--execute` remains separately required.
+It is refused for controls, chroot and offline readiness. Only after the namespace
+checks and root detach, the jail binds `/etc/fonts` read-only (not all of `/etc`) and
+sets private fontconfig paths. A fresh per-run configuration starts the trusted system
+`/usr/bin/dbus-daemon --nofork --nopidfile` as UID 65534 under NNP and cap-zero, with
+`EXTERNAL` authentication and one socket in private `/tmp/runtime`. There are no
+service directories, activation helpers, host session sockets, inherited credentials
+or host machine-id mounts. The daemon and Xvfb remain within private network, mount,
+PID and IPC namespaces. Its socket must be an actual Unix socket owned by UID 65534.
+A fixed system `xwininfo` periodically counts X **root children only**: no window
+title, process command line, address, stderr or raw X output enters public JSON.
+A child count is not proof of who created windows. Both new helpers share the existing
+watchdog, no-new-privileges and cap-zero checks; no QQ flags, fuses, native exports or
+account paths are modified. Run only against the already verified software-only lab:
+
+```bash
+python tools/qq_isolated_runtime_probe.py --qq-root /tmp/qq-native-lab-20261027-pristine/opt/QQ --execute --filesystem-mode pivot-root --private-display --private-runtime-services --extended-startup
+```
+
+**One actual isolated run:** private Xvfb and the private bus both had owner-verified
+sockets; the fontconfig-unavailable diagnostic changed to false. QQ was invoked and
+the 30-second watchdog expired. The DBus-unavailable category stayed true, without
+identifying which bus emitted the message; the private bus socket's readiness does not
+prove QQ used it. `xwininfo` sampled up to three root children, but its initial
+baseline was unavailable, so these cannot be attributed to QQ or asserted to be a QQ
+window. The intended `/probe.js` still emitted no nonce record. The packaged QQ
+launcher may ignore this Node-only script; absence of nonce **does not prove QQ failed
+to reach its own native/GUI bootstrap**. No verified QQ-owned window, Electron version,
+native session, login, independent transport or production cutover results.
+Evidence: `qq-private-runtime-services-evidence.json`. Readiness flags remain false.
+Focused regressions on Windows: 72 passed, 1 skipped; static pyflakes passed. Tests
+are mock-only, not proof of actual QQ capability.

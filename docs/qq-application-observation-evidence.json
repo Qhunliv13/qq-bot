@@ -1,0 +1,620 @@
+﻿{
+    "abi_compatibility":  "unverified",
+    "application_exit_code":  null,
+    "application_invoked":  true,
+    "application_pid":  35,
+    "application_readiness_verified":  false,
+    "capability_scope":  "isolation_cap0_describes_verified_launch_hook; descendant_capabilities_and_user_namespace_are_recorded_individually",
+    "completion":  "watchdog_30s",
+    "diagnostic_categories":  {
+                                  "crash_reporter_activity":  true,
+                                  "dbus_unavailable":  true,
+                                  "fontconfig_unavailable":  false,
+                                  "shared_memory_unavailable":  false
+                              },
+    "elapsed_seconds":  30.0,
+    "errors":  [
+
+               ],
+    "experiment_completed":  true,
+    "filesystem_mode":  "pivot-root",
+    "full_sendrecv_verified":  false,
+    "identity_observation":  {
+                                 "baseline_qq_pid_properties":  0,
+                                 "baseline_root_children":  0,
+                                 "maximum_root_children":  3,
+                                 "qq_processes":  [
+                                                      {
+                                                          "cap_eff_zero":  true,
+                                                          "exe":  "/opt/QQ/qq",
+                                                          "gid":  [
+                                                                      65534,
+                                                                      65534,
+                                                                      65534,
+                                                                      65534
+                                                                  ],
+                                                          "no_new_privileges":  true,
+                                                          "pid":  35,
+                                                          "start_ticks":  186,
+                                                          "uid":  [
+                                                                      65534,
+                                                                      65534,
+                                                                      65534,
+                                                                      65534
+                                                                  ],
+                                                          "user_namespace_matches_supervisor":  true
+                                                      },
+                                                      {
+                                                          "cap_eff_zero":  true,
+                                                          "exe":  "/opt/QQ/qq",
+                                                          "gid":  [
+                                                                      65534,
+                                                                      65534,
+                                                                      65534,
+                                                                      65534
+                                                                  ],
+                                                          "no_new_privileges":  true,
+                                                          "pid":  43,
+                                                          "start_ticks":  208,
+                                                          "uid":  [
+                                                                      65534,
+                                                                      65534,
+                                                                      65534,
+                                                                      65534
+                                                                  ],
+                                                          "user_namespace_matches_supervisor":  true
+                                                      },
+                                                      {
+                                                          "cap_eff_zero":  true,
+                                                          "exe":  "/opt/QQ/qq",
+                                                          "gid":  [
+                                                                      65534,
+                                                                      65534,
+                                                                      65534,
+                                                                      65534
+                                                                  ],
+                                                          "no_new_privileges":  true,
+                                                          "pid":  44,
+                                                          "start_ticks":  209,
+                                                          "uid":  [
+                                                                      65534,
+                                                                      65534,
+                                                                      65534,
+                                                                      65534
+                                                                  ],
+                                                          "user_namespace_matches_supervisor":  false
+                                                      },
+                                                      {
+                                                          "cap_eff_zero":  false,
+                                                          "exe":  "/opt/QQ/qq",
+                                                          "gid":  [
+                                                                      65534,
+                                                                      65534,
+                                                                      65534,
+                                                                      65534
+                                                                  ],
+                                                          "no_new_privileges":  true,
+                                                          "pid":  46,
+                                                          "start_ticks":  213,
+                                                          "uid":  [
+                                                                      65534,
+                                                                      65534,
+                                                                      65534,
+                                                                      65534
+                                                                  ],
+                                                          "user_namespace_matches_supervisor":  false
+                                                      },
+                                                      {
+                                                          "cap_eff_zero":  true,
+                                                          "exe":  "/opt/QQ/qq",
+                                                          "gid":  [
+                                                                      65534,
+                                                                      65534,
+                                                                      65534,
+                                                                      65534
+                                                                  ],
+                                                          "no_new_privileges":  true,
+                                                          "pid":  74,
+                                                          "start_ticks":  256,
+                                                          "uid":  [
+                                                                      65534,
+                                                                      65534,
+                                                                      65534,
+                                                                      65534
+                                                                  ],
+                                                          "user_namespace_matches_supervisor":  true
+                                                      },
+                                                      {
+                                                          "cap_eff_zero":  true,
+                                                          "exe":  "/opt/QQ/qq",
+                                                          "gid":  [
+                                                                      65534,
+                                                                      65534,
+                                                                      65534,
+                                                                      65534
+                                                                  ],
+                                                          "no_new_privileges":  true,
+                                                          "pid":  85,
+                                                          "start_ticks":  258,
+                                                          "uid":  [
+                                                                      65534,
+                                                                      65534,
+                                                                      65534,
+                                                                      65534
+                                                                  ],
+                                                          "user_namespace_matches_supervisor":  true
+                                                      },
+                                                      {
+                                                          "cap_eff_zero":  true,
+                                                          "exe":  "/opt/QQ/qq",
+                                                          "gid":  [
+                                                                      65534,
+                                                                      65534,
+                                                                      65534,
+                                                                      65534
+                                                                  ],
+                                                          "no_new_privileges":  true,
+                                                          "pid":  96,
+                                                          "start_ticks":  262,
+                                                          "uid":  [
+                                                                      65534,
+                                                                      65534,
+                                                                      65534,
+                                                                      65534
+                                                                  ],
+                                                          "user_namespace_matches_supervisor":  false
+                                                      },
+                                                      {
+                                                          "cap_eff_zero":  true,
+                                                          "exe":  "/opt/QQ/qq",
+                                                          "gid":  [
+                                                                      65534,
+                                                                      65534,
+                                                                      65534,
+                                                                      65534
+                                                                  ],
+                                                          "no_new_privileges":  true,
+                                                          "pid":  183,
+                                                          "start_ticks":  436,
+                                                          "uid":  [
+                                                                      65534,
+                                                                      65534,
+                                                                      65534,
+                                                                      65534
+                                                                  ],
+                                                          "user_namespace_matches_supervisor":  true
+                                                      },
+                                                      {
+                                                          "cap_eff_zero":  true,
+                                                          "exe":  "/opt/QQ/qq",
+                                                          "gid":  [
+                                                                      65534,
+                                                                      65534,
+                                                                      65534,
+                                                                      65534
+                                                                  ],
+                                                          "no_new_privileges":  true,
+                                                          "pid":  257,
+                                                          "start_ticks":  599,
+                                                          "uid":  [
+                                                                      65534,
+                                                                      65534,
+                                                                      65534,
+                                                                      65534
+                                                                  ],
+                                                          "user_namespace_matches_supervisor":  true
+                                                      },
+                                                      {
+                                                          "cap_eff_zero":  true,
+                                                          "exe":  "/opt/QQ/qq",
+                                                          "gid":  [
+                                                                      65534,
+                                                                      65534,
+                                                                      65534,
+                                                                      65534
+                                                                  ],
+                                                          "no_new_privileges":  true,
+                                                          "pid":  331,
+                                                          "start_ticks":  739,
+                                                          "uid":  [
+                                                                      65534,
+                                                                      65534,
+                                                                      65534,
+                                                                      65534
+                                                                  ],
+                                                          "user_namespace_matches_supervisor":  true
+                                                      },
+                                                      {
+                                                          "cap_eff_zero":  true,
+                                                          "exe":  "/opt/QQ/qq",
+                                                          "gid":  [
+                                                                      65534,
+                                                                      65534,
+                                                                      65534,
+                                                                      65534
+                                                                  ],
+                                                          "no_new_privileges":  true,
+                                                          "pid":  405,
+                                                          "start_ticks":  902,
+                                                          "uid":  [
+                                                                      65534,
+                                                                      65534,
+                                                                      65534,
+                                                                      65534
+                                                                  ],
+                                                          "user_namespace_matches_supervisor":  true
+                                                      },
+                                                      {
+                                                          "cap_eff_zero":  true,
+                                                          "exe":  "/opt/QQ/qq",
+                                                          "gid":  [
+                                                                      65534,
+                                                                      65534,
+                                                                      65534,
+                                                                      65534
+                                                                  ],
+                                                          "no_new_privileges":  true,
+                                                          "pid":  479,
+                                                          "start_ticks":  1068,
+                                                          "uid":  [
+                                                                      65534,
+                                                                      65534,
+                                                                      65534,
+                                                                      65534
+                                                                  ],
+                                                          "user_namespace_matches_supervisor":  true
+                                                      },
+                                                      {
+                                                          "cap_eff_zero":  true,
+                                                          "exe":  "/opt/QQ/qq",
+                                                          "gid":  [
+                                                                      65534,
+                                                                      65534,
+                                                                      65534,
+                                                                      65534
+                                                                  ],
+                                                          "no_new_privileges":  true,
+                                                          "pid":  554,
+                                                          "start_ticks":  1232,
+                                                          "uid":  [
+                                                                      65534,
+                                                                      65534,
+                                                                      65534,
+                                                                      65534
+                                                                  ],
+                                                          "user_namespace_matches_supervisor":  true
+                                                      },
+                                                      {
+                                                          "cap_eff_zero":  true,
+                                                          "exe":  "/opt/QQ/qq",
+                                                          "gid":  [
+                                                                      65534,
+                                                                      65534,
+                                                                      65534,
+                                                                      65534
+                                                                  ],
+                                                          "no_new_privileges":  true,
+                                                          "pid":  628,
+                                                          "start_ticks":  1388,
+                                                          "uid":  [
+                                                                      65534,
+                                                                      65534,
+                                                                      65534,
+                                                                      65534
+                                                                  ],
+                                                          "user_namespace_matches_supervisor":  true
+                                                      },
+                                                      {
+                                                          "cap_eff_zero":  true,
+                                                          "exe":  "/opt/QQ/qq",
+                                                          "gid":  [
+                                                                      65534,
+                                                                      65534,
+                                                                      65534,
+                                                                      65534
+                                                                  ],
+                                                          "no_new_privileges":  true,
+                                                          "pid":  702,
+                                                          "start_ticks":  1556,
+                                                          "uid":  [
+                                                                      65534,
+                                                                      65534,
+                                                                      65534,
+                                                                      65534
+                                                                  ],
+                                                          "user_namespace_matches_supervisor":  true
+                                                      },
+                                                      {
+                                                          "cap_eff_zero":  true,
+                                                          "exe":  "/opt/QQ/qq",
+                                                          "gid":  [
+                                                                      65534,
+                                                                      65534,
+                                                                      65534,
+                                                                      65534
+                                                                  ],
+                                                          "no_new_privileges":  true,
+                                                          "pid":  777,
+                                                          "start_ticks":  1726,
+                                                          "uid":  [
+                                                                      65534,
+                                                                      65534,
+                                                                      65534,
+                                                                      65534
+                                                                  ],
+                                                          "user_namespace_matches_supervisor":  true
+                                                      },
+                                                      {
+                                                          "cap_eff_zero":  true,
+                                                          "exe":  "/opt/QQ/qq",
+                                                          "gid":  [
+                                                                      65534,
+                                                                      65534,
+                                                                      65534,
+                                                                      65534
+                                                                  ],
+                                                          "no_new_privileges":  true,
+                                                          "pid":  851,
+                                                          "start_ticks":  1888,
+                                                          "uid":  [
+                                                                      65534,
+                                                                      65534,
+                                                                      65534,
+                                                                      65534
+                                                                  ],
+                                                          "user_namespace_matches_supervisor":  true
+                                                      },
+                                                      {
+                                                          "cap_eff_zero":  true,
+                                                          "exe":  "/opt/QQ/qq",
+                                                          "gid":  [
+                                                                      65534,
+                                                                      65534,
+                                                                      65534,
+                                                                      65534
+                                                                  ],
+                                                          "no_new_privileges":  true,
+                                                          "pid":  925,
+                                                          "start_ticks":  2044,
+                                                          "uid":  [
+                                                                      65534,
+                                                                      65534,
+                                                                      65534,
+                                                                      65534
+                                                                  ],
+                                                          "user_namespace_matches_supervisor":  true
+                                                      },
+                                                      {
+                                                          "cap_eff_zero":  true,
+                                                          "exe":  "/opt/QQ/qq",
+                                                          "gid":  [
+                                                                      65534,
+                                                                      65534,
+                                                                      65534,
+                                                                      65534
+                                                                  ],
+                                                          "no_new_privileges":  true,
+                                                          "pid":  999,
+                                                          "start_ticks":  2200,
+                                                          "uid":  [
+                                                                      65534,
+                                                                      65534,
+                                                                      65534,
+                                                                      65534
+                                                                  ],
+                                                          "user_namespace_matches_supervisor":  true
+                                                      },
+                                                      {
+                                                          "cap_eff_zero":  true,
+                                                          "exe":  "/opt/QQ/qq",
+                                                          "gid":  [
+                                                                      65534,
+                                                                      65534,
+                                                                      65534,
+                                                                      65534
+                                                                  ],
+                                                          "no_new_privileges":  true,
+                                                          "pid":  1073,
+                                                          "start_ticks":  2365,
+                                                          "uid":  [
+                                                                      65534,
+                                                                      65534,
+                                                                      65534,
+                                                                      65534
+                                                                  ],
+                                                          "user_namespace_matches_supervisor":  true
+                                                      },
+                                                      {
+                                                          "cap_eff_zero":  true,
+                                                          "exe":  "/opt/QQ/qq",
+                                                          "gid":  [
+                                                                      65534,
+                                                                      65534,
+                                                                      65534,
+                                                                      65534
+                                                                  ],
+                                                          "no_new_privileges":  true,
+                                                          "pid":  1147,
+                                                          "start_ticks":  2526,
+                                                          "uid":  [
+                                                                      65534,
+                                                                      65534,
+                                                                      65534,
+                                                                      65534
+                                                                  ],
+                                                          "user_namespace_matches_supervisor":  true
+                                                      },
+                                                      {
+                                                          "cap_eff_zero":  true,
+                                                          "exe":  "/opt/QQ/qq",
+                                                          "gid":  [
+                                                                      65534,
+                                                                      65534,
+                                                                      65534,
+                                                                      65534
+                                                                  ],
+                                                          "no_new_privileges":  true,
+                                                          "pid":  1221,
+                                                          "start_ticks":  2685,
+                                                          "uid":  [
+                                                                      65534,
+                                                                      65534,
+                                                                      65534,
+                                                                      65534
+                                                                  ],
+                                                          "user_namespace_matches_supervisor":  true
+                                                      },
+                                                      {
+                                                          "cap_eff_zero":  true,
+                                                          "exe":  "/opt/QQ/qq",
+                                                          "gid":  [
+                                                                      65534,
+                                                                      65534,
+                                                                      65534,
+                                                                      65534
+                                                                  ],
+                                                          "no_new_privileges":  true,
+                                                          "pid":  1295,
+                                                          "start_ticks":  2848,
+                                                          "uid":  [
+                                                                      65534,
+                                                                      65534,
+                                                                      65534,
+                                                                      65534
+                                                                  ],
+                                                          "user_namespace_matches_supervisor":  true
+                                                      },
+                                                      {
+                                                          "cap_eff_zero":  true,
+                                                          "exe":  "/opt/QQ/qq",
+                                                          "gid":  [
+                                                                      65534,
+                                                                      65534,
+                                                                      65534,
+                                                                      65534
+                                                                  ],
+                                                          "no_new_privileges":  true,
+                                                          "pid":  1370,
+                                                          "start_ticks":  3012,
+                                                          "uid":  [
+                                                                      65534,
+                                                                      65534,
+                                                                      65534,
+                                                                      65534
+                                                                  ],
+                                                          "user_namespace_matches_supervisor":  true
+                                                      }
+                                                  ],
+                                 "qq_window_pid_identities":  [
+                                                                  {
+                                                                      "identity":  {
+                                                                                       "cap_eff_zero":  true,
+                                                                                       "exe":  "/opt/QQ/qq",
+                                                                                       "gid":  [
+                                                                                                   65534,
+                                                                                                   65534,
+                                                                                                   65534,
+                                                                                                   65534
+                                                                                               ],
+                                                                                       "no_new_privileges":  true,
+                                                                                       "pid":  35,
+                                                                                       "start_ticks":  186,
+                                                                                       "uid":  [
+                                                                                                   65534,
+                                                                                                   65534,
+                                                                                                   65534,
+                                                                                                   65534
+                                                                                               ],
+                                                                                       "user_namespace_matches_supervisor":  true
+                                                                                   },
+                                                                      "window_id":  4194305
+                                                                  },
+                                                                  {
+                                                                      "identity":  {
+                                                                                       "cap_eff_zero":  true,
+                                                                                       "exe":  "/opt/QQ/qq",
+                                                                                       "gid":  [
+                                                                                                   65534,
+                                                                                                   65534,
+                                                                                                   65534,
+                                                                                                   65534
+                                                                                               ],
+                                                                                       "no_new_privileges":  true,
+                                                                                       "pid":  35,
+                                                                                       "start_ticks":  186,
+                                                                                       "uid":  [
+                                                                                                   65534,
+                                                                                                   65534,
+                                                                                                   65534,
+                                                                                                   65534
+                                                                                               ],
+                                                                                       "user_namespace_matches_supervisor":  true
+                                                                                   },
+                                                                      "window_id":  2097155
+                                                                  }
+                                                              ],
+                                 "samples":  116,
+                                 "scope":  "private_pid_and_x_namespaces",
+                                 "titles_requested":  false,
+                                 "unavailable_samples":  0
+                             },
+    "independent_backend_ready":  false,
+    "interpretation":  "Default pristine app invocation observed; watchdog is experiment completion, not application failure or readiness. No nonce expected. Native login and full sendrecv remain outstanding.",
+    "invocation":  {
+                       "argv":  [
+                                    "/opt/QQ/qq"
+                                ],
+                       "electron_run_as_node_present":  false
+                   },
+    "isolation":  {
+                      "chroot":  false,
+                      "effective_capabilities_zero":  true,
+                      "ipc":  true,
+                      "mount":  true,
+                      "network":  true,
+                      "no_new_privileges":  true,
+                      "oldroot_detached":  true,
+                      "pid":  true,
+                      "pivotRoot":  true,
+                      "unprivileged":  true
+                  },
+    "mode":  "isolated_default_application_observation",
+    "native_binding_verified":  false,
+    "native_login_verified":  false,
+    "private_diagnostics_written":  false,
+    "private_display":  {
+                            "authenticated":  true,
+                            "effective_capabilities_zero":  true,
+                            "launch_attempted":  true,
+                            "ready":  true,
+                            "socket_owner_verified":  true,
+                            "stderr_prefix_bounded":  true,
+                            "stderr_present":  true,
+                            "tcp_disabled":  true,
+                            "unprivileged":  true
+                        },
+    "private_runtime_services":  {
+                                     "activation_disabled":  true,
+                                     "bus_ready":  true,
+                                     "daemon_stderr_present":  true,
+                                     "effective_capabilities_zero":  true,
+                                     "fontconfig_readonly":  true,
+                                     "launch_attempted":  true,
+                                     "socket_owner_verified":  true,
+                                     "unprivileged":  true
+                                 },
+    "production_cutover":  false,
+    "production_cutover_authorized":  false,
+    "qq_gui_identity_verified":  true,
+    "runtime_executed":  true,
+    "runtime_versions_verified":  false,
+    "safe_to_login":  false,
+    "status":  "observed",
+    "versions":  {
+
+                 },
+    "x_pid_attribution_limit":  "client_supplied_pid_correlated_with_same_sample_proc_exe_not_authenticated_client_ownership",
+    "observed_on":  "2026-10-29",
+    "software_provenance":  "Pristine Tencent QQ 3.2.34-53644 extraction as documented in QQ_ISOLATED_RUNTIME_LAB; no package or account-state modifications",
+    "evidence_limit":  "Only bounded proc PID/exe/start ticks, UID/GID/NNP/cap flags, user namespace equality and X tree/_NET_WM_PID were observed. X PID property is client-supplied correlation, not authenticated client ownership. No titles, login controls, images, messages or account state inspected. Native login/full sendrecv remain outstanding."
+}

@@ -397,10 +397,121 @@ def enter_filesystem_root(jail, filesystem_mode, pivot_tool=None, umount_tool=No
         raise ProbeError("old_root_detach_failed")
 
 
-def validate_private_display_mode(private_display, filesystem_mode, userns_control, native_load_control):
-    """Permit display only for QQ under a detached root, never for trusted controls."""
+def validate_private_display_mode(private_display, filesystem_mode, userns_control, native_load_control,
+                                  private_runtime_services=False):
+    """Permit private services only with the isolated QQ display and detached root."""
     if private_display and (filesystem_mode != "pivot-root" or userns_control or native_load_control):
         raise ProbeError("private_display_requires_pivot_runtime")
+    if private_runtime_services and not private_display:
+        raise ProbeError("private_runtime_services_require_private_display")
+
+
+def private_bus_configuration():
+    """Provide a minimal session bus with no service directories or activation."""
+    return ("<!DOCTYPE busconfig PUBLIC '-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN' "
+            "'http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd'>\n"
+            "<busconfig><type>session</type><listen>unix:path=/tmp/runtime/bus</listen>"
+            "<auth>EXTERNAL</auth><policy context='default'>"
+            "<allow send_destination='*'/><allow eavesdrop='true'/>"
+            "<allow own='*'/></policy></busconfig>\n")
+
+
+@contextmanager
+def private_runtime_services_session(report, env):
+    """Start only a jailed, cap-zero private D-Bus daemon, never host session bus."""
+    runtime = Path("/tmp/runtime")
+    runtime.mkdir(mode=0o700)
+    os.chown(runtime, 65534, 65534)
+    configuration = runtime / "session.conf"
+    configuration.write_text(private_bus_configuration(), encoding="ascii")
+    configuration.chmod(0o600)
+    os.chown(configuration, 65534, 65534)
+    env = dict(env, DBUS_SESSION_BUS_ADDRESS="unix:path=/tmp/runtime/bus",
+               XDG_RUNTIME_DIR="/tmp/runtime", FONTCONFIG_FILE="/etc/fonts/fonts.conf",
+               FONTCONFIG_PATH="/etc/fonts")
+    report["private_runtime_services"] = {"launch_attempted": True, "bus_ready": False,
+                                          "fontconfig_readonly": True, "activation_disabled": True}
+    with Path("/tmp/dbus-stderr").open("x+b") as errors:
+        process = subprocess.Popen(
+            ["/usr/bin/dbus-daemon", "--nofork", "--nopidfile",
+             "--config-file=/tmp/runtime/session.conf"], env=env,
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=errors,
+            preexec_fn=drop_runtime_privileges, close_fds=True)
+        try:
+            deadline = time.monotonic() + 2
+            while time.monotonic() < deadline:
+                if process.poll() is not None:
+                    raise ProbeError("private_bus_start_failed")
+                try:
+                    info = (runtime / "bus").lstat()
+                except FileNotFoundError:
+                    time.sleep(0.025)
+                    continue
+                if not stat.S_ISSOCK(info.st_mode) or info.st_uid != 65534:
+                    raise ProbeError("private_bus_socket_invalid")
+                report["private_runtime_services"].update(bus_ready=True, socket_owner_verified=True,
+                                                           unprivileged=True, effective_capabilities_zero=True)
+                yield env
+                break
+            else:
+                raise ProbeError("private_bus_start_failed")
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=1)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=1)
+            errors.seek(0)
+            report["private_runtime_services"]["daemon_stderr_present"] = bool(errors.read(PRIVATE_STDERR_LIMIT))
+
+
+def private_window_count(env):
+    """Count X root children only; window titles and X output never enter reports."""
+    try:
+        with Path("/tmp/xwindows").open("w+b") as output:
+            result = subprocess.run(["/usr/bin/xwininfo", "-root", "-children", "-display", ":99"],
+                                    env=env, timeout=1, check=False, stdin=subprocess.DEVNULL,
+                                    stdout=output, stderr=subprocess.DEVNULL, close_fds=True,
+                                    preexec_fn=drop_runtime_privileges)
+            if result.returncode == 0:
+                output.seek(0)
+                data = output.read(32769)
+                if len(data) <= 32768:
+                    match = re.search(rb"\b([0-9]{1,4}) children:", data)
+                    if match:
+                        return int(match.group(1))
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return None
+
+
+def run_observed_qq(command, env, output, errors, timeout, report):
+    """Watch a QQ child and count only anonymous X root children under a watchdog."""
+    baseline = private_window_count(env)
+    report["private_window_observation"] = {"baseline_children": baseline,
+                                            "maximum_children": baseline, "sampled": baseline is not None}
+    process = subprocess.Popen(command, env=env, stdin=subprocess.DEVNULL, stdout=output,
+                               stderr=errors, preexec_fn=drop_runtime_privileges, close_fds=True)
+    deadline = time.monotonic() + timeout
+    try:
+        while True:
+            returncode = process.poll()
+            if returncode is not None:
+                return subprocess.CompletedProcess(command, returncode)
+            if time.monotonic() >= deadline:
+                raise subprocess.TimeoutExpired(command, timeout)
+            count = private_window_count(env)
+            if count is not None:
+                observed = report["private_window_observation"]
+                observed["sampled"] = True
+                observed["maximum_children"] = max(observed["maximum_children"] or 0, count)
+            time.sleep(0.2)
+    finally:
+        if process.poll() is None:
+            process.kill()
+        process.wait(timeout=1)
 
 
 def private_display_authority(cookie):
@@ -474,8 +585,13 @@ def private_display_session(report):
 
 def child_probe(root, jail, nonce, parent_ids, mount, diagnostic_fd=None, *, userns_control=False,
                 filesystem_mode="chroot", pivot_tool=None, umount_tool=None, native_load_control=False,
-                private_display=False, extended_startup=False):
+                private_display=False, extended_startup=False, private_runtime_services=False,
+                application_observer=None):
     """Build the shared isolation, then probe QQ or a trusted namespace control.
+
+    application_observer is a trusted internal callable, never a CLI script or
+    arbitrary command. It observes the pristine default app only under the full
+    pivot/private-services/30-second boundary; normal probe behavior is unchanged.
 
     This helper is PID 1 in its new namespace. On exit the kernel kills remaining
     descendants. No QQ process starts unless all isolation setup has succeeded.
@@ -487,9 +603,16 @@ def child_probe(root, jail, nonce, parent_ids, mount, diagnostic_fd=None, *, use
         for name, tool in (("pivot_root", pivot_tool), ("umount", umount_tool)):
             if not tool or not Path(tool).is_absolute() or tool != shutil.which(name, path="/usr/sbin:/usr/bin:/sbin:/bin"):
                 raise ProbeError("pivot_tools_missing_or_untrusted")
-    validate_private_display_mode(private_display, filesystem_mode, userns_control, native_load_control)
+    validate_private_display_mode(private_display, filesystem_mode, userns_control, native_load_control,
+                                  private_runtime_services)
     if extended_startup and not private_display:
         raise ProbeError("extended_startup_requires_private_display")
+    if application_observer is not None:
+        # An app callback cannot weaken isolation or become an arbitrary command API.
+        if (not callable(application_observer) or filesystem_mode != "pivot-root"
+                or not private_display or not private_runtime_services or not extended_startup
+                or userns_control or native_load_control):
+            raise ProbeError("application_observer_requires_full_private_runtime")
     report = base_report(userns_control=userns_control, native_load_control=native_load_control)
     if userns_control and native_load_control:
         report.update(status="refused", errors=["mutually_exclusive_controls"])
@@ -523,6 +646,15 @@ def child_probe(root, jail, nonce, parent_ids, mount, diagnostic_fd=None, *, use
         if Path(source).is_dir():
             (jail / source[1:]).mkdir(exist_ok=True)
             bind_readonly(source, jail / source[1:], mount)
+    if private_runtime_services:
+        # Fontconfig's host configuration is software-only; do not bind /etc itself.
+        fonts = Path("/etc/fonts")
+        if not fonts.is_dir() or fonts.is_symlink() or not (fonts / "fonts.conf").is_file():
+            raise ProbeError("private_fontconfig_unavailable")
+        (jail / "etc" / "fonts").mkdir(parents=True)
+        bind_readonly(fonts, jail / "etc/fonts", mount)
+        if not Path("/usr/bin/dbus-daemon").is_file() or not Path("/usr/bin/xwininfo").is_file():
+            raise ProbeError("private_service_tools_missing")
     for directory in ("tmp", "run"):
         run_checked([mount, "-t", "tmpfs", "-o", "nosuid,nodev,noexec,size=16m,mode=1777",
                      "tmpfs", str(jail / directory)])
@@ -572,6 +704,19 @@ def child_probe(root, jail, nonce, parent_ids, mount, diagnostic_fd=None, *, use
             except (ProbeError, OSError, subprocess.SubprocessError):
                 report.update(status="failed", errors=["private_display_start_failed"])
                 return report
+        if private_runtime_services:
+            try:
+                runtime_env = runtime_stack.enter_context(private_runtime_services_session(report, runtime_env))
+            except (ProbeError, OSError, subprocess.SubprocessError):
+                report.update(status="failed", errors=["private_runtime_services_start_failed"])
+                return report
+        if application_observer is not None:
+            # A packaged Electron launcher may ignore RUN_AS_NODE and /probe.js;
+            # default-app observation therefore never supplies either of them.
+            runtime_env.pop("ELECTRON_RUN_AS_NODE", None)
+            report.update(mode="isolated_default_application_observation")
+            application_observer(["/opt/QQ/qq"], runtime_env, output, errors, 30, report)
+            return report
         # Same chroot, UID, NNP and cap-zero hook; only the trusted command differs.
         command = (["/usr/bin/unshare", "--user", "--map-root-user", "/usr/bin/true"]
                    if userns_control else (["/usr/bin/node", "/probe.js"] if native_load_control else ["/opt/QQ/qq", "/probe.js"]))
@@ -579,10 +724,12 @@ def child_probe(root, jail, nonce, parent_ids, mount, diagnostic_fd=None, *, use
         failure_prefix = "userns_control" if userns_control else ("native_control" if native_load_control else "runtime")
         report["control_launch_attempted" if userns_control else ("native_control_launch_attempted" if native_load_control else "runtime_launch_attempted")] = True
         try:
-            result = subprocess.run(command, env=runtime_env,
-                                    stdin=subprocess.DEVNULL, stdout=output,
-                                    stderr=errors, timeout=30 if extended_startup else 10, check=False,
-                                    preexec_fn=drop_runtime_privileges, close_fds=True)
+            result = (run_observed_qq(command, runtime_env, output, errors,
+                                      30 if extended_startup else 10, report)
+                      if private_runtime_services else subprocess.run(
+                          command, env=runtime_env, stdin=subprocess.DEVNULL, stdout=output,
+                          stderr=errors, timeout=30 if extended_startup else 10, check=False,
+                          preexec_fn=drop_runtime_privileges, close_fds=True))
         except subprocess.TimeoutExpired:
             report.update(status="failed", errors=[failure_prefix + "_timeout"])
             report[executed_key] = True
@@ -661,7 +808,7 @@ def child_probe(root, jail, nonce, parent_ids, mount, diagnostic_fd=None, *, use
 
 def probe(qq_root, execute=False, private_diagnostics=None, *, userns_control=False,
           filesystem_mode="chroot", native_load_control=False, private_display=False,
-          extended_startup=False):
+          extended_startup=False, private_runtime_services=False):
     """Validate by default; explicit pivot/display modes never change execution consent."""
     report = base_report(userns_control=userns_control, native_load_control=native_load_control)
     if userns_control and native_load_control:
@@ -672,7 +819,8 @@ def probe(qq_root, execute=False, private_diagnostics=None, *, userns_control=Fa
         report.update(status="refused", errors=["invalid_filesystem_mode"])
         return report
     try:
-        validate_private_display_mode(private_display, filesystem_mode, userns_control, native_load_control)
+        validate_private_display_mode(private_display, filesystem_mode, userns_control, native_load_control,
+                                      private_runtime_services)
         if extended_startup and not private_display:
             raise ProbeError("extended_startup_requires_private_display")
     except ProbeError as exc:
@@ -727,6 +875,8 @@ def probe(qq_root, execute=False, private_diagnostics=None, *, userns_control=Fa
                 args.append("--private-display")
             if extended_startup:
                 args.append("--extended-startup")
+            if private_runtime_services:
+                args.append("--private-runtime-services")
             private_kwargs = {}
             if diagnostic_fd is not None:
                 args.extend(["--private-diagnostic-fd", str(diagnostic_fd)])
@@ -765,6 +915,22 @@ def probe(qq_root, execute=False, private_diagnostics=None, *, userns_control=Fa
                 category = child["private_display"].get("failure_category")
                 if category in ("server_exited_before_ready", "server_socket_timeout"):
                     report["private_display"]["failure_category"] = category
+            if private_runtime_services:
+                if isinstance(child.get("private_runtime_services"), dict):
+                    allowed_services = ("launch_attempted", "bus_ready", "socket_owner_verified",
+                                        "unprivileged", "effective_capabilities_zero",
+                                        "fontconfig_readonly", "activation_disabled",
+                                        "daemon_stderr_present")
+                    report["private_runtime_services"] = {
+                        key: child["private_runtime_services"][key] for key in allowed_services
+                        if type(child["private_runtime_services"].get(key)) is bool}
+                if isinstance(child.get("private_window_observation"), dict):
+                    window = child["private_window_observation"]
+                    if (type(window.get("sampled")) is bool and
+                            all(value is None or type(value) is int and 0 <= value <= 9999
+                                for value in (window.get("baseline_children"), window.get("maximum_children")))):
+                        report["private_window_observation"] = {
+                            key: window[key] for key in ("sampled", "baseline_children", "maximum_children")}
             if native_load_control:
                 for key in ("native_control_executed", "native_control_launch_attempted", "native_control_exit_code", "native_load_control_verified", "system_node_versions", "native_candidates"):
                     if key in child:
@@ -806,6 +972,8 @@ def main(argv=None):
                         help="Private authenticated Xvfb inside pivot-root runtime only; no host display")
     parser.add_argument("--extended-startup", action="store_true",
                         help="Opt-in 30-second QQ observation, only with private authenticated display")
+    parser.add_argument("--private-runtime-services", action="store_true",
+                        help="Opt-in jailed no-activation session bus and read-only fonts; requires private display/pivot root")
     parser.add_argument("--report", type=Path)
     parser.add_argument("--private-diagnostics", type=Path,
                         help="New outside-repository owner-only raw stderr file (16 KiB max); sensitive, do not share")
@@ -819,7 +987,7 @@ def main(argv=None):
     # Static inspection is a separate offline mode: reject all runtime options even
     # when the caller explicitly grants --execute (consent cannot alter this gate).
     if args.bootstrap_readiness:
-        if (args.child or args.execute or args.private_display or args.extended_startup or args.private_diagnostics
+        if (args.child or args.execute or args.private_display or args.extended_startup or args.private_runtime_services or args.private_diagnostics
                 or args.filesystem_mode != "chroot" or args.report is not None):
             parser.error("bootstrap-readiness permits only --qq-root")
         report = inspect_bootstrap(args.qq_root)
@@ -835,7 +1003,8 @@ def main(argv=None):
                                  filesystem_mode=args.filesystem_mode,
                                  pivot_tool=args.pivot_tool, umount_tool=args.umount_tool,
                                   native_load_control=args.native_load_control,
-                                  private_display=args.private_display, extended_startup=args.extended_startup)
+                                  private_display=args.private_display, extended_startup=args.extended_startup,
+                                   private_runtime_services=args.private_runtime_services)
         except Exception:
             # Child errors are intentionally fixed and redacted; no host traceback.
             report.update(status="failed", errors=["isolation_setup_or_probe_failed"])
@@ -851,6 +1020,8 @@ def main(argv=None):
             kwargs["private_display"] = True
         if args.extended_startup:
             kwargs["extended_startup"] = True
+        if args.private_runtime_services:
+            kwargs["private_runtime_services"] = True
         if args.private_diagnostics is not None:
             kwargs["private_diagnostics"] = args.private_diagnostics
         report = probe(args.qq_root, **kwargs)

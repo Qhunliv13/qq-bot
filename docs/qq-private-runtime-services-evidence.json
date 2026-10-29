@@ -1,0 +1,13 @@
+{
+  "experiment": "opt_in_private_runtime_services",
+  "observed_on": "2026-10-29",
+  "software": "pristine software-only Tencent QQ 3.2.34-53644 extraction; provenance per lab document",
+  "invocation": "--execute --filesystem-mode pivot-root --private-display --private-runtime-services --extended-startup",
+  "boundary": {"network_namespace": true, "mount_namespace": true, "pid_namespace": true, "ipc_namespace": true, "old_root_detached": true, "read_only_qq_and_system_binds": true, "no_host_session_socket_or_home": true, "qq_uid_gid": 65534, "effective_capabilities_zero": true, "no_new_privileges": true},
+  "private_display": {"ready": true, "authenticated": true, "tcp_disabled": true, "socket_owner_verified": true},
+  "private_runtime_services": {"launch_attempted": true, "bus_ready": true, "socket_owner_verified": true, "unprivileged": true, "effective_capabilities_zero": true, "fontconfig_readonly": true, "activation_disabled": true, "daemon_stderr_present": true},
+  "private_window_observation": {"sampled": true, "baseline_children": null, "maximum_children": 3, "qq_ownership_verified": false},
+  "runtime": {"qq_invoked": true, "watchdog_30_seconds_expired": true, "runtime_record_present": false, "runtime_versions_verified": false, "diagnostic_categories": {"dbus_unavailable": true, "fontconfig_unavailable": false, "shared_memory_unavailable": false, "crash_reporter_activity": true}},
+  "interpretation": "Private session bus socket became ready and the earlier fontconfig category cleared; DBus diagnostic remains and its source is unproven. X root children are not attributable to QQ because no baseline/owner proof exists. Absence of a nonce record does not prove QQ did not bootstrap; the packaged launcher may ignore /probe.js. No native/session/login/backend readiness is established.",
+  "native_binding_verified": false, "independent_backend_ready": false, "safe_to_login": false, "production_cutover": false
+}

@@ -176,6 +176,10 @@ class ClickGate:
                 picture, digest = self._image(await screenshot_callable())
             except Exception as exc:
                 return {"ok": False, "error": "screenshot_unavailable", "detail": str(exc)}
+            # Capturing/decoding can itself span the deadline. Recheck after
+            # that await so an old checkpoint never authorizes a delayed click.
+            if time.monotonic() >= expires:
+                return {"ok": False, "error": "preview_expired"}
             if digest != expected_digest or not 0 <= x < picture.width or not 0 <= y < picture.height:
                 return {"ok": False, "error": "screen_changed"}
             try:

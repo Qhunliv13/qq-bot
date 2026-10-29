@@ -122,6 +122,25 @@ class ClickGateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.approve(preview))["error"], "no_pending_preview")
         self.assertEqual(self.clicks, [])
 
+    async def test_capture_crossing_deadline_cannot_execute_click(self):
+        """A fresh screen capture is insufficient when the ticket expires during it."""
+        from unittest.mock import patch
+        with patch.object(gate_module.time, "monotonic", return_value=100):
+            preview = await self.checkpoint()
+        clock = {"now": 150}
+
+        async def delayed_screen():
+            """Complete capture only after the previously valid deadline passes."""
+            clock["now"] = 161
+            return await self.screenshot()
+
+        with patch.object(gate_module.time, "monotonic", side_effect=lambda: clock["now"]):
+            result = await self.gate.confirm(preview["ticket"], delayed_screen, self.click,
+                x=20, y=25, screen_sha256=preview["screen_sha256"], viewed=True)
+        self.assertEqual(result["error"], "preview_expired")
+        self.assertEqual(self.clicks, [])
+        self.assertEqual((await self.approve(preview))["error"], "no_pending_preview")
+
     async def test_bad_png_bounds_and_fail_closed_screenshots(self):
         """Neither malformed images nor failed backend captures create tickets."""
         for x, y in ((-1, 0), (80, 0), (0, 60), (True, 0), (0, False)):
