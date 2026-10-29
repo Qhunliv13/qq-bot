@@ -24,6 +24,10 @@ MAX_THREADS = 64
 # Inspect at most 256 numeric descriptor entries plus one truncation sentinel.
 MAX_FD = 256
 DETAILED_RESOURCES = False
+# Only the fixed waits mode opts in; eight first-observed symbols bound each sample.
+WAIT_SYMBOLS = False
+MAX_SYMBOLS = 8
+WAIT_CATEGORIES = ("symbol", "numeric_zero", "numeric_nonzero", "empty", "invalid_shape", "denied", "unavailable")
 MAIN_PID = None
 MAIN_START = None
 WINDOW_SAMPLER = None
@@ -101,7 +105,51 @@ def fd_resources(root):
     return result
 
 
-def resource_threads(root):
+def project_wait(raw):
+    """Expose only bounded ASCII public symbols or fixed formats, never addresses/text."""
+    if len(raw) > 128:
+        return {"category": "invalid_shape"}
+    value = raw.strip(b" \t\r\n\v\f")
+    if not value:
+        return {"category": "empty"}
+    # Numeric-looking all-alpha hex must be masked before applying the symbol regex.
+    numeric = (value == b"0" or re.fullmatch(rb"0[xX][0-9a-fA-F]+", value)
+               or re.fullmatch(rb"[0-9a-fA-F]{8,}", value))
+    if numeric:
+        digits = value[2:] if value[:2].lower() == b"0x" else value
+        return {"category": "numeric_zero" if not digits.strip(b"0") else "numeric_nonzero"}
+    if re.fullmatch(rb"[A-Za-z_][A-Za-z0-9_]{0,95}", value):
+        return {"category": "symbol", "symbol": value.decode("ascii")}
+    return {"category": "invalid_shape"}
+
+
+def read_wait(path):
+    """Read at most 128 bytes, conservatively reject a full buffer to prevent truncation."""
+    try:
+        with path.open("rb") as stream:
+            raw = stream.read(128)
+        # A valid symbol is <=96 bytes; a full read cannot establish complete shape.
+        return {"category": "invalid_shape"} if len(raw) == 128 else project_wait(raw)
+    except PermissionError:
+        return {"category": "denied"}
+    except OSError:
+        return {"category": "unavailable"}
+
+
+def aggregate_wait(aggregate, projected):
+    """Retain eight first-observed symbol keys and count all overflow observations."""
+    aggregate["categories"][projected["category"]] += 1
+    if projected["category"] != "symbol":
+        return
+    key = "symbol:" + projected["symbol"]
+    symbols = aggregate["symbols"]
+    if key in symbols or len(symbols) < MAX_SYMBOLS:
+        symbols[key] = symbols.get(key, 0) + 1
+    else:
+        aggregate["overflow_count"] += 1
+
+
+def resource_threads(root, *, waits=None):
     """Aggregate visibility without IDs/symbols, retaining read failures despite stat races."""
     threads = []
     counts = dict.fromkeys(("sampled", "wchan_zero", "wchan_empty", "wchan_read_denied",
@@ -113,7 +161,18 @@ def resource_threads(root):
             counts["sampled"] += 1
             category = "unknown"
             try:
-                raw = bounded_text(entry / "wchan", 128)
+                if waits is not None:
+                    projected = read_wait(entry / "wchan")
+                    aggregate_wait(waits, projected)
+                    if projected["category"] == "denied":
+                        raise PermissionError
+                    if projected["category"] == "unavailable":
+                        raise OSError
+                    # Existing coarse fields remain descriptive, not guessed wait causes.
+                    raw = (projected.get("symbol", "") if projected["category"] in ("symbol", "empty")
+                           else "0" if projected["category"] == "numeric_zero" else "other")
+                else:
+                    raw = bounded_text(entry / "wchan", 128)
                 value = raw.strip()
                 # Per-thread booleans are immediately aggregated, never persisted with TIDs.
                 zero, empty = value == "0", value == ""
@@ -155,7 +214,14 @@ def trusted_sample():
         return result
     threads = []
     if DETAILED_RESOURCES:
-        threads, visibility, task_readable = resource_threads(root)
+        waits = ({"categories": dict.fromkeys(WAIT_CATEGORIES, 0), "symbols": {}, "overflow_count": 0}
+                 if WAIT_SYMBOLS else None)
+        threads, visibility, task_readable = resource_threads(root, waits=waits)
+        if WAIT_SYMBOLS:
+            # Both main and task observations are discarded if the outer identity guard fails.
+            main["main_wait"] = read_wait(root / "wchan")
+            waits["symbols"] = dict(sorted(waits["symbols"].items()))
+            main["task_waits"] = waits
         # tail starts at Linux stat field 3: flags field 9 is tail[6], not tail[9].
         try:
             main["flags"] = int(raw_stat[raw_stat.rfind(")") + 2:].split()[6])
@@ -177,6 +243,14 @@ def trusted_sample():
                 continue
     main.update(threads=threads, threads_truncated=main["num_threads"] > MAX_THREADS,
                 limits=numeric_limits(root))
+    if WAIT_SYMBOLS:
+        # New mode aggregates existing coarse facts too: 30x64 records plus symbols
+        # would otherwise exceed the unchanged helper cap. Old schemas are untouched.
+        main["thread_summary"] = {"states": dict.fromkeys("RSDZTtXxKWPIN", 0),
+                                  "wait_categories": dict.fromkeys(("unknown", "futex", "poll", "wait", "read", "other"), 0)}
+        for thread in main.pop("threads"):
+            main["thread_summary"]["states"][thread["state"]] += 1
+            main["thread_summary"]["wait_categories"][thread["wait_category"]] += 1
     x = None
     try:
         if WINDOW_SAMPLER is not None:
@@ -231,9 +305,12 @@ def summarize(records, ticks_per_second):
     return result
 
 
-def observe_wait(process, env, timeout=30, report=None, *, window_sampler=None, detailed_resources=False):
+def observe_wait(process, env, timeout=30, report=None, *, window_sampler=None, detailed_resources=False,
+                 wait_symbols=False):
     """Observe fixed prepared/vendor waits with <=30 external samples; retain deadline."""
-    global MAIN_PID, MAIN_START, WINDOW_SAMPLER, DETAILED_RESOURCES
+    global MAIN_PID, MAIN_START, WINDOW_SAMPLER, DETAILED_RESOURCES, WAIT_SYMBOLS
+    if type(wait_symbols) is not bool or (wait_symbols and not detailed_resources):
+        raise control.runtime.ProbeError("wait_symbols_invalid")
     if type(detailed_resources) is not bool:
         raise control.runtime.ProbeError("resource_detail_invalid")
     if window_sampler is not None:
@@ -249,6 +326,7 @@ def observe_wait(process, env, timeout=30, report=None, *, window_sampler=None, 
         raise control.runtime.ProbeError("stall_wait_bounds_invalid")
     MAIN_PID, MAIN_START, WINDOW_SAMPLER = process.pid, None, window_sampler
     DETAILED_RESOURCES = detailed_resources
+    WAIT_SYMBOLS = wait_symbols
     records = []
     start = time.monotonic()
     original = application.sample_identity
@@ -282,6 +360,7 @@ def observe_wait(process, env, timeout=30, report=None, *, window_sampler=None, 
         report["stall_observation"]["summary"] = summarize(records, os.sysconf("SC_CLK_TCK"))
         MAIN_PID, MAIN_START, WINDOW_SAMPLER = None, None, None
         DETAILED_RESOURCES = False
+        WAIT_SYMBOLS = False
 
 
 def detailed_categories(bounded):
