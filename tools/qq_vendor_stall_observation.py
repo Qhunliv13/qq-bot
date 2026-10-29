@@ -22,6 +22,7 @@ MAX_SAMPLES = 30
 MAX_THREADS = 64
 MAIN_PID = None
 MAIN_START = None
+WINDOW_SAMPLER = None
 ERROR_TOKENS = {
     "too_many_open_files": (b"too many open files", b"emfile", b"enfile"),
     "file_size_limit": (b"file size limit", b"file too large", b"efbig"),
@@ -105,16 +106,20 @@ def trusted_sample():
                 limits=numeric_limits(root))
     x = None
     try:
-        x = application.PrivateXIdentity()
-        windows = x.snapshot()
-        matching = [item for item in windows["qq_pid_properties"]
-                    if item["identity"]["pid"] == MAIN_PID
-                    and item["identity"]["start_ticks"] == before["start_ticks"]]
-        # No additional role properties are queried: count-only is deliberately honest.
-        result["windows"] = {"root_children": windows["root_children"],
-                             "visited_windows": windows["visited_windows"],
-                             "main_pid_correlated_windows": len(matching),
-                             "dialog_presence": None, "roles_queried": False}
+        if WINDOW_SAMPLER is not None:
+            # A fixed preimported reader extends metadata only, not the jail/waiter.
+            result["windows"] = WINDOW_SAMPLER(before)
+        else:
+            x = application.PrivateXIdentity()
+            windows = x.snapshot()
+            matching = [item for item in windows["qq_pid_properties"]
+                        if item["identity"]["pid"] == MAIN_PID
+                        and item["identity"]["start_ticks"] == before["start_ticks"]]
+            # Existing stall mode remains count-only with no role property queries.
+            result["windows"] = {"root_children": windows["root_children"],
+                                 "visited_windows": windows["visited_windows"],
+                                 "main_pid_correlated_windows": len(matching),
+                                 "dialog_presence": None, "roles_queried": False}
     except (OSError, ValueError, control.runtime.ProbeError):
         pass
     finally:
@@ -153,12 +158,21 @@ def summarize(records, ticks_per_second):
     return result
 
 
-def observe_wait(process, env, timeout=30, report=None):
+def observe_wait(process, env, timeout=30, report=None, *, window_sampler=None):
     """Replace only vendor_stall wait with <=30 one-second external bounded samples."""
-    global MAIN_PID, MAIN_START
+    global MAIN_PID, MAIN_START, WINDOW_SAMPLER
+    if window_sampler is not None:
+        try:
+            from tools import qq_private_window_roles
+        except ModuleNotFoundError as exc:
+            if exc.name != "tools":
+                raise
+            import qq_private_window_roles
+        if window_sampler is not qq_private_window_roles.sample_roles:
+            raise control.runtime.ProbeError("window_sampler_invalid")
     if timeout != 30 or report is None:
         raise control.runtime.ProbeError("stall_wait_bounds_invalid")
-    MAIN_PID, MAIN_START = process.pid, None
+    MAIN_PID, MAIN_START, WINDOW_SAMPLER = process.pid, None, window_sampler
     records = []
     start = time.monotonic()
     original = application.sample_identity
@@ -167,7 +181,7 @@ def observe_wait(process, env, timeout=30, report=None):
     report["stall_observation"] = {"samples": records, "maximum_samples": MAX_SAMPLES,
                                    "maximum_threads_per_sample": MAX_THREADS,
                                    "sample_interval_seconds": 1, "private_pid_scope_only": True,
-                                   "window_roles_queried": False}
+                                   "window_roles_queried": window_sampler is not None}
     try:
         for index in range(MAX_SAMPLES):
             target = start + index
@@ -190,7 +204,7 @@ def observe_wait(process, env, timeout=30, report=None):
     finally:
         application.sample_identity = original
         report["stall_observation"]["summary"] = summarize(records, os.sysconf("SC_CLK_TCK"))
-        MAIN_PID, MAIN_START = None, None
+        MAIN_PID, MAIN_START, WINDOW_SAMPLER = None, None, None
 
 
 def capture_categories(output, errors, report):

@@ -56,6 +56,13 @@ failure records remain historical evidence, not the latest capability assessment
   its bus or proving the later stall's cause. No memory, titles, screenshots, session
   state, host sockets or production process were inspected. This narrows observations,
   not the unresolved root cause or account-login readiness.
+- `qq-private-window-roles-evidence.json` adds bounded metadata-only window sampling
+  in a separate unchanged isolated run. Two actual-main-PID/starttime-correlated
+  windows are unmapped; one is NORMAL and the other has an unknown type. No DIALOG,
+  UTILITY or transient-for relationship is observed in those windows. Class text is
+  immediately reduced to fixed booleans, never exported; titles, screenshots and
+  input are never requested. This fails to support a visible main-owned modal-dialog
+  explanation, but does not rule out all internal/native/vendor-handled waits.
 
 An inspector attempt did not discover an endpoint; it is not the successful loading
 path and does not identify why this build did not expose the requested endpoint.
