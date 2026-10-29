@@ -26,6 +26,18 @@ failure records remain historical evidence, not the latest capability assessment
   Native session configuration, real account authentication, session-ready callbacks,
   message send/receive, full feature parity and production cutover are **not verified**.
 
+- `qq-native-connect-evidence.json` records an actual **boolean return** from one
+  offline connect request at its synchronous `after_connect` checkpoint. All seven
+  observed callback counts are zero; the later eight-second timer did not finish before
+  the 30-second watchdog. This does not prove callbacks were registered or explain why
+  the timed wait did not finish.
+- `qq-native-ready-evidence.json` separately waits for standard Electron readiness
+  **before loading the wrapper**. A zero-delay JS timer fires, but `app.isReady()` stays
+  false and `app.whenReady()` does not resolve during the measured window. No native
+  load/init/connect is reached in that experiment. Therefore, do not label the prior
+  timeout a demonstrated native-connect block or ABI error; the custom-main host
+  lifecycle still needs evidence-based integration with Tencent's normal bootstrap.
+
 An inspector attempt did not discover an endpoint; it is not the successful loading
 path and does not identify why this build did not expose the requested endpoint.
 The corrected normal Electron main path uses an existing **relative** launcher file:
