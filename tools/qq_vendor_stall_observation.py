@@ -26,6 +26,8 @@ MAX_FD = 256
 DETAILED_RESOURCES = False
 # Only the fixed waits mode opts in; eight first-observed symbols bound each sample.
 WAIT_SYMBOLS = False
+# Exit metadata is opt-in and never changes older projection schemas.
+EXIT_STATUS = False
 MAX_SYMBOLS = 8
 WAIT_CATEGORIES = ("symbol", "numeric_zero", "numeric_nonzero", "empty", "invalid_shape", "denied", "unavailable")
 MAIN_PID = None
@@ -50,14 +52,53 @@ def bounded_text(path, limit=4096):
     return value
 
 
-def parse_stat(raw):
-    """Discard comm, projecting only state, numeric CPU/thread counts and identity."""
+def parse_stat(raw, *, exit_status=False):
+    """Discard comm; optionally retain field52 raw status, not inferred crash causes."""
+    if type(exit_status) is not bool:
+        raise ValueError("exit_status_invalid")
     tail = raw[raw.rfind(")") + 2:].split()
     state = tail[0]
     if state not in "RSDZTtXxKWPIN":
         raise ValueError("proc_state_invalid")
-    return {"state": state, "utime_ticks": int(tail[11]), "stime_ticks": int(tail[12]),
-            "num_threads": int(tail[17]), "start_ticks": int(tail[19])}
+    result = {"state": state, "utime_ticks": int(tail[11]), "stime_ticks": int(tail[12]),
+              "num_threads": int(tail[17]), "start_ticks": int(tail[19])}
+    if exit_status:
+        # proc_pid_stat(5): field3 begins tail; field52 is index49, [PT] may hide as zero.
+        value = tail[49] if len(tail) > 49 else ""
+        result["exit_code"] = (int(value) if re.fullmatch(r"[0-9]{1,5}", value)
+                               and int(value) <= 65535 else None)
+    return result
+
+
+def project_core_dumping(raw):
+    """Keep only one literal CoreDumping 0/1; missing/invalid/duplicate means unknown."""
+    if len(raw) >= 16384:
+        return None
+    values = [line.partition(b":")[2].strip(b" \t\r") for line in raw.split(b"\n")
+              if line.partition(b":")[0].strip(b" \t\r") == b"CoreDumping"]
+    return int(values[0]) if len(values) == 1 and values[0] in (b"0", b"1") else None
+
+
+def read_core_dumping(root):
+    """Read at most16KiB, rejecting full buffers rather than parsing truncated status."""
+    try:
+        with (root / "status").open("rb") as stream:
+            return project_core_dumping(stream.read(16384))
+    except OSError:
+        return None
+
+
+def aggregate_exit(aggregate, value):
+    """Keep eight numeric status keys and overflow counts; never thread identifiers."""
+    if value is None:
+        aggregate["unavailable_count"] += 1
+        return
+    key = str(value)
+    counts = aggregate["counts"]
+    if key in counts or len(counts) < 8:
+        counts[key] = counts.get(key, 0) + 1
+    else:
+        aggregate["overflow_count"] += 1
 
 
 def coarse_wchan(raw):
@@ -149,7 +190,7 @@ def aggregate_wait(aggregate, projected):
         aggregate["overflow_count"] += 1
 
 
-def resource_threads(root, *, waits=None):
+def resource_threads(root, *, waits=None, exits=None):
     """Aggregate visibility without IDs/symbols, retaining read failures despite stat races."""
     threads = []
     counts = dict.fromkeys(("sampled", "wchan_zero", "wchan_empty", "wchan_read_denied",
@@ -185,14 +226,20 @@ def resource_threads(root, *, waits=None):
             except (OSError, ValueError):
                 counts["wchan_unavailable"] += 1
             try:
-                stat = parse_stat(bounded_text(entry / "stat"))
-                again = parse_stat(bounded_text(entry / "stat"))
+                stat = parse_stat(bounded_text(entry / "stat"), exit_status=exits is not None)
+                again = parse_stat(bounded_text(entry / "stat"), exit_status=exits is not None)
                 if again["start_ticks"] != stat["start_ticks"]:
                     counts["stat_unavailable"] += 1
+                    if exits is not None:
+                        aggregate_exit(exits, None)
                     continue
+                if exits is not None:
+                    aggregate_exit(exits, again["exit_code"])
                 threads.append({"state": stat["state"], "wait_category": category})
             except (OSError, ValueError, IndexError):
                 counts["stat_unavailable"] += 1
+                if exits is not None:
+                    aggregate_exit(exits, None)
     except OSError:
         return threads, counts, False
     return threads, counts, True
@@ -209,14 +256,20 @@ def trusted_sample():
     root = Path("/proc") / str(MAIN_PID)
     try:
         raw_stat = bounded_text(root / "stat")
-        main = parse_stat(raw_stat)
+        main = parse_stat(raw_stat, exit_status=EXIT_STATUS)
+        if EXIT_STATUS:
+            # This read is enclosed by the same before/after main identity verification.
+            main["core_dumping"] = read_core_dumping(root)
     except (OSError, ValueError, IndexError):
         return result
     threads = []
     if DETAILED_RESOURCES:
         waits = ({"categories": dict.fromkeys(WAIT_CATEGORIES, 0), "symbols": {}, "overflow_count": 0}
                  if WAIT_SYMBOLS else None)
-        threads, visibility, task_readable = resource_threads(root, waits=waits)
+        exits = {"counts": {}, "overflow_count": 0, "unavailable_count": 0} if EXIT_STATUS else None
+        threads, visibility, task_readable = resource_threads(root, waits=waits, exits=exits)
+        if EXIT_STATUS:
+            main["task_exit_codes"] = exits
         if WAIT_SYMBOLS:
             # Both main and task observations are discarded if the outer identity guard fails.
             main["main_wait"] = read_wait(root / "wchan")
@@ -306,9 +359,11 @@ def summarize(records, ticks_per_second):
 
 
 def observe_wait(process, env, timeout=30, report=None, *, window_sampler=None, detailed_resources=False,
-                 wait_symbols=False):
+                 wait_symbols=False, exit_status=False):
     """Observe fixed prepared/vendor waits with <=30 external samples; retain deadline."""
-    global MAIN_PID, MAIN_START, WINDOW_SAMPLER, DETAILED_RESOURCES, WAIT_SYMBOLS
+    global MAIN_PID, MAIN_START, WINDOW_SAMPLER, DETAILED_RESOURCES, WAIT_SYMBOLS, EXIT_STATUS
+    if type(exit_status) is not bool or (exit_status and not (wait_symbols and detailed_resources)):
+        raise control.runtime.ProbeError("exit_status_invalid")
     if type(wait_symbols) is not bool or (wait_symbols and not detailed_resources):
         raise control.runtime.ProbeError("wait_symbols_invalid")
     if type(detailed_resources) is not bool:
@@ -327,6 +382,7 @@ def observe_wait(process, env, timeout=30, report=None, *, window_sampler=None, 
     MAIN_PID, MAIN_START, WINDOW_SAMPLER = process.pid, None, window_sampler
     DETAILED_RESOURCES = detailed_resources
     WAIT_SYMBOLS = wait_symbols
+    EXIT_STATUS = exit_status
     records = []
     start = time.monotonic()
     original = application.sample_identity
@@ -361,6 +417,7 @@ def observe_wait(process, env, timeout=30, report=None, *, window_sampler=None, 
         MAIN_PID, MAIN_START, WINDOW_SAMPLER = None, None, None
         DETAILED_RESOURCES = False
         WAIT_SYMBOLS = False
+        EXIT_STATUS = False
 
 
 def detailed_categories(bounded):
