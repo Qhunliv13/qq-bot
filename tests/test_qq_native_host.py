@@ -125,6 +125,47 @@ host.dispose(); assert.equal(f.calls.length, stage + 1);
 """)
 
 
+@pytest.mark.parametrize("mode,stage", [("startup", stage) for stage in range(4)]
+                         + [("legacy", stage) for stage in range(3)])
+@pytest.mark.parametrize("throws", [False, True])
+def test_reentrant_dispose_is_terminal_at_every_factory(tmp_path, mode, stage, throws):
+    """Disposal inside any factory clears prior handles and prevents subsequent calls."""
+    run_node(tmp_path, "const mode = " + repr(mode) + "; const stage = " + str(stage)
+             + "; const throws = " + str(throws).lower() + r""";
+const f = fixture(mode);
+const targets = [['NodeIQQNTWrapperEngine','get'], ['NodeIKernelLoginService','get'],
+  ...(mode === 'startup' ? [['NodeIQQNTStartupSessionWrapper','create'],
+    ['NodeIQQNTWrapperSession','getNTWrapperSession']] : [['NodeIQQNTWrapperSession','create']])];
+const [owner, method] = targets[stage];
+const original = f.wrapper[owner][method];
+let host;
+f.wrapper[owner][method] = function(...args) {
+  const result = original.apply(this, args);
+  const disposed = host.dispose();
+  assert.equal(disposed.phase, 'disposed');
+  assert.equal(disposed.cleanup_required, 'process_exit');
+  if (throws) throw Error(secret);
+  return result;
+};
+host = createNativeHost(f.options);
+code(host.prepare, 'INVALID_STATE');
+assert.equal(f.calls.length, stage + 1);
+const snapshot = host.getSnapshot();
+assert.equal(snapshot.phase, 'disposed');
+assert.equal(snapshot.process_cleanup_required, true);
+assert.equal(snapshot.cleanup_required, 'process_exit');
+for (const field of ['engine_available', 'login_available', 'startup_available', 'session_available']) {
+  assert.equal(snapshot[field], false);
+}
+code(host.prepare, 'INVALID_STATE');
+code(host.getLoginWrapper, 'INVALID_STATE');
+code(host.getPreparedSessionHandles, 'INVALID_STATE');
+assert.deepEqual(host.dispose(), snapshot);
+assert.equal(f.calls.length, stage + 1);
+assert(!JSON.stringify(snapshot).includes(secret));
+""")
+
+
 @pytest.mark.parametrize("value", ["undefined", "''", "' '", "'x'.repeat(257)", "'a\\nb'", "null", "1"])
 def test_session_name_has_no_default(tmp_path, value):
     """Only an explicit bounded nonempty name is accepted; no account name default."""

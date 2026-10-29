@@ -87,6 +87,12 @@ uses `INVALID_CONFIG`.
   `process_cleanup_required` becomes true immediately **before the first native
   get attempt**, including a throwing first call, and remains true after dispose.
   Only owning-process exit satisfies cleanup; the host does not exit the process.
+  Disposal also wins if a factory synchronously reenters owner code during
+  `prepare()`: a guard immediately before and after each factory prevents further
+  calls and prevents storing the just-returned handle. Earlier cached handles are
+  cleared, the phase stays `disposed`, and `prepare()` throws fixed `INVALID_STATE`
+  whether that factory returns or throws. No subsequent factory, retry or native
+  cleanup is attempted; `process_cleanup_required` remains true.
 
 Session integration must explicitly consume prepared instances, with ownership
 and lifecycle-mode/name validation, instead of asking factories again. The
@@ -125,4 +131,5 @@ Coverage includes dormancy, exact factory order/arguments, explicit legacy mode,
 static validation before any native work, once-only preparation, identity-cached
 plain login facade, explicit trusted raw handles, invalid names, no account
 fields, fixed errors/safe snapshots, failure without fallback/retry, and logical
-disposal without native cleanup.
+disposal without native cleanup, and synchronous disposal at every startup/legacy
+factory boundary (both return and throw outcomes) without handle resurrection.

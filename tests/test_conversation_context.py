@@ -281,7 +281,7 @@ def test_exact_utf8_prefix_counterexamples_and_lossless_wire(scenario):
             (before_inputs, after_inputs), wires, old_wires, parsed):
         assert json.loads(old_wire, object_pairs_hook=_unique_object) == value
         assert list(value) == list(_NEW_ENVELOPE_ORDER)
-        assert list(value["conversation"]) == ["history", "scope", "messages", "history_context", "anchor"]
+        assert list(value["conversation"]) == ["history", "history_context", "scope", "messages", "anchor"]
         assert value["version"] == 1
         assert value["source"] == {"name": "conversation_context", "trust": "untrusted_data"}
         assert value["conversation"] == {
@@ -307,7 +307,10 @@ def test_exact_utf8_prefix_counterexamples_and_lossless_wire(scenario):
         assert new_prefix > old_prefix
         assert new_prefix > 30000
     elif scenario == "empty_observations":
-        assert new_prefix - old_prefix == len(',"observations":[]'.encode("utf-8"))
+        # Shared history metadata now also precedes the changed current message.
+        metadata = ',"history_context":' + json.dumps(
+            before_inputs["history_context"], ensure_ascii=False, separators=(",", ":"))
+        assert new_prefix - old_prefix == len((',"observations":[]' + metadata).encode("utf-8"))
     elif scenario == "cap_100_eviction":
         # Honest downside: a changing first observation loses history locality.
         assert new_prefix < 200

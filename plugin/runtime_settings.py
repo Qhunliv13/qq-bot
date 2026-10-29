@@ -15,6 +15,24 @@ def load_settings():
     return value
 
 
+def configured_tool_profile():
+    """Keep full capabilities by default; light changes schema exposure, not authority.
+
+    Read once per model turn so editing external settings cannot change the
+    profile halfway through a tool batch. No deployment configuration is written.
+    """
+    settings = load_settings()
+    profile = settings.get('tool_profile', {}) if settings is not None else {}
+    if not isinstance(profile, dict) or set(profile) - {'mode', 'initial_tools'}:
+        raise ValueError('invalid_tool_profile')
+    mode = profile.get('mode', 'full')
+    initial = profile.get('initial_tools', [])
+    if (mode not in ('full', 'light') or not isinstance(initial, list)
+            or any(not isinstance(name, str) or not name for name in initial)):
+        raise ValueError('invalid_tool_profile')
+    return {'mode': mode, 'initial_tools': list(initial)}
+
+
 def configured_owners(legacy):
     """An explicit empty owner list denies QQ administration instead of inheriting IDs."""
     settings = load_settings()

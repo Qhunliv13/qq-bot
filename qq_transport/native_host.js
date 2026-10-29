@@ -78,6 +78,16 @@ function createNativeHost(options) {
   /** Return the original cached login without a second native static get call. */
   function getLogin() { requirePrepared(); return login; }
 
+  /** Disposal during a synchronous native callback irrevocably ends preparation. */
+  function acquireFactory(call, ...args) {
+    if (phase === 'disposed') reject(CODES.INVALID_STATE);
+    const value = call(...args);
+    // A native factory can synchronously call owner code which disposes this host.
+    // Check before assigning its returned capability; disposal must not resurrect it.
+    if (phase === 'disposed') reject(CODES.INVALID_STATE);
+    return handle(value);
+  }
+
   /** Validate every selected factory before entering the irreversible native order. */
   function prepare() {
     if (phase !== 'new') reject(CODES.INVALID_STATE);
@@ -99,13 +109,13 @@ function createNativeHost(options) {
     phase = 'failed'; failureCode = CODES.PREPARE_FAILED;
     cleanupRequired = true;
     try {
-      engine = handle(getEngineNative());
-      login = handle(getLoginNative());
+      engine = acquireFactory(getEngineNative);
+      login = acquireFactory(getLoginNative);
       if (lifecycleMode === 'startup') {
-        startupSession = handle(createSession());
-        session = handle(getSession(sessionName));
+        startupSession = acquireFactory(createSession);
+        session = acquireFactory(getSession, sessionName);
       } else {
-        session = handle(createSession());
+        session = acquireFactory(createSession);
       }
       // Plain own-get facade, no Proxy, subclass construction or global patching.
       loginWrapper = Object.freeze({
@@ -115,6 +125,9 @@ function createNativeHost(options) {
       phase = 'prepared'; failureCode = null;
       return getSnapshot();
     } catch (_) {
+      // Disposal wins even if the native call throws after disposing the owner.
+      // dispose() already cleared all earlier handles; do not change its phase.
+      if (phase === 'disposed') reject(CODES.INVALID_STATE);
       // Native uncertainty is terminal. Never retry another factory or retain cause.
       reject(CODES.PREPARE_FAILED);
     }

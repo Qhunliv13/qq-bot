@@ -3546,6 +3546,18 @@ class HiganPlugin(Star):
             except Exception as exc:
                 turn["activity"] = {"source": "activity_state", "available": False,
                                     "error": type(exc).__name__}
+        # Full remains the unchanged deployment default. Light is an explicit,
+        # per-turn schema-presentation choice, never a permissions/feature switch.
+        from .runtime_settings import configured_tool_profile
+        profile_options = configured_tool_profile()
+        tool_profile = None
+        if profile_options["mode"] == "light":
+            from .tool_profile import ToolProfile
+            tool_profile = ToolProfile(self._tool_schemas(), **profile_options)
+            system += ("\nTool schema exposure is light for this turn. "
+                       "Use tool_search to discover the complete catalog and "
+                       "tool_describe to expose exact schemas on the next request. "
+                       "All existing permissions and execution requirements still apply.")
         context_started = time.monotonic()
         prompt = self._request_context(event, group, text, has_image)
         logger.info("[higan] reply_phase phase=context seconds=%.3f chars=%d",
@@ -3608,7 +3620,11 @@ class HiganPlugin(Star):
                         break
             logger.info("[higan] reply_phase phase=image_prepare seconds=%.3f",
                         time.monotonic() - images_started)
-            result = await self._llm_tools(system, prompt, [], messages, allow_tools)
+            if tool_profile is None:
+                result = await self._llm_tools(system, prompt, [], messages, allow_tools)
+            else:
+                result = await self._llm_tools(system, prompt, [], messages, allow_tools,
+                                               tool_schemas=tool_profile.schemas())
             if pending_marker_submitted:
                 # A successful provider response proves the marked image was in
                 # that model request; mere preview output never establishes this.
@@ -3742,6 +3758,10 @@ class HiganPlugin(Star):
             # Media delivery completes after dispatch; inspect the final receipt,
             # not the intermediate request to deliver it through the plugin.
             observe(turn["_delivery_outcome"], name, res)
+            if tool_profile is not None:
+                # Promote only names from the immutable local catalog after a
+                # successful describe; tool output cannot inject arbitrary schemas.
+                tool_profile.observe(name, args, res)
             return res
 
         def _observe(observation):

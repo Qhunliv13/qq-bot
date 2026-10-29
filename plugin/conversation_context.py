@@ -42,13 +42,17 @@ def build_context(
     answer it. Unsupported values fail JSON serialization explicitly
     rather than being silently converted into misleading strings.
     """
-    # Within conversation, shared history precedes current scope and messages.
-    # Insertion order affects cache reuse only; supplied nested content is untouched.
-    conversation = {"history": history, "scope": scope, "messages": messages}
+    # Shared history and its metadata precede current scope and messages. The
+    # shared timeline's mode/source/coverage can then stay reusable across current
+    # changes and scope switches. Appended history still diverges at its exact
+    # append point; never reorder records to extend that prefix artificially.
+    conversation = {"history": history}
     if history_context is not None:
         # Explicit group-memory mode is source metadata, never an instruction or
-        # a claim that stored participant statements are verified facts.
+        # a claim that stored participant statements are verified facts. Retain
+        # supplied nested ordering/values, including false-like metadata.
         conversation["history_context"] = history_context
+    conversation.update({"scope": scope, "messages": messages})
     if anchor_message_id is not None:
         # The caller owns anchor selection; position or prose never implies it.
         conversation["anchor"] = {"message_id": anchor_message_id}

@@ -81,7 +81,7 @@ def test_first_native_request_preserves_real_batch_and_separate_historical_sourc
     for event in events[:batch_size]:
         assert data.count(event.text) == 1
         assert event.text not in system
-    assert list(conversation) == ["history", "scope", "messages", "history_context", "anchor"]
+    assert list(conversation) == ["history", "history_context", "scope", "messages", "anchor"]
 
 
 @pytest.mark.parametrize("change", ["scope", "observations", "current", "time", "history_head"])
@@ -169,4 +169,4 @@ def test_native_user_wire_preserves_full_shared_history_prefix(production, monke
         assert common.startswith(full_history_prefix)
         assert len(common) >= len(full_history_prefix) > 5000
     assert list(before)[:4] == ["version", "source", "observations", "conversation"]
-    assert list(before["conversation"]) == ["history", "scope", "messages", "history_context", "anchor"]
+    assert list(before["conversation"]) == ["history", "history_context", "scope", "messages", "anchor"]
