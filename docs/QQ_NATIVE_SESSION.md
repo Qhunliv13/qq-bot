@@ -99,6 +99,14 @@ version-specific review; these fake-only checks do not certify its ABI.
 
 - Phases: `new → initialized → starting → ready`; errors are terminal `failed`;
   logical `dispose()` leads to terminal `disposed` and is repeatable.
+- Native factories, init and start may synchronously invoke owner code that calls
+  `dispose()`. The in-flight controller operation then throws fixed `INVALID_STATE`
+  (also if that native call subsequently throws), never reports success or restores
+  handles/phase. No subsequent factory/init/start is entered, no `INITIALIZED` or
+  `READY` event is published after disposal, and messaging remains unavailable.
+  This also applies to init/start with prepared handles, without repeating factories.
+  Method validation remains descriptor-only: init/start accessors are rejected
+  without invoking their getters.
 - Startup mode: `NodeIQQNTStartupSessionWrapper.create()` then
   `NodeIQQNTWrapperSession.getNTWrapperSession(sessionName)`; start calls the
   **startup instance** with zero arguments. Missing startup APIs fail; legacy
@@ -140,5 +148,8 @@ isolated owner performs the appropriate runtime validation.
 wrappers. It checks dormant construction, startup/legacy ordering, exact start
 arguments, separate start, callback-only readiness, identity mismatch before
 factories, detached bounded JSON, safe errors/events, no retries, no native close
-and no hidden message-service access. No production network or native library
-is used by this suite.
+and no hidden message-service access. Synchronous disposal regressions cover all
+three factory calls plus init/start in both lifecycle modes, with/without prepared
+handles and with native return/throw after disposal; accessor checks confirm that
+method getters never execute. No production network or native library is used
+by this suite.

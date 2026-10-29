@@ -57,6 +57,15 @@ class ClickGateTests(unittest.IsolatedAsyncioTestCase):
         args.update(overrides)
         return await self.gate.confirm(preview["ticket"], self.screenshot, self.click, **args)
 
+    def test_nonfinite_ttl_cannot_disable_screenshot_freshness(self):
+        """Reject NaN/infinite TTLs before any screenshot or click is possible."""
+        for value in (float('nan'), float('inf'), float('-inf'), 0, -1, True):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    ClickGate(self.root, ttl_seconds=value)
+        self.assertEqual(ClickGate(self.root, ttl_seconds=0.5).ttl_seconds, 0.5)
+        self.assertEqual(self.clicks, [])
+
     async def test_confirmation_before_visible_model_request_fails_closed(self):
         """A preview URL alone cannot substitute for pixels sent to the model."""
         preview = await self.gate.preview(20, 25, "Target", self.screenshot)

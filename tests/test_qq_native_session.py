@@ -264,3 +264,96 @@ const c = createSessionController({...j.options,preparedHandles:{startupSession:
 code(c.initialize, 'INITIALIZE_FAILED'); code(c.initialize, 'INVALID_STATE');
 assert.deepEqual(j.calls.map(x => x[0]), ['broken']); c.dispose();
 """)
+
+
+@pytest.mark.parametrize("stage", ["startup.create", "session.get", "session.create"])
+@pytest.mark.parametrize("throws", [False, True])
+def test_factory_disposal_stops_all_later_native_calls(tmp_path, stage, throws):
+    """A factory may synchronously dispose; its returned handle cannot revive us."""
+    run_node(tmp_path, "const [stage, throws] = " + json.dumps([stage, throws]) + r""";
+const f = fixture(stage === 'session.create' ? 'legacy' : 'startup');
+const c = createSessionController(f.options);
+const events = []; c.subscribe(event => events.push(event));
+const owner = stage === 'startup.create' ? f.wrapper.NodeIQQNTStartupSessionWrapper : f.wrapper.NodeIQQNTWrapperSession;
+const key = stage === 'session.get' ? 'getNTWrapperSession' : 'create';
+const original = owner[key];
+owner[key] = (...args) => {
+  const result = original(...args); c.dispose();
+  if (throws) throw Error(secret);
+  return result;
+};
+code(c.initialize, 'INVALID_STATE');
+assert.deepEqual(f.calls.map(x => x[0]), stage === 'session.get' ? ['startup.create', 'session.get'] : [stage]);
+assert.deepEqual(c.getSnapshot(), {phase:'disposed', is_ready:false, failure_code:null, native_cleanup_required:'process_exit'});
+code(c.initialize, 'INVALID_STATE'); code(c.start, 'INVALID_STATE'); code(c.getSessionForMessaging, 'INVALID_STATE');
+assert.equal(c.dispose().phase, 'disposed');
+await tick(); assert.deepEqual(events, []);
+""")
+
+
+@pytest.mark.parametrize("mode", ["startup", "legacy"])
+@pytest.mark.parametrize("prepared", [False, True])
+@pytest.mark.parametrize("stage", ["init", "start"])
+@pytest.mark.parametrize("throws", [False, True])
+def test_init_start_disposal_is_not_a_success(tmp_path, mode, prepared, stage, throws):
+    """Disposal during native init/start stays terminal for direct and prepared paths."""
+    run_node(tmp_path, "const [mode, prepared, stage, throws] = " + json.dumps([mode, prepared, stage, throws]) + r""";
+const f = fixture(mode, [0]);
+if (prepared) {
+  f.options.preparedHandles = {startupSession:mode === 'startup' ? f.startup : null,
+    session:f.session,lifecycleMode:mode,sessionName:f.options.sessionName};
+  // Prepared ownership must not touch either factory, even on disposal paths.
+  f.options.wrapper = new Proxy({}, {get() {throw Error(secret);}});
+}
+const c = createSessionController(f.options);
+const events = []; c.subscribe(event => events.push(event));
+if (stage === 'init') {
+  const original = f.session.init;
+  f.session.init = (...args) => {
+    original(...args); c.dispose(); f.listener.onOpentelemetryInit({is_init:true});
+    if (throws) throw Error(secret);
+  };
+  code(c.initialize, 'INVALID_STATE');
+} else {
+  const target = mode === 'startup' ? f.startup : f.session;
+  const key = mode === 'startup' ? 'start' : 'startNT';
+  const original = target[key];
+  target[key] = (...args) => {
+    original(...args); f.listener.onOpentelemetryInit({is_init:true});
+    c.dispose(); f.listener.onOpentelemetryInit({is_init:true});
+    if (throws) throw Error(secret);
+  };
+  c.initialize(); await tick(); events.length = 0;
+  code(c.start, 'INVALID_STATE');
+}
+const expected = prepared ? [] : mode === 'startup' ? ['startup.create','session.get'] : ['session.create'];
+expected.push('init');
+if (stage === 'start') expected.push(mode === 'startup' ? 'startup.start' : 'session.startNT');
+assert.deepEqual(f.calls.map(x => x[0]), expected);
+assert.deepEqual(c.getSnapshot(), {phase:'disposed', is_ready:false, failure_code:null, native_cleanup_required:'process_exit'});
+code(c.initialize, 'INVALID_STATE'); code(c.start, 'INVALID_STATE'); code(c.getSessionForMessaging, 'INVALID_STATE');
+await tick(); assert.deepEqual(events, []);
+""")
+
+
+@pytest.mark.parametrize("prepared", [False, True])
+@pytest.mark.parametrize("mode", ["startup", "legacy"])
+@pytest.mark.parametrize("method_name", ["init", "start"])
+def test_method_accessors_never_execute_disposal(tmp_path, prepared, mode, method_name):
+    """Method validation rejects accessors without executing their hidden callbacks."""
+    run_node(tmp_path, "const [prepared, mode, name] = " + json.dumps([prepared, mode, method_name]) + r""";
+const f = fixture(mode);
+if (prepared) f.options.preparedHandles = {startupSession:mode === 'startup' ? f.startup : null,
+  session:f.session,lifecycleMode:mode,sessionName:f.options.sessionName};
+const c = createSessionController(f.options);
+const target = name === 'init' || mode === 'legacy' ? f.session : f.startup;
+const key = name === 'start' && mode === 'legacy' ? 'startNT' : name;
+let getterCalls = 0;
+Object.defineProperty(target, key, {get() {getterCalls += 1; c.dispose(); return () => {};}});
+code(c.initialize, 'INITIALIZE_FAILED');
+assert.equal(getterCalls, 0);
+assert.equal(c.getSnapshot().phase, 'failed');
+assert.equal(c.getSnapshot().native_cleanup_required, 'process_exit');
+assert.deepEqual(f.calls.map(x => x[0]), prepared ? [] : mode === 'startup' ? ['startup.create','session.get'] : ['session.create']);
+code(c.start, 'INVALID_STATE'); code(c.getSessionForMessaging, 'INVALID_STATE');
+""")

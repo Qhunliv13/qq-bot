@@ -213,21 +213,32 @@ function createSessionController(options) {
         cleanup = 'process_exit';
         if (mode === 'startup') {
           const startup = create();
-          nativeSession = get(sessionName);
+          // Factories may synchronously call owner code; disposal forbids the next call.
+          if (phase === 'disposed') reject(CODES.INVALID_STATE);
+          const session = get(sessionName);
+          if (phase === 'disposed') reject(CODES.INVALID_STATE);
+          nativeSession = session;
           startNative = method(startup, 'start');
         } else {
-          nativeSession = create();
+          const session = create();
+          // Do not restore a handle that dispose cleared during the factory call.
+          if (phase === 'disposed') reject(CODES.INVALID_STATE);
+          nativeSession = session;
           startNative = method(nativeSession, 'startNT');
         }
       }
       const init = method(nativeSession, 'init');
       phase = 'initialized';
       const result = init(config, depends, dispatcher, listener);
+      // A void native return cannot turn synchronous owner disposal into success.
+      if (phase === 'disposed') reject(CODES.INVALID_STATE);
       if (result !== undefined) reject(CODES.INITIALIZE_FAILED);
       if (phase === 'failed') reject(failureCode);
       publish('INITIALIZED');
       return getSnapshot();
     } catch (_) {
+      // Disposal wins even if the in-flight native call subsequently throws.
+      if (phase === 'disposed') reject(CODES.INVALID_STATE);
       fail(CODES.INITIALIZE_FAILED);
       reject(failureCode || CODES.INITIALIZE_FAILED);
     }
@@ -239,8 +250,13 @@ function createSessionController(options) {
     phase = 'starting'; startInFlight = true; publish('STARTING');
     try {
       const result = mode === 'startup' ? startNative() : startNative(...startArgs);
+      // Do not report successful start or commit readiness after owner disposal.
+      if (phase === 'disposed') reject(CODES.INVALID_STATE);
       if (result !== undefined) reject(CODES.START_FAILED);
-    } catch (_) { fail(CODES.START_FAILED); reject(failureCode || CODES.START_FAILED); }
+    } catch (_) {
+      if (phase === 'disposed') reject(CODES.INVALID_STATE);
+      fail(CODES.START_FAILED); reject(failureCode || CODES.START_FAILED);
+    }
     finally { startInFlight = false; }
     if (phase === 'starting' && callbackReady) { phase = 'ready'; publish('READY', Object.freeze({is_init: true})); }
     return getSnapshot();

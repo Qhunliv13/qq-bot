@@ -8,6 +8,7 @@ physical screen change between the last screenshot and the eventual VM click.
 import asyncio
 import hashlib
 import io
+import math
 import os
 from pathlib import Path
 import secrets
@@ -29,8 +30,11 @@ class ClickGate:
     def __init__(self, images_root, ttl_seconds=DEFAULT_TTL_SECONDS):
         """Bind a gate to a trusted images directory, never a shared process-global ticket."""
         self.images_root = Path(images_root)
-        if not isinstance(ttl_seconds, (int, float)) or isinstance(ttl_seconds, bool) or ttl_seconds <= 0:
-            raise ValueError("ttl_seconds must be positive")
+        # NaN makes every expiry comparison false, and infinity prevents expiry;
+        # neither may silently turn a freshness ticket into a permanent grant.
+        if (not isinstance(ttl_seconds, (int, float)) or isinstance(ttl_seconds, bool)
+                or ttl_seconds <= 0 or not math.isfinite(ttl_seconds)):
+            raise ValueError("ttl_seconds must be positive and finite")
         self.ttl_seconds = ttl_seconds
         self._pending = None
         self._observed = False
