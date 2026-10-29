@@ -175,3 +175,35 @@ The connector tests cover both families, forgery, bounds, one-address selection,
 peer failures/mismatch, timeout/cancellation, cleanup and success ownership. They
 perform no actual external network calls and do not constitute production or
 complete-bridge validation.
+
+## Real kernel verification inside an offline namespace
+
+The explicit [POSIX fixture](../tests/egress_connector_posix_check.py) now exercises
+the unchanged connector with real Linux TCP sockets, not substituted sockets. It
+requires a trusted launcher's parent namespace identity and refuses the parent or
+visible init namespace. Before any `ip` command it requires only DOWN loopback and
+no usable routes. Only the new namespace receives two fixed public-looking test
+literals on loopback. A second check requires exact addresses and local routes,
+with no gateway or other interface, before accepting or connecting any TCP socket.
+The addresses are local test fixtures, not QQ endpoints or public destinations.
+
+The first [observation](qq-egress-kernel-evidence.json) stopped at `initial_routes`
+before configuration or TCP: this WSL kernel represents an empty IPv4 route table
+as zero bytes, rather than a header. Read-only inspection established that format.
+The narrow correction accepts exactly empty text; whitespace/malformed nonempty
+text and usable routes still fail. The failed artifact remains unchanged.
+
+The separately reserved [second observation](qq-egress-kernel-v2-evidence.json)
+passed with exit 0 and stderr length 0: two real IPv4/IPv6 exchanges, six owned
+exchange sockets closed, one refused connection closed without fallback, two
+preallocation policy rejections and zero Python resolver-helper calls. Socket
+family, actual peer address/port, IPv6 scope and retained timeouts were checked.
+The spy does not intercept CPython's C implementation or prove arbitrary resolver
+behavior; the actual numeric-connection path was exercised. An outer 20-second
+watchdog owns the test process group; namespace lifetime ends with its processes.
+
+These tests establish only local kernel integration. They do not provide an
+external gateway, route-aware host/LAN denial, UDP/DNS isolation, QQ connectivity,
+login or feature acceptance. No host interface, firewall, production process or
+QQ session was modified. The 18 guard tests run offline with substituted OS
+observations; the explicit kernel fixture is not automatically launched by pytest.

@@ -1,0 +1,14 @@
+{
+  "exit_code": 1,
+  "fixture_sha256": "ffbf77c048cb7ad19e1ef86dd90c4a7a22751d5f334d7f0d7913f40fe2dafb90",
+  "observation": {
+    "offline_only": true,
+    "schema": 1,
+    "stage": "initial_routes",
+    "status": "failed"
+  },
+  "offline_only": true,
+  "schema": 1,
+  "status": "failed",
+  "stderr_bytes": 0
+}
