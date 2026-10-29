@@ -7,9 +7,11 @@ from pathlib import Path
 import pytest
 
 from plugin.autonomous_turn import AutonomyEvent
+from plugin.reply_selection import decode_reply
 from plugin.qq_request_store import RequestStore
 from plugin import qq_requests
 import test_production_integration as integration
+from test_batch_flow import _final
 from test_production_integration import Event, _call, _provider
 
 # Reuse the one AST loader and fixture instead of duplicating plugin initialization.
@@ -128,9 +130,10 @@ def test_native_provider_can_inspect_and_decide_captured_request(production, tmp
     requests = _provider(monkeypatch, [("", [_call("qq_requests")]),
         ("", [_call("qq_request_decide", {"request_id": captured["request_id"],
                                            "approve": True, "operation_id": "provider-decision"})]),
-        ("Native request accepted; relationship not verified.", [])])
+        (_final("Native request accepted; relationship not verified."), [])], auto_wrap=False)
     answer = asyncio.run(plugin._decide_tools_first(owner, "42", owner.text, False))
-    assert answer == "Native request accepted; relationship not verified."
+    assert decode_reply(answer, [], allow_unattributed=True)["text"] == (
+        "Native request accepted; relationship not verified.")
     assert len(requests) == 3
     assert actions == [("set_friend_add_request", {"flag": "private-native-token", "approve": True})]
     paired = [message for message in requests[-1]["messages"] if message["role"] == "tool"]

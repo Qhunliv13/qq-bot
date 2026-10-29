@@ -11,6 +11,7 @@ import test_production_integration as integration
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from plugin.image_transcript import IMAGE_OBSERVATION, with_images  # noqa: E402
+from plugin.reply_selection import decode_reply  # noqa: E402
 
 # Reuse the offline AST host fixture without importing framework or touching network.
 production = integration.production
@@ -133,9 +134,12 @@ def test_production_vm_shots_freeze_prefix_across_multiple_requests(production, 
         ("", [integration._call("vm_shot", {"path": "shot-a"}, "a")]),
         ("", [integration._call("vm_shot", {"path": "shot-b"}, "b")]),
         ("", [integration._call("vm_shot", {"path": "shot-b"}, "repeat-b")]),
-        ("finished", []),
+        (json.dumps({"reply_to": [], "text": "finished"}), []),
     ])
-    assert asyncio.run(plugin._decide_tools_first(event, "42", event.text, True)) == "finished"
+    result = decode_reply(asyncio.run(plugin._decide_tools_first(event, "42", event.text, True)),
+                          [], allow_unattributed=True)
+    assert result["structured"] and result["error"] is None
+    assert result["reply_to"] == [] and result["text"] == "finished"
     assert converted == ["initial", "shot-a", "shot-b", "shot-b"]
     for previous, current in zip(requests, requests[1:]):
         prefix = previous["messages"]

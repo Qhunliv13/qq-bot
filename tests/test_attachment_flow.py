@@ -17,6 +17,7 @@ import pytest
 from test_batch_flow import _arrive_while_execution_locked, _entry
 from test_production_integration import Event, Image, Reply, _provider
 from test_production_integration import production as _production_fixture
+from plugin.reply_selection import decode_reply
 
 # Share the production host instead of copying its startup-free AST fixture.
 production = _production_fixture
@@ -134,7 +135,7 @@ def test_member_image_reaches_provider_with_member_publisher_not_owner(productio
     _visual_entry(plugin)
     ref = "https://offline.invalid/member-image.png"
     event = _event(MEMBER_ID, "member-current", [Image(url=ref)])
-    requests = _provider(monkeypatch, [("An arbitrary visual response.", [])])
+    requests = _provider(monkeypatch, [(json.dumps({"reply_to": [event.message_obj.message_id], "text": "An arbitrary visual response."}), [])])
 
     asyncio.run(plugin.on_message(event))
 
@@ -161,7 +162,7 @@ def test_quote_image_preserves_original_publisher_not_containing_sender(
                   sender_nickname="Publisher " + source_id, message_str="original caption",
                   chain=[Image(url=ref)])
     event = _event(current_id, "containing-reference", [quote])
-    requests = _provider(monkeypatch, [("Any wording is permitted.", [])])
+    requests = _provider(monkeypatch, [(json.dumps({"reply_to": [event.message_obj.message_id], "text": "Any wording is permitted."}), [])])
 
     asyncio.run(plugin.on_message(event))
 
@@ -183,7 +184,7 @@ def test_native_batch_keeps_owner_and_member_actor_and_image_roles_independent(p
     refs = ["https://offline.invalid/owner.png", "https://offline.invalid/member.png"]
     events = [_event(OWNER_ID, "owner-record", [Image(url=refs[0])]),
               _event(MEMBER_ID, "member-record", [Image(url=refs[1])])]
-    requests = _provider(monkeypatch, [("One response for both records.", [])])
+    requests = _provider(monkeypatch, [(json.dumps({"reply_to": [event.message_obj.message_id for event in events], "text": "One response for both records."}), [])])
 
     asyncio.run(_arrive_while_execution_locked(plugin, events))
 
@@ -207,7 +208,7 @@ def test_batch_dedup_and_three_image_cap_retain_every_shared_reference_origin(pr
                                       for name in ("dropped", "shared", "second", "third")]
     events = [_event(OWNER_ID, "owner-batch", [Image(url=dropped), Image(url=shared)]),
               _event(MEMBER_ID, "member-batch", [Image(url=shared), Image(url=second), Image(url=third)])]
-    requests = _provider(monkeypatch, [("No forced phrase.", [])])
+    requests = _provider(monkeypatch, [(json.dumps({"reply_to": [event.message_obj.message_id for event in events], "text": "No forced phrase."}), [])])
 
     asyncio.run(_arrive_while_execution_locked(plugin, events))
 
@@ -228,7 +229,7 @@ def test_no_image_native_and_plain_transports_remain_string_content(production, 
     _visual_entry(plugin)
     _bind_method(plugin, "_llm_plain")
     event = _event(MEMBER_ID, "plain-current", text="ordinary text remains ordinary")
-    requests = _provider(monkeypatch, [("Unrestricted native answer.", []), ("Plain answer.", [])])
+    requests = _provider(monkeypatch, [(json.dumps({"reply_to": [event.message_obj.message_id], "text": "Unrestricted native answer."}), []), (json.dumps({"reply_to": [], "text": "Plain answer."}), [])])
 
     asyncio.run(plugin.on_message(event))
     assert len(requests) == 1
@@ -237,7 +238,9 @@ def test_no_image_native_and_plain_transports_remain_string_content(production, 
     assert _conversation(requests[0])["messages"][0]["body"] == event.text
     assert "attachment_provenance" not in prompt
     answer = asyncio.run(plugin._llm_plain("plain system", "unchanged plain prompt", []))
-    assert answer == "Plain answer."
+    selection = decode_reply(answer, [], allow_unattributed=True)
+    assert selection["structured"] and selection["error"] is None
+    assert selection["reply_to"] == [] and selection["text"] == "Plain answer."
     assert requests[1]["messages"] == [{"role": "system", "content": "plain system"},
                                          {"role": "user", "content": "unchanged plain prompt"}]
 
@@ -249,7 +252,7 @@ def test_plain_fallback_uses_same_source_bound_image_serialization(production, m
     _bind_method(plugin, "_llm_plain")
     ref = "https://offline.invalid/shared-native-plain.png"
     event = _event(MEMBER_ID, "fallback-current", [Image(url=ref)])
-    requests = _provider(monkeypatch, [("Native response.", []), ("Fallback response.", [])])
+    requests = _provider(monkeypatch, [(json.dumps({"reply_to": [event.message_obj.message_id], "text": "Native response."}), []), (json.dumps({"reply_to": [event.message_obj.message_id], "text": "Fallback response."}), [])])
     asyncio.run(plugin.on_message(event))
     assert len(requests) == 1
     native = _visual_origins(requests[0])
@@ -259,8 +262,10 @@ def test_plain_fallback_uses_same_source_bound_image_serialization(production, m
     assert sources == [{"ref": ref, "source": native[ref][0]}]
 
     answer = asyncio.run(plugin._llm_plain("plain system", prompt, [ref]))
-
-    assert answer == "Fallback response."
+    selection = decode_reply(answer, [dict(record) for record in _conversation(requests[0])["messages"]])
+    assert selection["structured"] and selection["error"] is None
+    assert selection["reply_to"] == [event.message_obj.message_id]
+    assert selection["text"] == "Fallback response."
     assert len(requests) == 2
     assert requests[1]["messages"][1]["content"] == requests[0]["messages"][1]["content"]
     assert _visual_origins(requests[1]) == native

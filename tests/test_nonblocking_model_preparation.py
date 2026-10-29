@@ -3,6 +3,7 @@
 import ast
 import asyncio
 import copy
+import json
 from pathlib import Path
 import threading
 import time
@@ -10,6 +11,7 @@ import time
 import pytest
 
 import test_production_integration as integration
+from plugin.reply_selection import decode_reply
 
 # Compile the same selected production methods without importing AstrBot startup.
 production = integration.production
@@ -66,7 +68,7 @@ def test_native_preparation_keeps_heartbeat_and_image_prefix(production, monkeyp
     plugin._dispatch_tool = dispatch
     requests = integration._provider(monkeypatch, [
         ("", [integration._call("vm_shot", {}, "shot-call")]),
-        ("finished", []),
+        (json.dumps({"reply_to": [], "text": "finished"}), []),
     ])
 
     async def run():
@@ -92,7 +94,9 @@ def test_native_preparation_keeps_heartbeat_and_image_prefix(production, monkeyp
             release.set()
             finished.set()
             await task
-        assert result == "finished"
+        selection = decode_reply(result, [], allow_unattributed=True)
+        assert selection["structured"] and selection["error"] is None
+        assert selection["reply_to"] == [] and selection["text"] == "finished"
         assert entered.is_set(), "selected production preparation was not exercised"
         assert state["thread"] != loop_thread, "blocking preparation ran on event-loop thread"
         assert state["during"] >= 5, "heartbeat stalled during blocking preparation"

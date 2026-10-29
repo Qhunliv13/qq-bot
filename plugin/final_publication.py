@@ -8,6 +8,17 @@ explicit delivery disposition; an unmarked completion remains a draft.
 from .reply_selection import decode_reply
 
 
+def has_public_delivery(turn, scope):
+    """Detect an actual same-scope send, never infer one from model prose."""
+    if turn.get("_interim_replies"):
+        return True
+    return any(
+        isinstance(item, dict) and isinstance(item.get("delivery"), dict)
+        and item["delivery"].get("status") in ("native_confirmed", "observed_send_return", "local_recorded")
+        and item["delivery"].get("destination_scope") == str(scope)
+        for item in turn.get("_deliveries", []))
+
+
 def select(raw, records, *, explicit=False, allow_unattributed=False):
     """Decode once and distinguish a public operation from an unmarked draft.
 

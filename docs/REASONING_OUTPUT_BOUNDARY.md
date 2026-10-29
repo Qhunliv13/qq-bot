@@ -1,0 +1,19 @@
+# Public response boundary (QQ plugin)
+
+## Problem and evidence
+
+At 2026-10-29 17:07:55 China Standard Time, a production QQ reply included planning prose rather than just the answer. The persisted `assistant_delivery` row confirms the exact sent body; the provider's raw `choices[0].message` for that request was not archived. The plugin had previously selected `message.content` directly and had **never** concatenated the separate `reasoning_content` field. It is therefore not established whether the provider itself generated the planning in `content` or a gateway moved it there. Do not infer that input size or `reasoning_effort=high` proves either root cause. The same request recorded 119,693 input tokens; this is usage, not a model context limit.
+
+## Single shared path
+
+`plugin/model_output.py` is the one direct HTTP result parser used by the original plain and tools requests. It never promotes a separate reasoning field, excludes structured analysis blocks, and consumes only complete leading `<think>…</think>` protocol markers (an unclosed leading marker fails closed). It does not delete ordinary Chinese or English planning-looking sentences, quoted examples, or inline literal markers. The production QQ tool loop continues using the existing `plugin/agent_loop.py` and `plugin/reply_selection.py`; there is no new agent loop.
+
+`plugin/final_response.py` requires a valid structured final envelope with actual current message IDs, public `text` and existing optional `delivery`, or explicit silence. Tool-bearing intermediate replies are not checked as finals and never sent implicitly. A nonempty unstructured completion triggers **one** no-tools final request using the original transcript and the public contract; the private draft is **not** replayed to the provider. A malformed structured reply with invalid targets or delivery is rejected **without** asking another model to invent new attribution. Valid structured silence becomes an empty result rather than literal JSON. If the final request returns invalid text/targets, new tool calls or an exception, the result is not published or substituted with a fallback; actual tool observations remain recorded. Screenshot `[发图]` markers are substituted in the JSON `text` field and re-encoded so paths containing backslashes do not corrupt the envelope. Existing send-tool authorization and receipt semantics remain unchanged.
+
+## Limits and roll-back
+
+This is a protocol boundary, **not** a semantic mind-reader. A provider can still put private planning inside a syntactically valid public `text` field, and a model may reject the envelope and yield silence. Neither keyword filtering nor hardcoded account/screenshot-specific prefixes would safely solve that. Do not claim zero leakage, complete QQ parity, or production success from offline mocks. The existing external NapCat/QQ login is unchanged; the independent native transport remains unfinished. A reviewed plugin release must preserve existing remote `/root/higan` facts, account data and process continuity; source commit alone never deploys. Roll back using the previously verified plugin commit, not a direct remote patch or service restart.
+
+## Tests
+
+Run `python -m pytest tests -q`, `python -m pyflakes plugin/main.py plugin/agent_loop.py plugin/final_response.py plugin/model_output.py tests/test_production_integration.py`, `python -m compileall -q plugin` and `python tools/validate_release.py`. The production-entry HTTP fixture verifies actual tool pairing, explicit final envelopes, rejected private drafts, no replay of private text to the repair request, separate reasoning-field exclusion, malformed target and unwanted tool-call failures, screenshot path quoting, and no false send/archive. These tests do not call a real provider or send QQ messages.

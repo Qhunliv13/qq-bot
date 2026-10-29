@@ -48,8 +48,8 @@ def _populate(plugin):
 
 
 def _request(plugin, event, monkeypatch):
-    """Capture the real native HTTP request while SILENT prevents QQ side effects."""
-    requests = _provider(monkeypatch, [("SILENT", [])])
+    """Capture the native HTTP request; raw SILENT cannot become an outgoing reply."""
+    requests = _provider(monkeypatch, [("SILENT", [])], auto_wrap=False)
     assert asyncio.run(plugin._decide_tools_first(event, event.group, event.text, False)) == ""
     assert len(requests) == 1
     assert event.actions == event.sent == []

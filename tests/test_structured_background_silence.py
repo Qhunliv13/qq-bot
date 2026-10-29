@@ -242,8 +242,8 @@ def test_on_message_nested_json_example_sends_once_as_literal(background, monkey
     """Current-target foreground decoding must not recursively decode its text field."""
     native, event = background, Event("show this literal JSON example")
     literal = json.dumps({"reply_to": [], "text": ""})
-    raw = json.dumps({"reply_to": [1234], "text": literal})
-    requests = _provider(monkeypatch, [(raw, [])])
+    raw = json.dumps({"reply_to": [event.message_obj.message_id], "text": literal})
+    requests = _provider(monkeypatch, [(raw, [])], auto_wrap=False)
     asyncio.run(native.plugin.on_message(event))
     assert len(requests) == 1
     assert len(event.sent) == 1
@@ -256,13 +256,16 @@ def test_on_message_nested_json_example_sends_once_as_literal(background, monkey
     assert event.stopped
 
 
-@pytest.mark.parametrize("targets", [[], [9999], [1234, 9999]])
+@pytest.mark.parametrize("target_kind", ["absent", "unknown", "mixed"])
 def test_on_message_nonempty_text_without_valid_current_attribution_is_suppressed(
-        background, monkeypatch, targets):
+        background, monkeypatch, target_kind):
     """Background permission must never weaken foreground current-batch targeting."""
     native, event = background, Event()
+    current_id = event.message_obj.message_id
+    targets = {"absent": [], "unknown": [9999],
+               "mixed": [current_id, 9999]}[target_kind]
     raw = json.dumps({"reply_to": targets, "text": "not attributable"})
-    requests = _provider(monkeypatch, [(raw, [])])
+    requests = _provider(monkeypatch, [(raw, [])], auto_wrap=False)
     asyncio.run(native.plugin.on_message(event))
     _quiet(native, event)
     assert len(requests) == 1

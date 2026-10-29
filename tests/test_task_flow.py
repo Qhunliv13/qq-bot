@@ -14,6 +14,7 @@ from types import ModuleType, SimpleNamespace
 import pytest
 
 import test_production_integration as integration
+from test_batch_flow import _final
 from test_production_integration import Image, MessageChain, _call, _provider
 from plugin.task_event import TaskEvent
 
@@ -141,9 +142,11 @@ def test_task_native_path_reuses_tools_transcript_media_and_saved_goal(productio
     plugin._tasks_mod = lambda: SimpleNamespace(listing=lambda **kwargs: [dict(task, status="active")])
     plugin._dispatch_tool = dispatch
     saved_context = copy.deepcopy(task)
-    requests = _provider(monkeypatch, [("draft", [_call("task_media")]), ("Saved work completed.", [])])
+    requests = _provider(monkeypatch, [("draft", [_call("task_media")]),
+        (_final("Saved work completed.", delivery="already_delivered"), [])], auto_wrap=False)
     assert asyncio.run(plugin._run_task_once(task)) == ""
     assert executed == [("task_media", "42")]
+    assert len(requests) == 2 and len(sent) == 1
     assert task["last_tools"] == ["task_media"]
     assert sent[0][0] == "send_group_msg" and sent[0][1]["group_id"] == 42
     assert any(isinstance(component, Image) and component.file == str(media)
@@ -298,9 +301,10 @@ def test_task_safe_final_raises_instead_of_successful_acknowledgement(production
     plugin = production()
     task = {"id": "uncertain", "scope": "42", "origin": "offline:42", "goal": "continue saved work"}
     plugin._tasks_mod = lambda: SimpleNamespace(listing=lambda **kwargs: [dict(task, status="active")])
-    _provider(monkeypatch, [(SAFE_FINAL, [])])
+    requests = _provider(monkeypatch, [(SAFE_FINAL, []), (SAFE_FINAL, [])], auto_wrap=False)
     with pytest.raises(RuntimeError, match="task_finalization_failed"):
         asyncio.run(plugin._run_task_once(task))
+    assert len(requests) == 2  # A private draft gets one repair, never a public fallback.
     assert plugin._recent == {} and plugin._hist().load("42") == []
 
 

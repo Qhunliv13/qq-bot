@@ -65,7 +65,8 @@ def _assert_single_completion(plugin, event, requests):
 def test_structured_silence_on_message_current_batch(silence_plugin, monkeypatch, sentinel):
     """Validated current-batch attribution must never turn a sentinel into a message."""
     plugin, event = silence_plugin, Event("please decide whether to reply")
-    requests = _provider(monkeypatch, [(json.dumps({"reply_to": [1234], "text": sentinel}), [])])
+    requests = _provider(monkeypatch, [(json.dumps({"reply_to": [event.message_obj.message_id], "text": sentinel}), [])],
+                         auto_wrap=False)
     asyncio.run(plugin.on_message(event))
     _assert_quiet(plugin, event)
     _assert_single_completion(plugin, event, requests)
@@ -80,7 +81,8 @@ def test_structured_silence_handle_one_current_batch(silence_plugin, monkeypatch
     """Direct handling uses the frozen batch's real IDs and produces no send effects."""
     plugin, event = silence_plugin, Event()
     plugin._turn_context["42"] = {"messages": [message_record(event, event.text)]}
-    requests = _provider(monkeypatch, [(json.dumps({"reply_to": [1234], "text": sentinel}), [])])
+    requests = _provider(monkeypatch, [(json.dumps({"reply_to": [event.message_obj.message_id], "text": sentinel}), [])],
+                         auto_wrap=False)
     asyncio.run(plugin._handle_one(event, "42", event.text, False, True))
     _assert_quiet(plugin, event)
     _assert_single_completion(plugin, event, requests)
@@ -90,7 +92,7 @@ def test_structured_silence_handle_one_current_batch(silence_plugin, monkeypatch
 def test_json_string_silence_on_message(silence_plugin, monkeypatch):
     """A single JSON-string wrapper is control output, not quoted visible prose."""
     plugin, event = silence_plugin, Event()
-    requests = _provider(monkeypatch, [('"silent"', [])])
+    requests = _provider(monkeypatch, [('"silent"', [])], auto_wrap=False)
     asyncio.run(plugin.on_message(event))
     _assert_quiet(plugin, event)
     _assert_single_completion(plugin, event, requests)
@@ -100,7 +102,7 @@ def test_json_string_silence_on_message(silence_plugin, monkeypatch):
 def test_plain_silence_on_message(silence_plugin, monkeypatch, sentinel):
     """Plain native completion ends the turn, including the observed wrapped leak."""
     plugin, event = silence_plugin, Event()
-    requests = _provider(monkeypatch, [(sentinel, [])])
+    requests = _provider(monkeypatch, [(sentinel, [])], auto_wrap=False)
     asyncio.run(plugin.on_message(event))
     _assert_quiet(plugin, event)
     _assert_single_completion(plugin, event, requests)
@@ -137,7 +139,9 @@ def test_normal_silent_mode_prose_is_preserved(silence_plugin, monkeypatch):
     """Substring mentions of silence remain ordinary prose and send exactly once."""
     plugin, event = silence_plugin, Event()
     answer = "silent mode is available"
-    requests = _provider(monkeypatch, [(answer, [])])
+    # Explicit current-message attribution keeps this prose public without fixture wrapping.
+    final = {"reply_to": [event.message_obj.message_id], "text": answer, "delivery": "new"}
+    requests = _provider(monkeypatch, [(final, [])], auto_wrap=False)
     asyncio.run(plugin.on_message(event))
     _assert_single_completion(plugin, event, requests)
     assert len(event.sent) == 1
@@ -162,11 +166,16 @@ def test_image_only_marker_is_delivered_without_caption(silence_plugin, tmp_path
     plugin._mark_replied.assert_called_once_with("42")
 
 
-@pytest.mark.parametrize("targets", [[9999], [1234, 9999], [True], "1234", []])
-def test_structured_invalid_silence_targets_fail_closed(silence_plugin, monkeypatch, targets):
-    """A sentinel cannot legitimize nonexistent, mixed, mistyped, or absent targets."""
+@pytest.mark.parametrize("target_kind", ["unknown", "mixed", "boolean", "scalar", "absent"])
+def test_structured_invalid_silence_targets_fail_closed(silence_plugin, monkeypatch, target_kind):
+    """Invalid targets cannot become valid through a second attribution attempt."""
     plugin, event = silence_plugin, Event()
-    requests = _provider(monkeypatch, [(json.dumps({"reply_to": targets, "text": "silent"}), [])])
+    current_id = event.message_obj.message_id
+    # The mixed/scalar variants use the real ID, not a guessed stand-in.
+    targets = {"unknown": [9999], "mixed": [current_id, 9999],
+               "boolean": [True], "scalar": current_id, "absent": []}[target_kind]
+    requests = _provider(monkeypatch, [(json.dumps({"reply_to": targets, "text": "silent"}), [])],
+                         auto_wrap=False)
     asyncio.run(plugin.on_message(event))
     _assert_quiet(plugin, event)
     _assert_single_completion(plugin, event, requests)
@@ -179,7 +188,7 @@ def test_silence_after_native_tool_has_no_extra_completion(silence_plugin, monke
     requests = _provider(monkeypatch, [
         ("", [_call("self_status", call_id="silence-status")]),
         ("silent", []),
-    ])
+    ], auto_wrap=False)
     asyncio.run(plugin.on_message(event))
     _assert_quiet(plugin, event)
     assert len(requests) == 2

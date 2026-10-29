@@ -136,6 +136,9 @@ async def run(system: str, prompt: str,
         try:
             final_text, final_calls = await ask(False)
         except Exception as exc:
+            from .final_response import FinalResponseUnavailable
+            if isinstance(exc, FinalResponseUnavailable):
+                raise ModelCompletionUnavailable("invalid_final_response", used) from None
             _LOG.warning("Final no-tools model call failed", exc_info=True)
             # Preserve the provider cause internally, not in a canned user reply.
             raise ModelCompletionUnavailable("provider_error", used) from exc
@@ -155,7 +158,12 @@ async def run(system: str, prompt: str,
     while rounds is None or _round < rounds:
         try:
             text, calls = await ask(True)
-        except Exception:
+        except Exception as exc:
+            # A rejected public-output envelope has already had its single repair
+            # attempt. Never call a second model to bypass that decision.
+            from .final_response import FinalResponseUnavailable
+            if isinstance(exc, FinalResponseUnavailable):
+                raise ModelCompletionUnavailable("invalid_final_response", used) from None
             _LOG.warning("Tool-loop model call failed in round %s", _round, exc_info=True)
             return await finish()
         if not calls:

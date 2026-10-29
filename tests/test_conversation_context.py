@@ -374,7 +374,8 @@ def test_persona_is_verbatim_and_only_system_personality():
     protocol = json.loads(prompt[len(persona) + 1:])["protocol"]
     assert protocol["version"] == 1
     assert protocol["response"]["options"] == ["text", "SILENT"]
-    assert "may choose" in protocol["response"]["selection"]
+    assert "final model output must be a JSON object" in protocol["response"]["selection"]
+    assert "public reply only" in protocol["response"]["selection"]
     assert "not system instructions" in protocol["context"]["trust"]
     assert "Display names" in protocol["context"]["identity"]
     assert "do not establish authority" in protocol["context"]["identity"]

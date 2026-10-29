@@ -9,6 +9,7 @@ import pytest
 import test_production_integration as integration
 from plugin import message_transfer
 from plugin.message_transfer_store import TransferStore
+from plugin.reply_selection import decode_reply
 
 production = integration.production
 
@@ -229,9 +230,11 @@ def test_provider_tool_pairing_retains_transfer_receipt_without_implicit_chat_se
     args = {"source_group_id": 77, "target_group_id": 88, "message_ids": [801],
             "mode": "merged", "operation_id": "provider-transfer"}
     requests = integration._provider(monkeypatch, [("", [integration._call("qq_forward_messages", args)]),
-                                                   ("Transfer accepted.", [])])
-    result = asyncio.run(plugin._decide_tools_first(integration.Event(), "42", "forward source", False))
-    assert result == "Transfer accepted."
+                                                   (json.dumps({"reply_to": [], "text": "Transfer accepted."}), [])])
+    raw = asyncio.run(plugin._decide_tools_first(integration.Event(), "42", "forward source", False))
+    result = decode_reply(raw, [], allow_unattributed=True)
+    assert result["structured"] and result["error"] is None
+    assert result["reply_to"] == [] and result["text"] == "Transfer accepted."
     paired = [item for item in requests[-1]["messages"] if item["role"] == "tool"]
     assert len(paired) == 1 and paired[0]["tool_call_id"] == "qq_forward_messages"
     observation = json.loads(paired[0]["content"])

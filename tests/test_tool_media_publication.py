@@ -47,10 +47,11 @@ def test_tool_image_then_implicit_final_marker_is_not_a_second_send(media, monke
     """A tool receipt makes an unmarked final a draft, not another attachment request."""
     plugin, event, path = media
     args = {"path": str(path)} if tool != "send_sticker" else {"file": path.name}
+    # Keep the unstructured marker raw: auto-wrapping would fabricate delivery=new.
     requests = _provider(monkeypatch, [
         ("private planning", [_call(tool, args, "media-once")]),
         ("[发图:%s]" % path, []),
-    ])
+    ], auto_wrap=False)
     _run(plugin, event)
     assert _images(event) == [str(path)]
     assert len(event.sent) == 1
@@ -59,7 +60,8 @@ def test_tool_image_then_implicit_final_marker_is_not_a_second_send(media, monke
     assert not turn["_interim_replies"]
     assert len(turn["_deliveries"]) == 1
     assert turn["_deliveries"][0]["delivery"]["status"] == "observed_send_return"
-    assert turn["_final_publication"]["publish"] is False
+    assert "_final_publication" not in turn
+    # The original raw draft never reaches publication selection or repair.
     observation = json.loads(requests[-1]["messages"][-1]["content"])
     assert observation["result"]["delivered"] is True
 
@@ -75,10 +77,12 @@ def test_native_confirmed_tool_media_also_requires_explicit_final(media, monkeyp
         return [{"message_id": "1441743276"}]
 
     event.send = native_send
-    _provider(monkeypatch, [
+    requests = _provider(monkeypatch, [
         ("", [_call("send_shot", {"path": str(path)})]), ("[发图:%s]" % path, []),
-    ])
+    ], auto_wrap=False)
     _run(plugin, event)
+    assert len(requests) == 2
+    assert len(event.sent) == 1
     assert _images(event) == [str(path)]
     delivery = plugin._turn_context["42"]["_deliveries"][0]["delivery"]
     assert delivery["status"] == "native_confirmed"
@@ -99,11 +103,14 @@ def test_send_exception_does_not_gate_a_later_successful_final(media, monkeypatc
         return await original_send(chain)
 
     event.send = fail_first
-    _provider(monkeypatch, [
+    final = {"reply_to": [event.message_obj.message_id],
+             "text": "The image could not be sent.", "delivery": "new"}
+    requests = _provider(monkeypatch, [
         ("", [_call("send_shot", {"path": str(path)})]),
-        ("The image could not be sent.", []),
-    ])
+        (final, []),
+    ], auto_wrap=False)
     _run(plugin, event)
+    assert len(requests) == 2
     assert len(attempts) == 2
     assert _images(event) == []
     assert event.sent[0].chain[-1].text == "The image could not be sent."
@@ -113,11 +120,13 @@ def test_send_exception_does_not_gate_a_later_successful_final(media, monkeypatc
 def test_explicit_new_final_can_intentionally_send_the_same_image_again(media, monkeypatch):
     """The publication protocol permits explicit repeat output; no path/hash dedup applies."""
     plugin, event, path = media
-    final = json.dumps({"reply_to": ["1234"], "text": "[发图:%s]" % path, "delivery": "new"})
-    _provider(monkeypatch, [
+    final = json.dumps({"reply_to": [event.message_obj.message_id], "text": "[发图:%s]" % path,
+                        "delivery": "new"})
+    requests = _provider(monkeypatch, [
         ("", [_call("send_shot", {"path": str(path)})]), (final, []),
-    ])
+    ], auto_wrap=False)
     _run(plugin, event)
+    assert len(requests) == 2
     assert _images(event) == [str(path), str(path)]
     assert len(event.sent) == 2
 
@@ -125,12 +134,13 @@ def test_explicit_new_final_can_intentionally_send_the_same_image_again(media, m
 def test_explicit_sibling_send_requests_are_not_deduplicated(media, monkeypatch):
     """Two native send calls remain two independent public actions, even for one path."""
     plugin, event, path = media
-    _provider(monkeypatch, [
+    requests = _provider(monkeypatch, [
         ("", [_call("send_shot", {"path": str(path)}, "first"),
               _call("send_shot", {"path": str(path)}, "second")]),
         ("SILENT", []),
-    ])
+    ], auto_wrap=False)
     _run(plugin, event)
+    assert len(requests) == 2
     assert _images(event) == [str(path), str(path)]
     assert plugin._vm_tool.await_count == 2
 
@@ -139,11 +149,14 @@ def test_failed_tool_media_does_not_suppress_an_ordinary_final(media, monkeypatc
     """A missing attachment creates no actual delivery and cannot convert a final to draft."""
     plugin, event, path = media
     plugin._vm_tool.return_value["path"] = str(path.parent / "missing.png")
-    _provider(monkeypatch, [
+    final = {"reply_to": [event.message_obj.message_id],
+             "text": "The attachment was unavailable.", "delivery": "new"}
+    requests = _provider(monkeypatch, [
         ("", [_call("send_shot", {"path": "missing.png"})]),
-        ("The attachment was unavailable.", []),
-    ])
+        (final, []),
+    ], auto_wrap=False)
     _run(plugin, event)
+    assert len(requests) == 2
     assert _images(event) == []
     assert len(event.sent) == 1
     assert event.sent[0].chain[-1].text == "The attachment was unavailable."
@@ -166,8 +179,12 @@ def test_foreign_malformed_or_non_delivery_records_do_not_gate_final(media, monk
         return {"ok": True, "files": []}
 
     plugin._vm_tool.side_effect = observe_files
-    _provider(monkeypatch, [("", [_call("vm_files")]), ("Ordinary final remains public.", [])])
+    final = {"reply_to": [event.message_obj.message_id],
+             "text": "Ordinary final remains public.", "delivery": "new"}
+    requests = _provider(monkeypatch, [("", [_call("vm_files")]), (final, [])],
+                         auto_wrap=False)
     _run(plugin, event)
+    assert len(requests) == 2
     assert len(event.sent) == 1
     assert event.sent[0].chain[-1].text == "Ordinary final remains public."
     assert "_final_publication" not in plugin._turn_context["42"]
@@ -176,14 +193,17 @@ def test_foreign_malformed_or_non_delivery_records_do_not_gate_final(media, monk
 def test_previous_turn_media_does_not_gate_a_later_ordinary_final(media, monkeypatch):
     """The existing per-turn reset preserves future replies after an earlier image send."""
     plugin, event, path = media
-    _provider(monkeypatch, [
-        ("", [_call("send_shot", {"path": str(path)})]), ("SILENT", []),
-        ("A new turn has an ordinary answer.", []),
-    ])
-    _run(plugin, event)
     later = Event("Another question", message_id="1235")
+    current_id = later.message_obj.message_id
+    requests = _provider(monkeypatch, [
+        ("", [_call("send_shot", {"path": str(path)})]), ("SILENT", []),
+        ({"reply_to": [current_id], "text": "A new turn has an ordinary answer.",
+          "delivery": "new"}, []),
+    ], auto_wrap=False)
+    _run(plugin, event)
     plugin._turn_context["42"]["messages"] = [message_record(later, later.text)]
     _run(plugin, later)
+    assert len(requests) == 3
     assert _images(event) == [str(path)]
     assert len(later.sent) == 1
     assert later.sent[0].chain[-1].text == "A new turn has an ordinary answer."

@@ -8,6 +8,7 @@ import logging
 import pytest
 
 import test_production_integration as integration
+from test_batch_flow import _final
 from plugin.memory import Memory
 from plugin.message_batch import message_record
 
@@ -186,11 +187,14 @@ def test_native_model_next_request_receives_persisted_instruction_not_system_aut
     instruction = "Prefer compact generic summaries"
     call = integration._call("remember", {"text": instruction,
         "structure": {"kind": "instruction"}, "source_message_ids": ["native-save"]}, "save-native")
-    requests = integration._provider(monkeypatch, [
-        ("", [call]), ("Saved the requested instruction.", []), ("A compact response.", [])])
     first = Event("Save my response preference", message_id="native-save")
-    asyncio.run(memory_host._decide_tools_first(first, "42", first.text, False))
     second = Event("Discuss an unrelated topic", message_id="native-next")
+    requests = integration._provider(monkeypatch, [
+        ("", [call]),
+        (_final("Saved the requested instruction."), []),
+        (_final("A compact response."), [])
+    ], auto_wrap=False)
+    asyncio.run(memory_host._decide_tools_first(first, "42", first.text, False))
     asyncio.run(memory_host._decide_tools_first(second, "42", second.text, False))
     assert len(requests) == 3
     user = next(message for message in requests[-1]["messages"] if message["role"] == "user")

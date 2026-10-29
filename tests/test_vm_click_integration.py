@@ -12,6 +12,7 @@ import pytest
 
 import test_production_integration as integration
 from plugin import vm_click_gate
+from plugin.reply_selection import decode_reply
 
 
 production = integration.production
@@ -72,6 +73,13 @@ def _confirm(preview):
     return {key: preview[key] for key in ("ticket", "x", "y", "screen_sha256")} | {"viewed": True}
 
 
+def _assert_unattributed_final(raw, expected):
+    """Decode direct native-loop JSON without inventing a current QQ message ID."""
+    result = decode_reply(raw, [], allow_unattributed=True)
+    assert result["structured"] and result["error"] is None
+    assert result["reply_to"] == [] and result["text"] == expected
+
+
 def test_native_preview_image_then_confirm_clicks_once(click_host):
     """The next model request sees marked pixels before one unchanged-screen click."""
     host, source, clicks, shots = click_host
@@ -97,10 +105,11 @@ def test_native_preview_image_then_confirm_clicks_once(click_host):
                 assert marker.size == (160, 120)
                 assert marker.convert("RGB").getpixel((45, 55)) != (192, 192, 192)
             return "", [_call("vm_click_confirm", _confirm(preview), "confirm")]
-        return "Clicked after visual review.", []
+        return json.dumps({"reply_to": [], "text": "Clicked after visual review."}), []
 
     host._llm_tools = model
-    assert asyncio.run(host._decide_tools_first(Event(), "42", "current question", False)) == "Clicked after visual review."
+    _assert_unattributed_final(asyncio.run(host._decide_tools_first(Event(), "42", "current question", False)),
+                               "Clicked after visual review.")
     assert clicks == [(45, 55)] and len(shots) == 2
     assert source.read_bytes() == raw and len(requests) == 3
     paired = _results(requests[-1])
@@ -124,10 +133,11 @@ def test_native_confirm_denies_changed_screen(click_host):
             assert _image_bytes(messages)
             Image.new("RGB", (160, 120), (32, 32, 32)).save(source)
             return "", [_call("vm_click_confirm", _confirm(_results(messages)[0]["result"]), "confirm")]
-        return "No click performed.", []
+        return json.dumps({"reply_to": [], "text": "No click performed."}), []
 
     host._llm_tools = model
-    assert asyncio.run(host._decide_tools_first(Event(), "42", "current question", False)) == "No click performed."
+    _assert_unattributed_final(asyncio.run(host._decide_tools_first(Event(), "42", "current question", False)),
+                               "No click performed.")
     assert clicks == [] and len(shots) == 2
     assert _results(observed[-1])[-1]["result"]["error"] == "screen_changed"
 
@@ -146,10 +156,11 @@ def test_native_confirm_without_visual_pixels_denied(click_host):
         if len(requests) == 2:
             assert not _image_bytes(messages)
             return "", [_call("vm_click_confirm", _confirm(_results(messages)[0]["result"]), "confirm")]
-        return "No visual confirmation.", []
+        return json.dumps({"reply_to": [], "text": "No visual confirmation."}), []
 
     host._llm_tools = model
-    assert asyncio.run(host._decide_tools_first(Event(), "42", "current question", False)) == "No visual confirmation."
+    _assert_unattributed_final(asyncio.run(host._decide_tools_first(Event(), "42", "current question", False)),
+                               "No visual confirmation.")
     assert clicks == [] and len(shots) == 1
     assert _results(requests[-1])[-1]["result"]["error"] == "preview_image_not_seen_by_model"
 
@@ -170,10 +181,11 @@ def test_same_native_batch_cannot_claim_preview_was_seen(click_host, monkeypatch
                             "screen_sha256": digest, "viewed": True}
             return "", [_call("vm_click_preview", {"x": 45, "y": 55}, "preview"),
                         _call("vm_click_confirm", confirmation, "confirm")]
-        return "Batch confirmation denied.", []
+        return json.dumps({"reply_to": [], "text": "Batch confirmation denied."}), []
 
     host._llm_tools = model
-    assert asyncio.run(host._decide_tools_first(Event(), "42", "current question", False)) == "Batch confirmation denied."
+    _assert_unattributed_final(asyncio.run(host._decide_tools_first(Event(), "42", "current question", False)),
+                               "Batch confirmation denied.")
     assert clicks == [] and len(shots) == 1
     assert _results(requests[-1])[-1]["result"]["error"] == "preview_image_not_seen_by_model"
     assert not _image_bytes(requests[0]) and _image_bytes(requests[-1])

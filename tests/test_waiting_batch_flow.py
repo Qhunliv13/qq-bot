@@ -13,7 +13,7 @@ from types import MethodType
 import pytest
 
 import test_production_integration as integration
-from test_batch_flow import _entry, _envelope, _sent
+from test_batch_flow import _entry, _envelope, _final, _sent
 
 production = integration.production
 
@@ -53,7 +53,9 @@ def test_sequential_platform_ingress_batches_every_arrival_until_lock_acquired(p
     """Three serial platform callbacks return while a previous task still owns execution."""
     plugin = _waiting_entry(production())
     events = [integration.Event("subject %s" % index, str(700 + index)) for index in range(3)]
-    requests = integration._provider(monkeypatch, [(answer, [])])
+    final = answer if answer == "SILENT" else _final(
+        answer, *(event.message_obj.message_id for event in events))
+    requests = integration._provider(monkeypatch, [(final, [])], auto_wrap=False)
     sleeps = []
 
     async def forbidden_sleep(delay, *args, **kwargs):
@@ -117,9 +119,10 @@ def test_serial_arrivals_during_native_tool_join_next_turn_without_cancellation(
             if len(requests) == 2:
                 assert messages[-1]["role"] == "tool"
                 assert messages[-1]["tool_call_id"] == "waiting-native-tool"
-                return "First task finished.", []
+                return _final("First task finished.", events[0].message_obj.message_id), []
             assert len(requests) == 3, "Consumed messages must not be replayed"
-            return "Both later subjects considered together.", []
+            return _final("Both later subjects considered together.",
+                          events[1].message_obj.message_id, events[2].message_obj.message_id), []
 
         async def tool(name, args, group="", event=None):
             """Track completion and make cancellation an observable regression."""
@@ -220,7 +223,9 @@ def test_waiting_batch_rechecks_permissions_at_dequeue(production, monkeypatch, 
     denied = set()
     original = plugin._policy_allows
     plugin._policy_allows = lambda event, group: event.message_obj.message_id not in denied and original(event, group)
-    requests = integration._provider(monkeypatch, [] if revoke_all else [("Only still permitted input.", [])])
+    requests = integration._provider(monkeypatch, [] if revoke_all else [
+        (_final("Only still permitted input.", events[1].message_obj.message_id), [])
+    ], auto_wrap=False)
 
     async def scenario():
         """Change admission policy only after both serial callbacks have enqueued their data."""
@@ -250,7 +255,10 @@ def test_serial_arrivals_during_confirmed_send_form_one_followup(production, mon
     """A queued worker owns the awaited send boundary as well as model and tool execution."""
     plugin = _waiting_entry(production())
     events = [integration.Event("send subject %s" % index, str(740 + index)) for index in range(3)]
-    requests = integration._provider(monkeypatch, [("First reply.", []), ("Combined followup.", [])])
+    requests = integration._provider(monkeypatch, [
+        (_final("First reply.", events[0].message_obj.message_id), []),
+        (_final("Combined followup.", events[1].message_obj.message_id,
+                events[2].message_obj.message_id), [])], auto_wrap=False)
 
     async def scenario():
         """Withhold the first send confirmation while two sequential inputs return normally."""
@@ -286,7 +294,9 @@ def test_reload_waits_owned_worker_and_copies_only_confirmed_delivery(production
     """Returning ingress cannot hide active send ownership from replacement instance draining."""
     old, new = _waiting_entry(production()), production()
     event = integration.Event("delivery pending during reload", "750")
-    integration._provider(monkeypatch, [("Confirmed before replacement.", [])])
+    integration._provider(monkeypatch, [
+        (_final("Confirmed before replacement.", event.message_obj.message_id), [])
+    ], auto_wrap=False)
 
     async def scenario():
         """Use drain's existing polling boundary as a handshake rather than elapsed time."""

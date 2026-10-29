@@ -53,7 +53,8 @@ def test_first_native_request_preserves_real_batch_and_separate_historical_sourc
     plugin._hist().append("77", legacy)
     plugin._hist().append("88", "cross-group-source", record=historical)
     plugin._turn_context["42"] = {"messages": current, "clock": {"sampled_at": "2002-02-02"}}
-    requests = _provider(monkeypatch, [("SILENT", [])])
+    # Preserve the raw no-reply control; the shared fixture otherwise wraps it as public text.
+    requests = _provider(monkeypatch, [("SILENT", [])], auto_wrap=False)
     assert asyncio.run(plugin._decide_tools_first(events[0], "42", events[0].text, False)) == ""
     messages = requests[0]["messages"]
     assert [message["role"] for message in messages] == ["system", "user"]
@@ -101,7 +102,8 @@ def test_native_user_wire_preserves_full_shared_history_prefix(production, monke
     current = message_record(event, event.text)
     clock = {"sampled_at": "2026-10-27T17:00:00.123456+08:00", "raw": 123.456}
     plugin._turn_context["42"] = {"messages": [current], "clock": clock}
-    requests = _provider(monkeypatch, [("SILENT", []), ("SILENT", [])])
+    # Silence is a raw protocol response, never a fabricated reply to this batch.
+    requests = _provider(monkeypatch, [("SILENT", []), ("SILENT", [])], auto_wrap=False)
     assert asyncio.run(plugin._decide_tools_first(event, "42", event.text, False)) == ""
     first = requests[0]["messages"][1]["content"]
     before = json.loads(first)

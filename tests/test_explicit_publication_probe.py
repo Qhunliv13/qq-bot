@@ -45,6 +45,8 @@ def test_offline_probe_tool_media_cases_use_actual_dispatch_and_send(
     result = asyncio.run(probe.foreground_case(module, tmp_path / "media", explicit, tool_media=True))
     assert result["name"] == ("tool_media_explicit_new" if explicit else "tool_media_raw_marker")
     assert result["provider_callback_count"] == 2
+    assert result["final_returned"] is explicit
+    assert result["delivery_record_count"] == (2 if explicit else 1)
     assert result["paired_tool_result_count"] == 1
     assert result["simulated_send_count"] == (2 if explicit else 1)
     assert result["receipt_message_ids"] == ["900101"]

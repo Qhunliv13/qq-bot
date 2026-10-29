@@ -136,10 +136,15 @@ def test_native_fact_image_read_feeds_next_model_without_archiving_base64(fact_h
     # Transport now accepts only the stored canonical bytes, proving retrieval used them.
     fact_host._as_llm_url = lambda ref: ref if ref == PNG_URL else ""
     call = integration._call("facts_read_image", {"id": saved["id"], "index": 0}, "fact-image-native")
-    requests = integration._provider(monkeypatch, [("", [call]), ("I inspected the saved image.", [])])
     event = Event("Inspect the saved fact image")
+    # Direct calls have no current records, so the final reply has no target IDs.
+    requests = integration._provider(monkeypatch, [("", [call]),
+        (json.dumps({"reply_to": [], "text": "I inspected the saved image."}), [])])
     answer = asyncio.run(fact_host._decide_tools_first(event, "42", event.text, False))
-    assert answer == "I inspected the saved image."
+    from plugin.reply_selection import decode_reply
+    selection = decode_reply(answer, [], allow_unattributed=True)
+    assert selection["structured"] and selection["error"] is None
+    assert selection["reply_to"] == [] and selection["text"] == "I inspected the saved image."
     assert len(requests) == 2
     messages = requests[1]["messages"]
     tool_index = next(index for index, message in enumerate(messages) if message["role"] == "tool")

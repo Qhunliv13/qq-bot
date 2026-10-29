@@ -40,6 +40,12 @@ def _sent(events):
     return [chain for event in events for chain in event.sent]
 
 
+def _final(text, *message_ids, delivery="new"):
+    """Build an explicit final from actual current IDs supplied by each test."""
+    return json.dumps({"reply_to": list(message_ids), "text": text,
+                       "delivery": delivery}, ensure_ascii=False)
+
+
 async def _arrive_while_model_active(plugin, events):
     """Freeze the first real model result while later arrivals queue for one follow-up."""
     started, release = asyncio.Event(), asyncio.Event()
@@ -91,7 +97,10 @@ def test_active_model_collects_later_messages_once_including_whole_batch_silence
     plugin = production()
     _entry(plugin)
     events = [Event("weather question", "101"), Event("lunch question", "102"), Event("third subject", "103")]
-    requests = _provider(monkeypatch, [(answer, []), (answer, [])])
+    finals = [answer if answer == "SILENT" else _final(
+        answer, *(event.message_obj.message_id for event in batch))
+        for batch in (events[:1], events[1:])]
+    requests = _provider(monkeypatch, [(final, []) for final in finals], auto_wrap=False)
 
     asyncio.run(_arrive_while_model_active(plugin, events))
     assert len(requests) == 2
@@ -109,7 +118,9 @@ def test_arrivals_during_awaited_send_join_next_batch_without_window(production,
     plugin = production()
     _entry(plugin)
     first, second, third = Event("first send", "111"), Event("during send two", "112"), Event("during send three", "113")
-    requests = _provider(monkeypatch, [("First reply.", []), ("Both later messages.", [])])
+    requests = _provider(monkeypatch, [(_final("First reply.", first.message_obj.message_id), []),
+                                   (_final("Both later messages.", second.message_obj.message_id,
+                                           third.message_obj.message_id), [])], auto_wrap=False)
     original_get = os.environ.get
     window_reads, sleeps = [], []
 
@@ -166,7 +177,8 @@ def test_waiting_execution_lock_drains_arrivals_after_lock_not_before(production
     plugin = production()
     _entry(plugin)
     events = [Event("first waiting", "201"), Event("second waiting", "202"), Event("third waiting", "203")]
-    requests = _provider(monkeypatch, [("All three considered together.", [])])
+    requests = _provider(monkeypatch, [(_final("All three considered together.",
+        *(event.message_obj.message_id for event in events)), [])], auto_wrap=False)
 
     async def scenario():
         """Hold the real shared execution lock until all three inputs are queued."""
@@ -202,7 +214,8 @@ def test_metadata_stays_out_of_body_and_multiple_subjects_share_one_reply(produc
     first.get_sender_name = lambda: "discount.example wholesale"
     second.get_sender_id = lambda: "11002"
     second.get_sender_name = lambda: "Lunch speaker"
-    requests = _provider(monkeypatch, [("The sky is clear; lunch can be later.", [])])
+    requests = _provider(monkeypatch, [(_final("The sky is clear; lunch can be later.",
+        first.message_obj.message_id, second.message_obj.message_id), [])], auto_wrap=False)
 
     # Attribution is a queued-batch contract; preserve the actual parser and lock drain.
     asyncio.run(_arrive_while_execution_locked(plugin, [first, second]))
@@ -237,8 +250,8 @@ def test_structured_batch_selection_reaches_native_send_without_json_or_stale_qu
     plugin._last_quote = "888"
     events = [Event("first subject", "101"), Event("second subject", "102")]
     requests = _provider(monkeypatch, [
-        (json.dumps({"reply_to": reply_to, "text": text}), []),
-    ])
+        (_final(text, *reply_to), []),
+    ], auto_wrap=False)
 
     # Both records must enter one real _handle_one/_send turn behind the held lock.
     asyncio.run(_arrive_while_execution_locked(plugin, events))
@@ -274,7 +287,8 @@ def test_probability_is_applied_once_to_collected_batch(production, monkeypatch,
 
     monkeypatch.setattr("random.random", draw)
     events = [Event("unwoken subject %s" % index, str(400 + index)) for index in range(3)]
-    requests = _provider(monkeypatch, [("One probabilistic reply.", [])])
+    requests = _provider(monkeypatch, [(_final("One probabilistic reply.",
+        *(event.message_obj.message_id for event in events)), [])], auto_wrap=False)
 
     # A held execution lock defines this one admission batch without arbitrary waiting.
     asyncio.run(_arrive_while_execution_locked(plugin, events))
@@ -301,9 +315,10 @@ def test_new_batch_does_not_cancel_active_tool_or_repeat_consumed_messages(produ
             if len(requests) == 2:
                 assert messages[-1]["role"] == "tool"
                 assert messages[-1]["tool_call_id"] == "active-tool"
-                return "Tool completed.", []
+                return _final("Tool completed.", first.message_obj.message_id), []
             assert len(requests) == 3, "Consumed messages must never trigger another model turn"
-            return "Weather and lunch together.", []
+            return _final("Weather and lunch together.", second.message_obj.message_id,
+                          third.message_obj.message_id), []
 
         async def tool(name, args, group="", event=None):
             """Model a running effect that must not be cancelled by newly queued chat."""

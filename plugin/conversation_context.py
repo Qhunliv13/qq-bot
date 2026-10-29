@@ -143,8 +143,10 @@ def system_prompt(persona: str) -> str:
                     "preceding narration is not delivered. Literal examples belong in quoted or fenced text."
                 ),
                 "selection": (
-                    "For a current batch, the model may choose a positive subset of supplied message IDs "
-                    "with {\"reply_to\":[message_id,...],\"text\":\"...\"}. reply_to identifies the answered "
+                    "For a current batch, final model output must be a JSON object with "
+                    "reply_to (actual message IDs) and text (public reply only), or SILENT. "
+                    "Private reasoning and draft prose are not public text. The object is "
+                    "{\"reply_to\":[message_id,...],\"text\":\"...\"}. reply_to identifies the answered "
                     "messages; multiple targets may share one reply. Empty text and empty reply_to means silence. "
                     "An earlier target is transported with its native quote; with several earlier targets, "
                     "one earlier selected ID is quoted and text can distinguish the others. SILENT means no "

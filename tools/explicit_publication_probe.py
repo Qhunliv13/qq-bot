@@ -124,7 +124,7 @@ async def foreground_case(module, root, explicit, *, tool_media=False):
     records = [batch_mod.message_record(event, event.text)]
     image_path = root / "fixture-image.png"
     body = "[发图:%s]" % image_path if tool_media else "A separate final result."
-    final = json.dumps({"reply_to": ["1234"], "text": body, "delivery": "new"}) if explicit else body
+    final = json.dumps({"reply_to": [records[0]["id"]], "text": body, "delivery": "new"}) if explicit else body
     call = {"id": "fixture-call", "type": "function", "function": {
         "name": "send_shot" if tool_media else "reply_now",
         "arguments": json.dumps({"path": str(image_path)} if tool_media else
@@ -156,7 +156,7 @@ async def foreground_case(module, root, explicit, *, tool_media=False):
     first_delivery = bot._turn_context["42"]["_deliveries"][0]["delivery"]
     assert first_delivery["status"] == "native_confirmed"
     assert first_delivery["message_ids"] == ["900101"]
-    assert first_delivery["input_message_ids"] == ["1234"]
+    assert first_delivery["input_message_ids"] == [records[0]["id"]]
     if tool_media:
         assert result["path"] == str(image_path)
         assert not bot._turn_context["42"]["_interim_replies"]

@@ -1676,8 +1676,10 @@ class HiganPlugin(Star):
             data = await asyncio.to_thread(_call)
             from .model_usage import log_usage
             log_usage(logger, data, transport="plain")
+            from .model_output import parse_message
             msg = ((data.get("choices") or [{}])[0].get("message") or {})
-            return (msg.get("content") or "").strip()
+            text, _calls = parse_message(msg)
+            return text.strip()
         except Exception as exc:  # noqa: BLE001
             logger.warning("[higan] _llm_chat 失败：%r", str(exc)[:140])
             return ""
@@ -2149,8 +2151,10 @@ class HiganPlugin(Star):
             data = await asyncio.to_thread(_call)
             from .model_usage import log_usage
             log_usage(logger, data, transport="plain")
+            from .model_output import parse_message
             msg = ((data.get("choices") or [{}])[0].get("message") or {})
-            return (msg.get("content") or "").strip()
+            text, _calls = parse_message(msg)
+            return text.strip()
         except Exception as exc:  # noqa: BLE001
             logger.warning("[higan] 直连纯文本失败：%r", str(exc)[:140])
             return ""
@@ -2247,9 +2251,10 @@ class HiganPlugin(Star):
         try:
             from .model_usage import log_usage
             log_usage(logger, data, transport="tools", request_index=request_index)
+            from .model_output import parse_message
             msg = ((data.get("choices") or [{}])[0].get("message") or {})
-            _txt = (msg.get("content") or "").strip()
-            _tcs = (msg.get("tool_calls") or [])
+            _txt, _tcs = parse_message(msg)
+            _txt = _txt.strip()
             # 记录模型返回的工具调用。
             logger.info("[higan] 工具请求结果：text=%d字 ｜tool_calls=%d 个%s"
                         % (len(_txt), len(_tcs),
@@ -3608,7 +3613,30 @@ class HiganPlugin(Star):
                 # A successful provider response proves the marked image was in
                 # that model request; mere preview output never establishes this.
                 await click_gate.mark_observed(pending_marker_submitted)
-            return result
+            # A completed same-scope send makes an unmarked no-tools completion
+            # an internal draft, not a fresh finalization or a second send. Only
+            # explicit delivery=new can request another public response.
+            from .final_publication import has_public_delivery
+            from .final_response import FINAL_RESPONSE_CONTRACT, ensure_final_response, publishable
+            from .reply_selection import is_silence
+            if (not result[1] and has_public_delivery(turn, group)
+                    and not is_silence(result[0])
+                    and not publishable(result[0], turn.get("messages") or [],
+                                        allow_unattributed=not bool(turn.get("messages")))):
+                return "", []
+            # A no-tools completion is not automatically a public reply. Only an
+            # explicit final envelope may cross this one shared publication edge.
+
+            async def _repair_final(_private_draft):
+                """Ask once from original evidence; never restate a private draft."""
+                repair_messages = list(messages) + [
+                    {"role": "system", "content": FINAL_RESPONSE_CONTRACT},
+                ]
+                return await self._llm_tools(system, prompt, [], repair_messages, False)
+
+            return await ensure_final_response(
+                result[0], result[1], turn.get("messages") or [], _repair_final,
+                allow_unattributed=not bool(turn.get("messages")))
 
         async def _execute_tool(name, args):
             # 群文件通过 AstrBot 的 OneBot 客户端读取。
@@ -3786,32 +3814,36 @@ class HiganPlugin(Star):
         # Native loop already produced a result-aware answer. Never ask a second independent
         # model to rephrase it without the transcript (that could duplicate actions or lose evidence).
         # 模型可选择静默。
+        # Successful tool attempts remain evidence for tasks even when the public
+        # final is silent or an already-delivered acknowledgement.
+        if task_context is not None:
+            task_context["last_tools"] = list(_used)
         from .reply_selection import is_silence
         if is_silence(_out):
             logger.info("[higan] 她选择沉默（SILENT）✓")
             return ""
         _out = (_out or "").strip()
-        if task_context is not None:
-            task_context["last_tools"] = list(_used)
         if not _out:
             return ""
         # 媒体已发送时不补造文字说明。
 
-        # 其余图片由模型显式发图标记决定。
-        if shots and "[发图]" in (_out or ""):
-            _out = _out.replace("[发图]", "[发图:%s]" % shots[-1], 1).strip()
-            logger.info("[higan] 她决定发图：%s" % shots[-1])
-        elif shots and "[发图" not in (_out or ""):
+        # Replace only the public JSON text field; a Windows screenshot path
+        # contains backslashes and must be re-encoded before the shared decoder.
+        if shots and "[发图]" in _out:
+            payload = json.loads(_out)
+            public_text = payload["text"]
+            if "[发图]" in public_text:
+                payload["text"] = public_text.replace("[发图]", "[发图:%s]" % shots[-1], 1)
+                _out = json.dumps(payload, ensure_ascii=False)
+                logger.info("[higan] 她决定发图：%s" % shots[-1])
+        elif shots and "[发图" not in _out:
             logger.info("[higan] 本轮截图 %d 张，她选择不发（内部保留 ✓）" % len(shots))
         if not _out:
             return ""
         # An actual same-scope public send requires an explicit new final publication,
         # regardless of whether text or media tools produced it; repeated tools stay independent.
-        if turn.get("_interim_replies") or any(
-                isinstance(item, dict) and isinstance(item.get("delivery"), dict)
-                and item["delivery"].get("status") in ("native_confirmed", "observed_send_return", "local_recorded")
-                and item["delivery"].get("destination_scope") == str(group)
-                for item in turn.get("_deliveries", [])):
+        from .final_publication import has_public_delivery
+        if has_public_delivery(turn, group):
             from .final_publication import select as select_publication
             records = turn.get("messages") or []
             publication = select_publication(_out, records, explicit=True,
@@ -3834,7 +3866,23 @@ class HiganPlugin(Star):
         from .reply_selection import is_silence
         if is_silence(out):
             return ""
-        return (out or "").strip()
+        from .final_response import FINAL_RESPONSE_CONTRACT, ensure_final_response, FinalResponseUnavailable
+        records = ((getattr(self, "_turn_context", {}) or {}).get(group, {}).get("messages") or [])
+
+        async def _repair_plain(_private_draft):
+            """Use the same read-only context; never echo the private draft."""
+            messages = [{"role": "system", "content": system_prompt(self.persona)},
+                        {"role": "user", "content": prompt},
+                        {"role": "system", "content": FINAL_RESPONSE_CONTRACT}]
+            return await self._llm_tools(system_prompt(self.persona), prompt, [], messages, False)
+
+        try:
+            result, _calls = await ensure_final_response(
+                out, [], records, _repair_plain, allow_unattributed=not bool(records))
+        except FinalResponseUnavailable:
+            # Failure is silence, never the raw private draft or a second fallback.
+            return ""
+        return (result or "").strip()
 
     def _parse_decision(self, raw: str, require_action: bool = True):
         """从模型输出里取 JSON（三级容错 ）。
