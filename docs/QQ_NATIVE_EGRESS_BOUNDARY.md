@@ -107,3 +107,71 @@ used an absolute test directory; no dependencies, resolver, listener, network
 configuration or QQ execution were involved. This verifies the tested address
 matrix across those interpreters, not every current or future address registry
 entry or any runtime enforcement.
+
+## Explicit pinned TCP connector (not activated)
+
+`tools/qq_egress_connector.py` adds `connect_pinned(plan, *, timeout_seconds,
+allowed_ports, address_index=0, socket_factory=socket.socket,
+clock=time.monotonic, stop_event=None)`. Import does not open a socket. Only an
+explicit call connects; nothing invokes this from QQ, a proxy, or a listener.
+The preceding future-enforcement checklist still applies: this is a connector
+primitive, **not a complete bridge, network isolation, or UDP/DNS enforcement**.
+
+- A frozen `DestinationPlan` can be forged with its public constructor. The
+  connector therefore requires the exact plan type, reuses
+  `validate_resolved_destination` on **all fields and all answers**, and requires
+  canonical immutable fields matching the resulting snapshot. It rejects duplicate
+  or noncanonical plans instead of silently changing the selected address index.
+- `allowed_ports` has **no default**. The trusted caller must pass the same bound
+  used for policy validation, or explicitly pass `None` for unrestricted valid
+  ports. A plan does not remember that bound; the connector cannot recover it.
+- Only the exact integer `address_index` (default 0) is attempted, once. There are
+  no automatic retries, other-address fallback, aliases, redirects, or proxy use.
+  `ipaddress` selects AF_INET/AF_INET6, fixed-family `inet_pton` checks the literal,
+  and `socket(family, SOCK_STREAM, IPPROTO_TCP).connect((literal, port))` uses that
+  canonical numeric string only. `host` is never a connect/resolver argument.
+  No `getaddrinfo` or `socket.create_connection` is used.
+- Exact int/float timeout values must be in **1..30 seconds**, excluding bool and
+  nonfinite values. A monotonic deadline starts before plan validation; remaining
+  time is set immediately before connect. Late returns, including after peer
+  checks, are rejected and closed. This is synchronous: it cannot preempt a
+  blocking trusted callback or OS scheduling delay. `stop_event` optionally accepts
+  a trusted `threading.Event`, checked before connection and after connect/peer
+  verification; setting it cannot interrupt the in-progress syscall immediately.
+- Peer identity requires an exact tuple (IPv4 length 2; IPv6 length 4), a numeric
+  string canonically equal to the selected IP, exact integer matching port, and
+  zero integer IPv6 flowinfo/scopeid. Scoped and IPv4-mapped IPv6 peers fail.
+- Success returns the **raw socket**, owned by the trusted caller, which must close
+  it or use its native context manager. The remaining connect timeout stays set;
+  it is not a deadline across subsequent reads/writes. There is no TLS, credential
+  snapshot, authentication, payload send, or transport protocol implementation.
+- Every allocated failure socket receives a close attempt, including on interrupts.
+  Fixed `ConnectorError.code` values are `invalid_plan`, `invalid_timeout`,
+  `invalid_dependency`, `invalid_stop_event`, `invalid_address_index`, `clock_failed`,
+  `cancelled`, `deadline_exceeded`, `factory_failed`, `connect_failed`, `peer_failed`,
+  `peer_mismatch`, and `close_failed`; exception messages contain only the code and
+  underlying exception display is suppressed. If close itself fails, release is
+  **not established** and `close_failed` is raised; BaseException interrupts still
+  propagate after attempted cleanup. No raw network error is logged.
+- Factory/clock/event injections and the returned socket owner are trusted, not a
+  sandbox for hostile Python code. The factory must return a fresh, unconnected
+  socket and must not resolve names or conceal peer identity. The deadline cannot
+  enforce the behavior of a malicious or indefinitely blocking factory.
+
+A host-owned public IP, local routes/NAT, gateway aliases, or a public IP routed to
+an internal service remain outside this primitive's protection. No service binds
+or listener starts here; no claim is made that an external service is unreachable.
+Real socket/resolver integration and route/interface-aware negative tests remain
+outstanding before enabling actual QQ traffic. The existing pure policy is unchanged.
+
+Focused offline tests (fake factories only, resolver/create-connection entrypoints
+forbidden by spies):
+
+```text
+python -m unittest discover -s tests -p 'test_qq_egress*.py' -v
+```
+
+The connector tests cover both families, forgery, bounds, one-address selection,
+peer failures/mismatch, timeout/cancellation, cleanup and success ownership. They
+perform no actual external network calls and do not constitute production or
+complete-bridge validation.
