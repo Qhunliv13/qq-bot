@@ -47,7 +47,7 @@ VERSION_KEYS = {"node", "electron", "modules", "napi", "chrome", "v8", "uv"}
 
 def validate_mode(control_mode):
     """Accept only explicit internally authored controls; reject script/path injection."""
-    if control_mode not in ("wrapper", "initialize", "connect_offline", "connect_ready_offline", "vendor_bootstrap", "vendor_stall", "vendor_window_roles"):
+    if control_mode not in ("wrapper", "initialize", "initialize_factories", "connect_offline", "connect_ready_offline", "vendor_bootstrap", "vendor_stall", "vendor_window_roles"):
         raise runtime.ProbeError("control_mode_invalid")
     return control_mode
 
@@ -63,7 +63,7 @@ def fixed_sources(control_mode):
     module_directory = directory.parent / "qq_transport"
     if not module_directory.is_dir():
         module_directory = directory
-    return {MAIN: directory / ({"connect_offline": "qq_native_connect_entry.js", "connect_ready_offline": "qq_native_ready_entry.js"}.get(control_mode, "qq_native_init_entry.js")),
+    return {MAIN: directory / ({"initialize_factories": "qq_native_factory_entry.js", "connect_offline": "qq_native_connect_entry.js", "connect_ready_offline": "qq_native_ready_entry.js"}.get(control_mode, "qq_native_init_entry.js")),
             "/tmp/native_login.js": module_directory / "native_login.js",
             "/tmp/native_metadata.js": module_directory / "native_metadata.js"}
 
@@ -78,9 +78,12 @@ def base_report(control_mode="wrapper"):
                   full_sendrecv_verified=False, host_record=None,
                   invocation={"argv": ["/opt/QQ/qq"], "electron_run_as_node_present": False},
                   bounds_seconds={"qq": QQ_TIMEOUT, "outer": OUTER_TIMEOUT})
-    if control_mode in ("initialize", "connect_offline", "connect_ready_offline"):
+    if control_mode in ("initialize", "initialize_factories", "connect_offline", "connect_ready_offline"):
         report.update(mode="ephemeral_native_init", native_initialize_verified=False,
                       native_listener_registered=False, native_listener_disposed=False)
+    if control_mode == "initialize_factories":
+        report.update(mode="ephemeral_native_initialize_factories", startup_factory_created=False,
+                      session_factory_available=False)
     if control_mode == "connect_offline":
         report.update(mode="ephemeral_native_connect_offline", native_connect_observation_verified=False)
     if control_mode == "connect_ready_offline":
@@ -397,6 +400,11 @@ def observe_host(command, env, output, errors, timeout, report, *, source, contr
     report["mode"] = base_report(control_mode)["mode"]
     stage_control(source, control, mount, parent_ids, report, auxiliary=auxiliary)
     diagnostic = None
+    if control_mode == "initialize_factories":
+        import qq_native_connect_control
+        import qq_native_factory_control
+        diagnostic = qq_native_factory_control
+        qq_native_connect_control.verify_offline_network(report)
     if control_mode in ("connect_offline", "connect_ready_offline"):
         import qq_native_connect_control
         diagnostic = __import__("qq_native_ready_control") if control_mode == "connect_ready_offline" else qq_native_connect_control
@@ -445,10 +453,10 @@ def observe_host(command, env, output, errors, timeout, report, *, source, contr
         # Retirement is an actual process observation even if native code never returns.
         report["process_retired"] = process.returncode is not None
         try:
-            with Path(diagnostic.PROGRESS_PATH if control_mode in ("connect_ready_offline", "vendor_bootstrap", "vendor_stall", "vendor_window_roles") else "/tmp/qq-native-connect-progress.json").open("rb") as stream:
-                report["vendor_progress" if control_mode in ("vendor_bootstrap", "vendor_stall", "vendor_window_roles") else "connect_progress"] = diagnostic.parse_progress(stream.read(LIMIT + 1), nonce)
+            with Path(diagnostic.PROGRESS_PATH if control_mode in ("initialize_factories", "connect_ready_offline", "vendor_bootstrap", "vendor_stall", "vendor_window_roles") else "/tmp/qq-native-connect-progress.json").open("rb") as stream:
+                report["factory_progress" if control_mode == "initialize_factories" else "vendor_progress" if control_mode in ("vendor_bootstrap", "vendor_stall", "vendor_window_roles") else "connect_progress"] = diagnostic.parse_progress(stream.read(LIMIT + 1), nonce)
         except (OSError, ValueError, UnicodeError):
-            report["vendor_progress" if control_mode in ("vendor_bootstrap", "vendor_stall", "vendor_window_roles") else "connect_progress"] = None
+            report["factory_progress" if control_mode == "initialize_factories" else "vendor_progress" if control_mode in ("vendor_bootstrap", "vendor_stall", "vendor_window_roles") else "connect_progress"] = None
     if control_mode in ("connect_ready_offline", "vendor_bootstrap", "vendor_stall", "vendor_window_roles"):
         try:
             with Path(diagnostic.FATAL_PATH if control_mode in ("vendor_bootstrap", "vendor_stall", "vendor_window_roles") else "/tmp/qq-native-ready-fatal.json").open("rb") as stream:
@@ -498,6 +506,10 @@ def child_main(args):
     """Capture fixed bytes before pivot, then use the unmodified shared runtime."""
     root = runtime.validate_root(args.qq_root)
     control_mode = validate_mode(getattr(args, "control_mode", "wrapper"))
+    if control_mode == "initialize_factories":
+        # Cache the fixed parser and existing offline gate before oldroot detach.
+        __import__("qq_native_connect_control")
+        __import__("qq_native_factory_control")
     if control_mode in ("connect_offline", "connect_ready_offline"):
         # Cache fixed validator before pivot detaches Python's staged module path.
         __import__("qq_native_connect_control")
@@ -518,7 +530,7 @@ def child_main(args):
     auxiliary = {target: path.read_bytes() for target, path in sources.items()}
     pristine = (root / "resources/app/package.json").read_bytes()
     control = validate_manifest(pristine)
-    if control_mode in ("initialize", "connect_offline", "connect_ready_offline"):
+    if control_mode in ("initialize", "initialize_factories", "connect_offline", "connect_ready_offline"):
         auxiliary["/tmp/qq-native-pristine-package.json"] = pristine
     parent_ids = json.loads(args.parent_ns)
     def observer(command, env, output, errors, timeout, report):
@@ -565,7 +577,8 @@ def observe(qq_root, *, execute=False, control_mode="wrapper"):
                               ("qq_native_connect_control.py", "qq_vendor_bootstrap_control.py", "qq_application_observation.py", "qq_vendor_stall_observation.py") if control_mode == "vendor_stall" else
                               ("qq_native_connect_control.py", "qq_vendor_bootstrap_control.py") if control_mode == "vendor_bootstrap" else
                               ("qq_native_connect_control.py", "qq_native_ready_control.py") if control_mode == "connect_ready_offline" else
-                             ("qq_native_connect_control.py",) if control_mode == "connect_offline" else ()))
+                             ("qq_native_connect_control.py", "qq_native_factory_control.py") if control_mode == "initialize_factories" else
+                              ("qq_native_connect_control.py",) if control_mode == "connect_offline" else ()))
             for source in (Path(__file__).resolve(), Path(runtime.__file__).resolve(), *sources.values(), *helpers):
                 shutil.copyfile(source, stage / source.name)
             command = [tools["unshare"], "--ipc", "--mount", "--net", "--pid", "--fork", "--kill-child",
@@ -618,7 +631,7 @@ def main(argv=None):
     parser.add_argument("--qq-root", required=True)
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--child", action="store_true", help=argparse.SUPPRESS)
-    parser.add_argument("--control-mode", choices=("wrapper", "initialize", "connect_offline", "connect_ready_offline", "vendor_bootstrap", "vendor_stall", "vendor_window_roles"), default="wrapper", help=argparse.SUPPRESS)
+    parser.add_argument("--control-mode", choices=("wrapper", "initialize", "initialize_factories", "connect_offline", "connect_ready_offline", "vendor_bootstrap", "vendor_stall", "vendor_window_roles"), default="wrapper", help=argparse.SUPPRESS)
     for name in ("jail", "nonce", "parent-ns", "mount-tool", "pivot-tool", "umount-tool"):
         parser.add_argument("--" + name, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
