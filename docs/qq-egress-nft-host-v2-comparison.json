@@ -1,0 +1,7 @@
+{
+  "equal": true,
+  "host_ruleset_after_sha256": "e8e2201c1f9ccf2da32a899d44795084d1168072cc9ddf3a6f57a212767ac173",
+  "host_ruleset_before_sha256": "e8e2201c1f9ccf2da32a899d44795084d1168072cc9ddf3a6f57a212767ac173",
+  "rules_applied_only_in_child_namespace": true,
+  "schema": 1
+}

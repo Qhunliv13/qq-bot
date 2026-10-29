@@ -1,0 +1,22 @@
+{
+  "exit_code": 1,
+  "fixture_sha256": "31d72c0a978cdb003f7c890cbb9c9441f57f452771e4404a58703fc6ca15c8f1",
+  "observation": {
+    "baseline": {
+      "echoes": 2,
+      "owned_sockets_closed": 6,
+      "preallocation_rejections": 2,
+      "python_resolver_calls": 0,
+      "refused_connections_closed": 1,
+      "successful_families": 2
+    },
+    "offline_only": true,
+    "schema": 1,
+    "stage": "negative_probes",
+    "status": "failed"
+  },
+  "offline_only": true,
+  "schema": 1,
+  "status": "failed",
+  "stderr_bytes": 0
+}

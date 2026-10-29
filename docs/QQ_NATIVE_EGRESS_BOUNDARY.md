@@ -8,10 +8,11 @@ activate interfaces, modify firewalls, or launch QQ. It is not wired into any QQ
 transport or the existing plugin HTTP-fetch helpers. Those unrelated helpers are
 unchanged; this is not an SSRF migration or an endpoint allowlist.
 
-The reported Ubuntu-TSC availability check found `ip` and `unshare`, but not
-`slirp4netns`, `pasta`, `nft`, or `iptables` via `which`. This is an availability
-observation, not proof that no implementation could exist elsewhere. **No actual
-usable userspace networking/proxy enforcement component has been established.**
+The earlier Ubuntu-TSC availability check found `ip` and `unshare`, but not
+`slirp4netns`, `pasta`, `nft`, or `iptables` via `which`. After explicit user consent,
+`slirp4netns` and `nftables` plus their three required libraries were installed
+from the configured Ubuntu archive mirror (see installation evidence below).
+**An integrated userspace network exit for QQ has not yet been established.**
 Network-isolated testing remains required; authorization to test an independent
 QQ instance is not authorization to bypass isolation.
 
@@ -207,3 +208,54 @@ external gateway, route-aware host/LAN denial, UDP/DNS isolation, QQ connectivit
 login or feature acceptance. No host interface, firewall, production process or
 QQ session was modified. The 18 guard tests run offline with substituted OS
 observations; the explicit kernel fixture is not automatically launched by pytest.
+
+## Authorized WSL package installation
+
+The user explicitly approved test dependency installation, not QQ network launch
+or production replacement. [Installation evidence](qq-lab-network-packages-evidence.json)
+records the five installed packages and downloaded archive SHA256 values:
+slirp4netns 1.2.1-1build2, nftables/libnftables1 1.0.9-1ubuntu0.1,
+libslirp0 4.7.0-1ubuntu3.1, and libnftnl11 1.2.6-2build1. The simulation and actual
+install added five packages, upgraded none and removed none. The test distribution
+reports Ubuntu 24.04.5 LTS. Its configured Tsinghua Ubuntu mirror uses the Ubuntu
+archive keyring; insecure repository options were false and no authentication
+bypass was supplied. Archives were downloaded first and maintainer scripts reviewed
+before fixed-version `--no-download --no-install-recommends` installation.
+
+The nftables first-install script does not start the service; its restart clause
+applies only to upgrades, and this WSL has no systemd init. `slirp4netns --version`
+reports 1.2.1 with libslirp 4.7.0; its help advertises disable-host-loopback,
+disable-dns, sandbox and seccomp options. Those option names are not evidence that
+a bridge was started or that all host/LAN bypasses are prevented. No slirp bridge
+or QQ client was started during installation.
+
+## Real namespace-only firewall enforcement check
+
+[Explicit nft fixture](../tests/egress_nft_posix_check.py) reuses the prior namespace
+configuration and real kernel baseline. Only inside that fresh namespace it creates
+one fixed inet output chain with drop policy and four counted IPv4/IPv6 TCP/UDP
+drop rules. It does not expose arbitrary rule input, modify host rules, or start
+slirp/QQ. [Mocked unit tests](../tests/test_egress_nft_posix_check.py) check ordering,
+fixed commands and strict counter identity, and do not run nft automatically.
+
+The [initial run](qq-egress-nft-kernel-evidence.json) passed the TCP baseline but
+failed at an unclassified negative probe. A [diagnostic-only revision](qq-egress-nft-kernel-v2-evidence.json)
+identified UDP IPv4 send returning errno 1 (EPERM). Neither artifact was rewritten.
+Linux local OUTPUT drop can fail the send syscall rather than report successful
+send followed by receive timeout. The final test added successful UDP delivery
+baselines for both families, permits only that observed EPERM after rules, still
+requires receive timeout, and requires all four exact drop counters to be positive.
+Other send errors, delivered packets or missing counters remain failures.
+
+The [third run](qq-egress-nft-kernel-v3-evidence.json) passed, exit 0/stderr 0:
+IPv4/IPv6 TCP and UDP baselines succeeded; two TCP connections timed out and their
+allocations closed; both UDP sends returned EPERM with no received datagram; each
+of the four rules counted exactly one packet. Read-only parent ruleset hashes
+matched before/after every run ([first](qq-egress-nft-host-comparison.json),
+[second](qq-egress-nft-host-v2-comparison.json), [third](qq-egress-nft-host-v3-comparison.json)).
+This comparison covers the tests, not a retroactive pre-installation ruleset hash.
+
+This proves the installed WSL kernel can enforce the tested all-drop rules in an
+isolated namespace. It does **not** verify selective public egress, slirp gateway
+aliases, host/LAN exclusion under NAT, controlled DNS or a connected QQ client.
+Those integrated boundaries and real independent-account login remain pending.

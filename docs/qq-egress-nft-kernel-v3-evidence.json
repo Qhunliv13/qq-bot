@@ -1,0 +1,44 @@
+{
+  "exit_code": 0,
+  "fixture_sha256": "d47689e42a46b689248a77266ad12062687c832549a5c59e16177023bb9b260f",
+  "observation": {
+    "baseline": {
+      "echoes": 2,
+      "owned_sockets_closed": 6,
+      "preallocation_rejections": 2,
+      "python_resolver_calls": 0,
+      "refused_connections_closed": 1,
+      "successful_families": 2,
+      "udp_successful_families": 2
+    },
+    "counts": {
+      "failed_connector_allocations_closed": 2,
+      "rule_packets": {
+        "dsh_ipv4_tcp": 1,
+        "dsh_ipv4_udp": 1,
+        "dsh_ipv6_tcp": 1,
+        "dsh_ipv6_udp": 1
+      },
+      "tcp_dropped": 2,
+      "udp_dropped": 2,
+      "udp_send_outcomes": {
+        "v4": {
+          "received": false,
+          "send": "eperm"
+        },
+        "v6": {
+          "received": false,
+          "send": "eperm"
+        }
+      }
+    },
+    "offline_only": true,
+    "schema": 1,
+    "stage": "complete",
+    "status": "passed"
+  },
+  "offline_only": true,
+  "schema": 1,
+  "status": "passed",
+  "stderr_bytes": 0
+}

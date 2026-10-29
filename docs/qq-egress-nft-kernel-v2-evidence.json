@@ -1,0 +1,26 @@
+{
+  "exit_code": 1,
+  "fixture_sha256": "45d1053d9551862fb852153edde934df63b148781a46f2701ff4a3fc07844813",
+  "observation": {
+    "baseline": {
+      "echoes": 2,
+      "owned_sockets_closed": 6,
+      "preallocation_rejections": 2,
+      "python_resolver_calls": 0,
+      "refused_connections_closed": 1,
+      "successful_families": 2
+    },
+    "error": {
+      "errno": 1,
+      "kind": "permission_denied"
+    },
+    "offline_only": true,
+    "schema": 1,
+    "stage": "udp_v4",
+    "status": "failed"
+  },
+  "offline_only": true,
+  "schema": 1,
+  "status": "failed",
+  "stderr_bytes": 0
+}

@@ -1,0 +1,64 @@
+{
+  "archives": [
+    {
+      "file": "nftables_1.0.9-1ubuntu0.1_amd64.deb",
+      "sha256": "d648859fccde3c17b8b9b89993427564f91f394a39306db1f67bd5ea3ac42c6e"
+    },
+    {
+      "file": "slirp4netns_1.2.1-1build2_amd64.deb",
+      "sha256": "3fc72a72a376a3ad3b439434bc87d89d245f9d54a1d540e8a06b74d4e2385e0a"
+    },
+    {
+      "file": "libnftables1_1.0.9-1ubuntu0.1_amd64.deb",
+      "sha256": "fcaee001747a6adaa0cd9337fef437b3aa7a7a6d5246b62fbd4784d3d6a5009e"
+    },
+    {
+      "file": "libnftnl11_1.2.6-2build1_amd64.deb",
+      "sha256": "e5bde5c9cbb95082700011f0b7ef2c0a41900b0a9fd7434f6e90448e2a7b4e50"
+    },
+    {
+      "file": "libslirp0_4.7.0-1ubuntu3.1_amd64.deb",
+      "sha256": "4efa2d1c509de4d10fe965e86a3d864bf542996caf476d9111fd882c73857164"
+    }
+  ],
+  "distribution": "Ubuntu-TSC",
+  "installation_scope": {
+    "new_packages": 5,
+    "removed": 0,
+    "upgraded": 0
+  },
+  "maintainer_scripts_reviewed": true,
+  "package_control_export_sha256": "1632879c68ce635e3cf68b32bdf88e558020fcdfc1ce199e8554eb8c154d93ef",
+  "packages": [
+    {
+      "name": "libnftables1",
+      "state": "installed",
+      "version": "1.0.9-1ubuntu0.1"
+    },
+    {
+      "name": "libnftnl11",
+      "state": "installed",
+      "version": "1.2.6-2build1"
+    },
+    {
+      "name": "libslirp0",
+      "state": "installed",
+      "version": "4.7.0-1ubuntu3.1"
+    },
+    {
+      "name": "nftables",
+      "state": "installed",
+      "version": "1.0.9-1ubuntu0.1"
+    },
+    {
+      "name": "slirp4netns",
+      "state": "installed",
+      "version": "1.2.1-1build2"
+    }
+  ],
+  "qq_launched": false,
+  "schema": 1,
+  "slirp_bridge_started": false,
+  "source_signed_by": "/usr/share/keyrings/ubuntu-archive-keyring.gpg",
+  "systemd_init_present": false
+}
