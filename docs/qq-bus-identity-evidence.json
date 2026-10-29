@@ -1,0 +1,166 @@
+{
+  "abi_compatibility": "unverified",
+  "application_invoked": false,
+  "bounds_seconds": {
+    "client": 4,
+    "outer": 45,
+    "stage": 1
+  },
+  "bus_admission": {
+    "auth": "auth_ok",
+    "completed": true,
+    "elapsed_seconds": 0.01,
+    "get_id": {
+      "category": "returned_zero",
+      "exit_code": 0,
+      "returned_zero": true,
+      "stderr": {
+        "categories": {
+          "access_denied": false,
+          "auth_failure": false,
+          "client_usage_error": false,
+          "connection_closed": false,
+          "daemon_unavailable": false,
+          "library_load_failure": false,
+          "machine_id_unavailable": false,
+          "message_generic_error": false,
+          "no_reply_timeout": false,
+          "service_unknown": false,
+          "unix_identity_lookup_failure": false,
+          "unknown_failure": false,
+          "unknown_method": false
+        },
+        "prefix_truncated": false,
+        "present": false
+      }
+    },
+    "hello": {
+      "category": "returned_zero",
+      "exit_code": 0,
+      "returned_zero": true,
+      "stderr": {
+        "categories": {
+          "access_denied": false,
+          "auth_failure": false,
+          "client_usage_error": false,
+          "connection_closed": false,
+          "daemon_unavailable": false,
+          "library_load_failure": false,
+          "machine_id_unavailable": false,
+          "message_generic_error": false,
+          "no_reply_timeout": false,
+          "service_unknown": false,
+          "unix_identity_lookup_failure": false,
+          "unknown_failure": false,
+          "unknown_method": false
+        },
+        "prefix_truncated": false,
+        "present": false
+      }
+    },
+    "identity": {
+      "cap_eff_zero": true,
+      "gid": [
+        65534,
+        65534,
+        65534,
+        65534
+      ],
+      "no_new_privileges": true,
+      "uid": [
+        65534,
+        65534,
+        65534,
+        65534
+      ],
+      "verified": true
+    },
+    "same_connection_stage_proof": false
+  },
+  "errors": [],
+  "experiment_completed": true,
+  "filesystem_mode": "pivot-root",
+  "host_software_sha256_after": {
+    "qq": "ae67432744180adc2b6567aa61b9575b14b28745f57b377a2853a1b744299ec2",
+    "resources/app/app_launcher/index.js": "1c3f92e9da772b2578803f0e2847d3667363165b7f8a77e4869c060ce21596ab",
+    "resources/app/application.asar": "8a50d728a5e122e0ef08d73b01578b5124d40b93e7f17ffa16b92896daff5338",
+    "resources/app/package.json": "e7d8f160704a8704a4f531ef97602ea6fea8338f738f74ee9b10155cb9fc0a85",
+    "resources/app/wrapper.node": "236ff3ebf29310c75a41394d80db4587411d43d66208c2a7d58b160d7b7b213b"
+  },
+  "host_software_sha256_before": {
+    "qq": "ae67432744180adc2b6567aa61b9575b14b28745f57b377a2853a1b744299ec2",
+    "resources/app/app_launcher/index.js": "1c3f92e9da772b2578803f0e2847d3667363165b7f8a77e4869c060ce21596ab",
+    "resources/app/application.asar": "8a50d728a5e122e0ef08d73b01578b5124d40b93e7f17ffa16b92896daff5338",
+    "resources/app/package.json": "e7d8f160704a8704a4f531ef97602ea6fea8338f738f74ee9b10155cb9fc0a85",
+    "resources/app/wrapper.node": "236ff3ebf29310c75a41394d80db4587411d43d66208c2a7d58b160d7b7b213b"
+  },
+  "host_software_unchanged": true,
+  "independent_backend_ready": false,
+  "invocation": {
+    "argv": [],
+    "electron_run_as_node_present": false
+  },
+  "isolation": {
+    "chroot": false,
+    "ipc": true,
+    "mount": true,
+    "network": true,
+    "oldroot_detached": true,
+    "pid": true,
+    "pivotRoot": true
+  },
+  "mode": "isolated_bus_identity_control",
+  "native_binding_verified": false,
+  "offline_network": {
+    "ipv4_routes_absent": true,
+    "ipv6_forward_routes_absent": true,
+    "loopback_down": true,
+    "only_loopback": true
+  },
+  "private_diagnostics_written": false,
+  "private_display": {
+    "authenticated": true,
+    "effective_capabilities_zero": true,
+    "launch_attempted": true,
+    "ready": true,
+    "socket_owner_verified": true,
+    "stderr_prefix_bounded": true,
+    "stderr_present": true,
+    "tcp_disabled": true,
+    "unprivileged": true
+  },
+  "private_runtime_services": {
+    "activation_disabled": true,
+    "bus_ready": true,
+    "daemon_stderr_present": false,
+    "effective_capabilities_zero": true,
+    "fontconfig_readonly": true,
+    "launch_attempted": true,
+    "socket_owner_verified": true,
+    "unprivileged": true
+  },
+  "production_cutover": false,
+  "production_cutover_authorized": false,
+  "runtime_executed": false,
+  "runtime_versions_verified": false,
+  "safe_to_login": false,
+  "same_connection_stage_proof": false,
+  "status": "observed",
+  "synthetic_identity": {
+    "enabled": true,
+    "host_identity_read": false,
+    "records": {
+      "/etc/group": {
+        "mode_0444": true,
+        "root_owned": true,
+        "sha256": "a5691792cb2e052fca833fa1a28886074060a218d012cf548c3213ffe751f809"
+      },
+      "/etc/passwd": {
+        "mode_0444": true,
+        "root_owned": true,
+        "sha256": "cac8ee37fbc6f53dff0da19369f3f6b23be01c34ac42915ae84432a584727f80"
+      }
+    }
+  },
+  "versions": {}
+}

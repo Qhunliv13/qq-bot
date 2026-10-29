@@ -583,10 +583,48 @@ def private_display_session(report):
             report["private_display"]["stderr_prefix_bounded"] = True
 
 
+def validate_synthetic_identity(synthetic_identity, control_mode, filesystem_mode,
+                                private_display, private_runtime_services, extended_startup,
+                                application_observer, userns_control, native_load_control):
+    """Reject identity outside the fixed fully isolated no-QQ mode before any writes."""
+    if type(synthetic_identity) is not bool or (synthetic_identity and (
+            control_mode != "bus_identity_offline" or filesystem_mode != "pivot-root"
+            or not private_display or not private_runtime_services or not extended_startup
+            or not callable(application_observer) or userns_control or native_load_control)):
+        raise ProbeError("synthetic_identity_requires_fixed_private_bus_control")
+
+
+def create_synthetic_identity(jail):
+    """Create only fixed records in a fresh canonical root-owned private staging jail."""
+    jail = Path(jail)
+    # Reject ancestor symlinks, populated roots and writable staging parents before mkdir.
+    if (not jail.is_absolute() or jail.resolve(strict=True) != jail or jail.is_symlink()
+            or not jail.is_dir() or any(jail.iterdir()) or os.geteuid() != 0
+            or jail.stat().st_uid != 0 or jail.parent.stat().st_uid != 0
+            or stat.S_IMODE(jail.parent.stat().st_mode) != 0o700):
+        raise ProbeError("synthetic_identity_requires_fresh_private_root")
+    records = (("passwd", b"qqprobe:x:65534:65534:isolated runtime:/tmp/home:/usr/sbin/nologin\n"),
+               ("group", b"qqprobe:x:65534:\n"))
+    etc = jail / "etc"
+    etc.mkdir(mode=0o755)
+    evidence = {}
+    for name, content in records:
+        # x forbids overwrite/symlink following; the verified root-only parent prevents races.
+        with (etc / name).open("xb") as stream:
+            stream.write(content)
+            os.fchown(stream.fileno(), 0, 0)
+            os.fchmod(stream.fileno(), 0o444)
+            metadata = os.fstat(stream.fileno())
+        evidence["/etc/" + name] = {"sha256": hashlib.sha256(content).hexdigest(),
+                                   "root_owned": metadata.st_uid == metadata.st_gid == 0,
+                                   "mode_0444": stat.S_IMODE(metadata.st_mode) == 0o444}
+    return {"enabled": True, "host_identity_read": False, "records": evidence}
+
+
 def child_probe(root, jail, nonce, parent_ids, mount, diagnostic_fd=None, *, userns_control=False,
                 filesystem_mode="chroot", pivot_tool=None, umount_tool=None, native_load_control=False,
                 private_display=False, extended_startup=False, private_runtime_services=False,
-                application_observer=None):
+                application_observer=None, synthetic_identity=False, control_mode=None):
     """Build the shared isolation, then probe QQ or a trusted namespace control.
 
     application_observer is a trusted internal callable, never a CLI script or
@@ -596,6 +634,9 @@ def child_probe(root, jail, nonce, parent_ids, mount, diagnostic_fd=None, *, use
     This helper is PID 1 in its new namespace. On exit the kernel kills remaining
     descendants. No QQ process starts unless all isolation setup has succeeded.
     """
+    validate_synthetic_identity(synthetic_identity, control_mode, filesystem_mode,
+                                private_display, private_runtime_services, extended_startup,
+                                application_observer, userns_control, native_load_control)
     if filesystem_mode not in ("chroot", "pivot-root"):
         raise ProbeError("invalid_filesystem_mode")
     if filesystem_mode == "pivot-root":
@@ -634,6 +675,8 @@ def child_probe(root, jail, nonce, parent_ids, mount, diagnostic_fd=None, *, use
     # The parent creates an empty, private temporary directory, never a host root.
     if not jail.is_dir() or any(jail.iterdir()) or jail.is_symlink():
         raise ProbeError("jail_not_empty")
+    if synthetic_identity:
+        report["synthetic_identity"] = create_synthetic_identity(jail)
     jail.chmod(0o755)
     if filesystem_mode == "pivot-root":
         # Establish the new root mount before any nested mount; put_old is new.
