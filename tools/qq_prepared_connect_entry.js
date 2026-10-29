@@ -3,6 +3,9 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const nonce = process.env.QQ_WRAPPER_HOST_NONCE;
+// Only the shared fixed-mode runner sets this flag; all other modes delete it.
+const phaseControl = process.env.QQ_PREPARED_PHASE_CONTROL === '1';
+const progressPath = phaseControl ? '/tmp/qq-prepared-phase-progress.json' : '/tmp/qq-prepared-connect-progress.json';
 const started = process.hrtime.bigint();
 const history = [];
 let host = null;
@@ -27,21 +30,25 @@ function checkpoint(stage) {
     host: host ? host.getSnapshot() : null, login: controller ? controller.getSnapshot() : null};
   const raw = JSON.stringify(progress) + '\n';
   if (Buffer.byteLength(raw) > 16384) throw new Error('progress_bound');
-  fs.writeFileSync('/tmp/qq-prepared-connect-progress.json', raw, {encoding: 'utf8', flag: 'w', mode: 0o600});
+  fs.writeFileSync(progressPath, raw, {encoding: 'utf8', flag: 'w', mode: 0o600});
 }
-/** Independent fixed deadlines prove JS dispatch only, never native readiness. */
+/** One timer implementation proves dispatch, rearming only an early deadline. */
+function waitForCheckpoint(delay, stage, origin = process.hrtime.bigint()) {
+  return new Promise((resolve, reject) => {
+    /** Never advance an irreversible native stage before its full monotonic wait. */
+    function tick() {
+      const remaining = delay - Number((process.hrtime.bigint() - origin) / 1000000n);
+      if (remaining > 0) { setTimeout(tick, remaining); return; }
+      try { checkpoint(stage); resolve(); } catch (error) { reject(error); }
+    }
+    setTimeout(tick, delay);
+  });
+}
+/** Preserve original connect deadlines and order when the phase flag is absent. */
 function waitForTicks() {
   const origin = process.hrtime.bigint();
-  return Promise.all([[1000, 'tick_1s'], [5000, 'tick_5s'], [8000, 'tick_8s']].map(([delay, stage]) =>
-    new Promise((resolve, reject) => {
-      /** Re-arm an early timer only to its original deadline, never a native retry. */
-      function tick() {
-        const remaining = delay - Number((process.hrtime.bigint() - origin) / 1000000n);
-        if (remaining > 0) { setTimeout(tick, remaining); return; }
-        try { checkpoint(stage); resolve(); } catch (error) { reject(error); }
-      }
-      setTimeout(tick, delay);
-    })));
+  return Promise.all([[1000, 'tick_1s'], [5000, 'tick_5s'], [8000, 'tick_8s']].map(
+    ([delay, stage]) => waitForCheckpoint(delay, stage, origin)));
 }
 /** Reuse actual prepared factories once; no session, account, QR or native teardown. */
 async function main() {
@@ -49,6 +56,7 @@ async function main() {
     checkpoint('runtime');
     if (!/^[0-9a-f]{32}$/.test(nonce || '') || !record.runtime.exec_path_matches ||
         !['node', 'electron', 'modules', 'napi'].every(key => key in record.runtime.versions)) throw new Error();
+    if (phaseControl) await waitForCheckpoint(1000, 'phase_baseline_1s');
     record.error = 'binding_load_failed';
     record.binding.load_attempted = true;
     checkpoint('before_binding_load');
@@ -56,6 +64,7 @@ async function main() {
     process.dlopen(mod, '/opt/QQ/resources/app/wrapper.node');
     record.binding.loaded = true;
     checkpoint('after_binding_load');
+    if (phaseControl) await waitForCheckpoint(1000, 'phase_loaded_1s');
     record.error = 'metadata_invalid';
     const {resolveNativeConfiguration} = require('/tmp/native_metadata.js');
     const {createNativeHost} = require('/tmp/native_host.js');
@@ -70,6 +79,7 @@ async function main() {
     checkpoint('before_prepare');
     host.prepare();
     checkpoint('after_prepare');
+    if (phaseControl) await waitForCheckpoint(1000, 'phase_prepared_1s');
     // No arguments are read or retained by this explicit inert adapter.
     const globalAdapter = Object.freeze({onLog() {}, onGetSrvCalTime() {}, onShowErrUITips() {},
       fixPicImgType() {}, getAppSetting() {}, onInstallFinished() {}, onUpdateGeneralFlag() {}, onGetOfflineMsg() {}});
@@ -84,6 +94,7 @@ async function main() {
     record.initialization.initialized = record.initialization.snapshot.phase === 'initialized';
     record.initialization.listener_registered = record.initialization.snapshot.listener_registration_verified;
     checkpoint('after_initialize');
+    if (phaseControl) await waitForCheckpoint(1000, 'phase_initialized_1s');
     // Only the observed void registration permits logical-only controller disposal.
     record.error = 'listener_contract_unexpected';
     if (record.initialization.snapshot.listener_id_type !== 'undefined') throw new Error();
@@ -110,7 +121,7 @@ async function main() {
       record.initialization.snapshot = controller.getSnapshot();
     }
   }
-  const raw = 'QQ_PREPARED_CONNECT_' + nonce + ':' + JSON.stringify({...record, progress}) + '\n';
+  const raw = (phaseControl ? 'QQ_PREPARED_PHASE_' : 'QQ_PREPARED_CONNECT_') + nonce + ':' + JSON.stringify({...record, progress}) + '\n';
   if (Buffer.byteLength(raw) <= 16384) fs.writeFileSync('/tmp/qq-wrapper-host-result.json', raw, {encoding: 'utf8', flag: 'wx'});
   // Process retirement is the only native cleanup, including all failed paths.
   require('electron').app.exit(record.ok ? 0 : 1);

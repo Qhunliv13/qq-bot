@@ -20,7 +20,7 @@ def encode(value):
     return ("QQ_PREPARED_CONNECT_" + NONCE + ":" + json.dumps(value) + "\n").encode()
 
 
-def fake_run(tmp_path, case="normal"):
+def fake_run(tmp_path, case="normal", *, phase=False, stall=None):
     """Run the actual authored entry with reusable modules and injected native fakes."""
     node = shutil.which("node")
     if not node:
@@ -48,7 +48,7 @@ const pkg = {name:'QQ',version:'3.2.34-53644',buildVersion:'53644',platform:'lin
 const injectedFs = {
  readFileSync() { return JSON.stringify(pkg); },
  writeFileSync(name, raw) { assert(Buffer.byteLength(raw) <= 16384); writes[name] = raw;
-   if (name === '/tmp/qq-prepared-connect-progress.json') checkpoints.push(raw); }
+   if (name === '/tmp/qq-prepared-connect-progress.json' || name === '/tmp/qq-prepared-phase-progress.json') checkpoints.push(raw); }
 };
 function localRequire(name) {
  if (name === 'node:fs') return injectedFs;
@@ -60,16 +60,23 @@ function localRequire(name) {
 const fakeProcess = {env:{QQ_WRAPPER_HOST_NONCE:'c'.repeat(32)},execPath:'/opt/QQ/qq',
  versions:{node:'22.19.0',electron:'39.0.0',modules:'140',napi:'10'},
  hrtime:{bigint:() => BigInt(now) * 1000000n},dlopen(mod) { calls.push('dlopen'); mod.exports = wrapper; }};
+const phase = process.argv[4] === 'phase';
+if (phase) fakeProcess.env.QQ_PREPARED_PHASE_CONTROL = '1';
 const source = fs.readFileSync(path.join(root,'tools/qq_prepared_connect_entry.js'),'utf8');
 new Function('require','process','setTimeout',source)(localRequire,fakeProcess,(fn,delay) => timers.push({fn,at:now+delay}));
 (async () => {
- while (timers.length) { timers.sort((a,b) => a.at-b.at); const timer=timers.shift(); now=timer.at; timer.fn(); await Promise.resolve(); }
- await Promise.resolve(); await Promise.resolve();
- const raw = writes['/tmp/qq-wrapper-host-result.json']; assert(raw, 'final result missing');
- console.log(JSON.stringify({raw, progress:writes['/tmp/qq-prepared-connect-progress.json'], checkpoints, calls, exitCode}));
+ for (let spin=0; spin<100; spin++) {
+  await Promise.resolve();
+  const last = checkpoints.length ? JSON.parse(checkpoints.at(-1)).stage : '';
+  if (process.argv[5] === last) break;
+  if (timers.length) { timers.sort((a,b) => a.at-b.at); const timer=timers.shift(); now=timer.at; timer.fn(); }
+ }
+ const raw = writes['/tmp/qq-wrapper-host-result.json'];
+ if (process.argv[5] === 'none') assert(raw, 'final result missing');
+ console.log(JSON.stringify({raw, progress:writes[phase ? '/tmp/qq-prepared-phase-progress.json' : '/tmp/qq-prepared-connect-progress.json'], checkpoints, calls, exitCode}));
 })().catch(error => { console.error(error); process.exitCode=1; });
 """, encoding="utf-8")
-    result = subprocess.run([node, str(script), str(ROOT), case], capture_output=True,
+    result = subprocess.run([node, str(script), str(ROOT), case, "phase" if phase else "old", stall or "none"], capture_output=True,
                             text=True, encoding="utf-8", timeout=15, check=False)
     assert result.returncode == 0, result.stdout + result.stderr
     return json.loads(result.stdout)
