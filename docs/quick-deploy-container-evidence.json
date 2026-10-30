@@ -1,0 +1,14 @@
+{
+  "image": "qhunliv-deploy-test:20261030-fixed",
+  "network": "none",
+  "model_request_sent": false,
+  "qq_login_attempted": false,
+  "initial_healthy": true,
+  "shiki_asset_present": true,
+  "run_directory_uid_mode": "0:700",
+  "forced_restart_healthy": true,
+  "graceful_restart_healthy": true,
+  "settings_unchanged": true,
+  "framework_config_unchanged": true,
+  "retired": true
+}

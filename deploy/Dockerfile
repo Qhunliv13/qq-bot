@@ -2,6 +2,8 @@
 FROM node:20-bookworm-slim AS webui
 WORKDIR /src/dashboard
 COPY vendor/astrbot/dashboard/ ./
+# Vite emits this pinned sibling asset into the dashboard's t2i directory.
+COPY vendor/astrbot/astrbot/core/utils/t2i/template/shiki_runtime.iife.js /src/astrbot/core/utils/t2i/template/shiki_runtime.iife.js
 RUN corepack enable && corepack prepare pnpm@10.11.0 --activate \
     && pnpm install --frozen-lockfile \
     && pnpm run build
@@ -31,9 +33,10 @@ RUN python -m pip install . \
 COPY plugin/ /opt/qhunliv/plugin/
 COPY tools/local_runtime_client.py /opt/qhunliv/local_runtime_client.py
 COPY deploy/entrypoint.py /opt/qhunliv/entrypoint.py
+COPY deploy/healthcheck.py /opt/qhunliv/healthcheck.py
 COPY LICENSE THIRD_PARTY_NOTICES.md vendor/ASTRBOT_UPSTREAM.json /opt/qhunliv/
 EXPOSE 6185 6199
-# Health is local socket readiness; it never sends a model or QQ request.
-HEALTHCHECK --interval=10s --timeout=5s --start-period=180s --retries=6 \
-    CMD ["python", "/opt/qhunliv/local_runtime_client.py", "--socket", "/root/higan/run/local.sock", "--health"]
+# Health checks plugin intake and local dashboard HTML, not models or tool dependencies.
+HEALTHCHECK --interval=10s --timeout=6s --start-period=180s --retries=6 \
+    CMD ["python", "/opt/qhunliv/healthcheck.py"]
 ENTRYPOINT ["python", "/opt/qhunliv/entrypoint.py"]

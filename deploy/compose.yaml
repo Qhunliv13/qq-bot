@@ -35,9 +35,13 @@ services:
         read_only: true
         bind:
           create_host_path: false
+    # Socket state must not survive a container stop/crash; durable higan data does.
+    # Keep the existing root-only socket checks rather than unlinking stale paths.
+    tmpfs:
+      - '/root/higan/run:rw,nosuid,nodev,noexec,mode=0700,size=1m'
     healthcheck:
-      test: ['CMD', 'python', '/opt/qhunliv/local_runtime_client.py', '--socket', '/root/higan/run/local.sock', '--health']
+      test: ['CMD', 'python', '/opt/qhunliv/healthcheck.py']
       interval: 10s
-      timeout: 5s
+      timeout: 6s
       start_period: 180s
       retries: 6

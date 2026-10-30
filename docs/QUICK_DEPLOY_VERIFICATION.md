@@ -1,7 +1,8 @@
 # Windows / Linux quick deployment verification
 
-Status: launchers and preflight implemented and exercised; full image build and
-healthy container startup **not yet accepted**. No production installation changed.
+Status: launchers/preflight, complete image builds and isolated container health/
+restart checks passed. Unmodified Compose end-to-end deployment and real model
+chat **not yet accepted**. No production installation changed.
 
 ## Single implementation
 
@@ -40,13 +41,40 @@ healthy container startup **not yet accepted**. No production installation chang
   Python base-image resolution was cancelled. No project build step or container
   startup completed. No alternate registry, insecure TLS or DNS override was used.
 
+## Actual image and isolated runtime acceptance (2026-10-30, follow-up)
+
+The earlier metadata failure is retained above as historical evidence, not the
+current build outcome. Windows had an existing loopback HTTP proxy; direct Windows
+and WSL registry access failed. With explicit user approval, a temporary relay bound
+only the Windows WSL interface and admitted only the verified test WSL source IP.
+TLS validation remained enabled; no alternate registry, DNS or firewall change was
+made. The proxy had to be supplied to the Docker CLI (anonymous token retrieval),
+the dedicated daemon and build steps. Both complete image builds then exited 0.
+
+Actual frontend compilation exposed a missing sibling Shiki asset. The Dockerfile
+now copies the exact vendored asset before building; no vendor bytes were changed.
+Health now reuses the local socket client and additionally requires bounded HTML
+from the fixed loopback dashboard, with proxies and redirects disabled. Compose
+uses root-only tmpfs for the socket directory, preserving fail-closed bind behavior
+without carrying stale sockets across container stops.
+
+[Isolated container evidence](quick-deploy-container-evidence.json) records the fixed
+image's actual composite health, Shiki artifact, root:0700 run directory, forced
+kill/start recovery, graceful stop/start recovery, unchanged settings/framework
+configuration and final stopped state. This was **docker run --network none**, not
+an unmodified Compose deployment or host-port test. The baseline image first
+initialized the same private test state; the fixed image exercised preserved state.
+Upstream online metadata lookup errors were expected with networking disabled;
+no real model request or QQ login was performed. Both lab containers are stopped
+and retained. The dedicated daemon subsequently exited 0 gracefully; the temporary
+proxy relay was cancelled after builds completed. Full regression after source
+freeze: **4485 passed, 44 skipped, 348 subtests passed**.
+
 ## Remaining acceptance
 
-The same Dockerfile must complete its frontend and Python build with reachable
-trusted image/dependency registries. Then verify the unmodified Compose deployment,
-loopback dashboard, local-socket health, restart/config preservation and explicit
-same-instance chat with authorized model access. Current tests do not prove these
-container/runtime outcomes. After verification, the dedicated daemon was sent
+Still verify both quick-launch entrypoints through unmodified Compose networking,
+host loopback dashboard access and explicit same-instance chat with authorized
+model access. The isolated image run above does not prove those outcomes. After verification, the dedicated daemon was sent
 SIGTERM only after its PID command line matched the private data root; it exited
 0 with graceful shutdown. Private test state is retained, not deleted. Final full
 regression: 4478 passed, 44 skipped, 338 subtests passed. Linux-only launcher cases
