@@ -1,8 +1,8 @@
 # Qhunliv-bot 全系统架构、模块状态与运行逻辑
 
-> 文档日期：2026-10-30，Asia/Shanghai（UTC+08:00）。范围：本仓库完整 Bot、安装与 UI、Lite、Harness、QQ 接入与实验支线，不含无关 Q-API 计费系统。依据：第一方源码逐模块审计，以及本轮上下文、摘要和唤醒记录修复的离线回归；修复基线提交为 `4528c78`。最终发布提交以包含本文的 Git 提交为准，避免把自身提交号写入自身造成循环。
+> 状态核验日期：2026-10-31，Asia/Shanghai（UTC+08:00）；文件名保留原审计日期。范围：本仓库完整 Bot、安装与 UI、Lite、Harness、QQ 接入与实验支线，不含无关 Q-API 计费系统。依据：第一方源码审计、回归和隔离真实 Windows 宿主验收；私有缓存基线 `97cba97`，后续含已有实例 Python 选择修复（先前记忆修复基线 `4528c78`）。最终发布提交以包含本文的 Git 提交为准。
 >
-> **“有实现”“离线通过”“依赖外部服务”“真实验收未完成”分别标记。没有连接生产、读取私有聊天库、登录 QQ、付费调用模型或部署实例；源码已修不等于你的线上 Bot 已经更新。**
+> **分别记录“有实现”“离线通过”“隔离真实宿主通过”“依赖外部服务／未验收”。原生已安装宿主生命周期通过，但默认网络首次安装未通过；完整依赖下载完成借助产品外测试适配器。未连接生产、读取私有聊天库、登录 QQ、调用外部真实模型或更新生产实例；源码与隔离验收不等于线上 Bot 已更新。**
 
 ## 1. 阅读结论与系统边界
 
@@ -16,18 +16,22 @@
 ## 2. 总体分层与真正入口
 
 ```text
-Windows install.cmd ─ windows-setup.ps1 / UI ─ prerequisites ─ windows.ps1 ┐
-Windows install.ps1 ──────────────────────────────────── windows.ps1 ───┤
-Linux install.sh ──────────────────────────────────────────────────────┤
-                                                                      v
+Windows install.cmd → windows-native.ps1 → native_runtime.py / native_assets.py
+                         ├─ setup_wizard.py + setup_wizard.html（共享 loopback UI）
+                         └─ 私有 runtime/.venv + 复制核心/插件 + 固定官方面板
+                              └─ 原生 owned host ───────────────┐
+                                                               |
+Windows install.ps1 → windows.ps1（显式 WSL 兼容） ┐               |
+Linux install.sh ────────────────────────────────┤               |
+                                                v               |
                      tools/bootstrap.py（外部 state、doctor、Compose、管理）
-                         ├─ setup_wizard.py + setup_wizard.html（loopback UI）
-                         └─ deploy/compose.yaml → Dockerfile → entrypoint.py
-                                                            |
-                                                            v
-                vendor/astrbot/main.py（固定 AstrBot 4.28.1 宿主/面板/平台）
+                         ├─ 同一 setup_wizard.py / HTML          |
+                         └─ compose.yaml → Dockerfile → entrypoint.py
+                                                               |
+                                                               v
+                同一 AstrBot 4.28.1 main.py（宿主/面板/平台）
                                   |
-                 data/plugins/astrbot_plugin_higan → plugin/
+                 astrbot_plugin_higan（原生复制；容器链接只读 plugin/）
                                   |
                           HiganPlugin.initialize
                ┌──────────────────┼──────────────────────┐
@@ -65,7 +69,7 @@ Linux install.sh ─────────────────────
 
 ### 2.2 完整启动生命周期
 
-Windows默认新增[原生完整部署](WINDOWS_NATIVE_FULL.md)：[windows-native.ps1](../tools/windows-native.ps1)→[native_runtime.py](../tools/native_runtime.py)→[native_assets.py](../tools/native_assets.py)。复用原安装网页和deploy.prepare配置语义，独立venv安装vendored pyproject全部依赖、复制固定核心/插件、SHA256固定同版本面板文件，无Node/WSL/Docker宿主依赖；Windows私有SID ACL+token本地通道复用同一插件回路。原容器/WSL与Lite仍保留；真实原生完整实装和QQ/外部桥能力分别验收，见[验证记录](QUICK_DEPLOY_VERIFICATION.md)。
+Windows 默认[原生完整部署](WINDOWS_NATIVE_FULL.md)：[windows-native.ps1](../tools/windows-native.ps1)→[native_runtime.py](../tools/native_runtime.py)→[native_assets.py](../tools/native_assets.py)。复用安装网页和 deploy.prepare 配置语义，Python 3.12/3.13 私有 venv 安装 vendored pyproject 全部依赖、复制固定核心/插件、固定 SHA256 校验同版本官方面板，无 Node/WSL/Docker 宿主依赖；Windows 私有 SID ACL+token 本地通道复用同一完整插件回路。基线 `97cba97` 仅增加实例私有 `runtime/pip-cache`，未引入测试下载适配器，真实网络缓存复用未验证。隔离 Python 3.13 完整依赖与已安装宿主启动、登录、合成本地模型对话、在途排空／实际退出、短命 CLI 父进程退出后存活、持久状态重启均通过；下载需产品外测试辅助，不能据此宣布默认网络／全新电脑双击首次安装通过。原容器/WSL 与 Lite 保留，QQ／外部模型／外部桥和 Python 3.12 实装仍单独验收，见[验证记录](QUICK_DEPLOY_VERIFICATION.md)。
 
 - [bootstrap](../tools/bootstrap.py#L38-L82) 将数据目录限制在仓库外，也不接受源码目录祖先；默认安装路径是当前运行账号下 `.local/share/qhunliv-bot`。实例名可明确指定，否则由数据路径 hash 隔离。
 - [initialize_settings](../tools/bootstrap.py#L144-L189) 验证后只初始化 fresh state：创建 `astrbot/`、`higan/`、`config/`，写私有 `settings.json`、`compose.env`，最后才写 `.bootstrap.json`。已有受管安装仅核验，不重置密钥；外来非空目录拒绝接管。
@@ -85,7 +89,7 @@ Windows默认新增[原生完整部署](WINDOWS_NATIVE_FULL.md)：[windows-nativ
 | [main.py](../plugin/main.py) | `HiganPlugin`：AstrBot 注册、生命周期、事件准入、scope 合批、上游模型配置、工具 schema/dispatch、模型循环集成、媒体与回执、成员观察和调度装配。它仍是大装配入口，不应写成已彻底解耦。 |
 | [runtime_paths.py](../plugin/runtime_paths.py#L7-L22) | 唯一 `data_root()`；明确绝对 `HIGAN_ROOT`，否则当前账号 home/higan；不自动创建、迁移或接管别人目录。 |
 | [runtime_settings.py](../plugin/runtime_settings.py#L8-L132) | 外部 schema_version=1 设置、owners、persona、成员观察、OneBot、VM bridge、tool_profile。缺失与错误配置分开处理。 |
-| [local_runtime.py](../plugin/local_runtime.py#L118-L243) | 同插件 root-only Linux Unix socket；内核 `SO_PEERCRED` 验 UID0 才读字节，固定本地 route；仅 health/history/run，不允许 RPC 自选身份、scope或QQ目标。 |
+| [local_runtime.py](../plugin/local_runtime.py) | 同插件本地入口：Linux 用 root-only Unix socket／`SO_PEERCRED`；Windows 用私有 SID ACL+随机 token 的 owned loopback 通道。固定 health/history/run，不允许 RPC 自选身份、scope 或 QQ 目标；原生 stop 走认证停机。 |
 | [message_batch.py](../plugin/message_batch.py#L15-L33) | `PendingMessage`、真实 sender/message/mentions/quote/native evidence 记录与 `collect_batch`；scope 等锁时合批，到执行时冻结本轮输入。恢复记录仅接受经过校验的RestoredEvent类型，保留原生来源而非信任任意属性。 |
 | [intake_batch.py](../plugin/intake_batch.py) | 按实际system/schema/当前消息上下文长度二分最大完整有序前缀，未选输入仍排队；单条超大明确archive-only，不截正文。 |
 | [pending_inbox.py](../plugin/pending_inbox.py) | SQLite持久原生输入、exact scope/platform/account/native ID幂等、原子claim与状态终结、启动running→uncertain；只有pending可恢复，不自动重放未知外部效果。 |
@@ -271,8 +275,8 @@ Windows默认新增[原生完整部署](WINDOWS_NATIVE_FULL.md)：[windows-nativ
 
 ### 7.1 身份与授权来源
 
-- owner只来自已配置QQ ID或同实例内核验证的LocalEvent capability。昵称、prompt里的“我是管理员”、quoted source、skill、history、tool result、TaskEvent/AutonomyEvent都不能构造该能力。[local event认证](../plugin/local_runtime.py#L33-L40)、[task sender](../plugin/task_event.py#L15-L25)。
-- 本地socket要求Linux root、root-owned data root和严格0700 run目录/0600socket；先SO_PEERCRED再JSON。接受后的工作与客户端断开分离，输出仅local_recorded，client_received=false，不伪造QQ回执。
+- owner 只来自已配置 QQ ID 或同实例认证的 LocalEvent capability：Linux 为内核 peer 身份，Windows 为 owned loopback + 私有 SID ACL + 随机 token。昵称、prompt 里的“我是管理员”、quoted source、skill、history、tool result、TaskEvent/AutonomyEvent 都不能构造该能力。[local event 认证](../plugin/local_runtime.py)、[task sender](../plugin/task_event.py#L15-L25)。
+- Linux 本地 socket 要求 root、root-owned data root 和严格 0700 run 目录/0600 socket，先 SO_PEERCRED 再 JSON；Windows 不套用 Linux root 语义。接受后的工作与客户端断开分离，不伪造 QQ 回执。隔离 Windows 宿主的在途本地回复完成后实际退出已验证，但不代表真实 QQ／所有外部工具均排空验收。
 - QQ request工具除capabilities外，**owner-only且先门禁再读store**，AutonomyEvent也不获得批准申请权限。[request dispatch](../plugin/qq_requests.py#L130-L148)。
 - social写、skill_save、autonomy_schedule由 `can_manage`控制：真实owner或typed autonomous turn + authentic origin + policy。Autonomy明确不能改群权限/唤醒名单，也不能发向未观察destination。
 - delegated worker仅固定READ_ONLY_TOOLS；tool discovery也只看worker子目录，不能通过发现请求拿到父工具schema后越权dispatch。
@@ -300,6 +304,8 @@ Windows默认新增[原生完整部署](WINDOWS_NATIVE_FULL.md)：[windows-nativ
 | `astrbot/cmd_config.json` | 实际AstrBot provider_sources/provider/agent_runner/dashboard/platform等。 | 包含运行模型Key和面板认证数据；初始化后由运行时/面板管理，不由up重复覆盖。 |
 | `astrbot/plugins/astrbot_plugin_higan` | 指向镜像bundled plugin symlink。 | 外来目录/不正确link拒绝启动。 |
 | `astrbot/data_v4.db` | 上游持久数据库，插件可只读加载persona。 | 不是第一方schema，不应假称全部由Memory维护；原生schema由固定上游定义。 |
+
+原生 Windows 不使用 `compose.env`／容器 symlink：默认外部根为 `%LOCALAPPDATA%\QhunlivBot\Full`，核心和插件复制到私有 runtime；`runtime/.venv`、`runtime/pip-cache` 仅属本实例，不使用全局 pip。私有目录采用当前用户 SID ACL，已存在状态由 `up` 核验而非重置。上表中 Compose 路径仅描述容器分支。
 
 ### 8.2 HIGAN_ROOT
 
@@ -360,13 +366,16 @@ Windows默认新增[原生完整部署](WINDOWS_NATIVE_FULL.md)：[windows-nativ
 
 ## 10. tools完整清单（按执行层和副作用分组）
 
-工具文件不是运行服务。这里逐项登记全部非缓存第一方代码；本文没有执行任何runtime probe、native实验或配置写工具。
+工具文件不是运行服务。以下是源码职责清单，不代表每项工具均已实际运行；本次新增的隔离 Windows 完整宿主证据仅覆盖第 12 节列出的边界，不涉及 QQ native 实验或生产配置修改。
 
 ### 10.1 安装、配置、Lite和基础验证
 
 | 文件 | 责任/副作用 |
 |---|---|
-| [bootstrap.py](../tools/bootstrap.py) | fresh init/doctor/up/wizard/info/stop/status/logs/health/chat；up建镜像容器、stop只选中项目，chat可能计费/执行获授权工具。 |
+| [bootstrap.py](../tools/bootstrap.py) | Linux/显式 WSL fresh init/doctor/up/wizard/info/stop/status/logs/health/chat；up 建镜像容器、stop 只选中项目，chat 可能计费/执行获授权工具。 |
+| [windows-native.ps1](../tools/windows-native.ps1) | Windows 默认完整入口；Python 3.12/3.13 检测、显式同意后官方用户级 Python 安装，转共享 UI/原生管理，不暗降级 Lite/WSL。 |
+| [native_runtime.py](../tools/native_runtime.py) | 私有原生实例 init/up/health/chat/stop；认证同实例就绪、owned detached host、状态保存与排空退出；stop 接受不等于进程已退出。 |
+| [native_assets.py](../tools/native_assets.py) | 私有 venv 安装完整 vendored pyproject、复制核心/插件、固定官方 wheel SHA256 提取面板；只用实例 `runtime/pip-cache`，不含外部测试下载适配器。 |
 | [setup_inputs.py](../tools/setup_inputs.py) | 模型地址/名称/Key和owner输入校验、隐藏key提示；不探提供方。 |
 | [setup_ports.py](../tools/setup_ports.py) | fresh端口冲突检测并短时持有；仅未显式选择的默认值可换空闲端口。 |
 | [setup_wizard.py](../tools/setup_wizard.py)、[setup_wizard.html](../tools/setup_wizard.html) | full setup固定本地页面+loopback HTTP controller；精确Host/Origin/Bearer/CSP，save/start/stop/chat/credential显式动作；raw logs不传HTTP。 |
@@ -380,7 +389,7 @@ Windows默认新增[原生完整部署](WINDOWS_NATIVE_FULL.md)：[windows-nativ
 | [lite.py](../tools/lite.py) | portable CLI与内存文字conversation，复用ChatCompletionHost；无工具/持久历史。 |
 | [lite_web.py](../tools/lite_web.py) | stdlib loopback浏览器聊天，一份非持久conversation；有界body与同源授权，不是完整AstrBot面板。 |
 | [build_lite.py](../tools/build_lite.py) | 按源码allowlist建新ZIP；目标须仓库外且不存在，不下载/打包配置/解释器。 |
-| [local_runtime_client.py](../tools/local_runtime_client.py) | root-local JSONL Unix client health/run/history；无模型配置或QQ登录。 |
+| [local_runtime_client.py](../tools/local_runtime_client.py) | Linux root-local Unix／Windows owned loopback 的同实例认证客户端；health/run/history，原生认证 stop；不配置模型或登录 QQ。 |
 | [validate_release.py](../tools/validate_release.py#L11-L35) | plugin/tools payload AST语法与凭据pattern扫描，不读private runtime；未覆盖bot_core/deploy/所有JS正确性，不能替代整仓测试。 |
 | [test_linux_launcher.py](../tools/test_linux_launcher.py#L1-L15) | stdlib unittest执行已有Linux launcher fixture，不部署。 |
 | [command_toggle.py](../tools/command_toggle.py) | 通过native hot command API禁用/恢复一个审核命令，改变运行配置。 |
@@ -467,15 +476,22 @@ Windows默认新增[原生完整部署](WINDOWS_NATIVE_FULL.md)：[windows-nativ
 - [ASTRBOT_UPSTREAM.json](../vendor/ASTRBOT_UPSTREAM.json#L1-L15)：AstrBot 4.28.1、tag v4.28.1，固定commit `ab42c0d9b726d82ad0f9563e04c53a4460c00d61`、archive SHA256、完整1738文件元数据、upstream_modifications=[]；本轮只读metadata，不改vendor。
 - [上游pyproject](../vendor/astrbot/pyproject.toml#L1-L75)：**容器运行Python≥3.12**；外部bootstrap/Lite launcher可为Python≥3.10不是矛盾。依赖包括aiocqhttp、aiohttp/aiosqlite、APScheduler、OpenAI/Anthropic SDK、Pillow、Quart/FastAPI、SQLAlchemy/SQLModel、cryptography、MCP、平台SDK/媒体/文档库等；不表示第一方每条路径都使用所有上游功能。
 - [Dockerfile](../deploy/Dockerfile#L1-L42)：Node20构建dashboard，pnpm10.11.0 + frozen-lockfile；Python3.12 slim Bookworm；系统依赖编译库、ffmpeg/codecs、CJK fonts、git/ripgrep；上游Python依赖 `pip install .` **没有Python lock**，源码固定不等于解析出的所有第三方wheel版本完全锁定。
-- Windows完整模式依赖WSL2+所选发行版+Docker/Compose v2，Linux完整模式依赖Docker/Compose与Python启动器。Lite仅标准库，DPAPI为Windows系统服务。native实验另需Linuxroot/unshare/mount/chroot/pivot、QQ匹配runtime/native库、私有X/bus等显式条件。
+- Windows 默认完整模式为原生 Python 3.12/3.13 + 私有 venv，无 WSL/Docker/Node 依赖；显式 WSL 兼容分支才需 WSL2 + 所选发行版 + Docker/Compose v2。Linux 完整模式依赖 Docker/Compose 与 Python 启动器。隔离 Windows Python 3.13 的完整 63 项适用依赖及 `pip check` 已通过，Python 3.12 完整实装未验证。Lite 仅标准库，DPAPI 为 Windows 系统服务。QQ native 实验另需 Linux root/unshare/mount/chroot/pivot、QQ 匹配 runtime/native 库、私有 X/bus 等显式条件。
 - OneBot/NapCat和腾讯QQ客户端/登录数据外部提供，不随库分发；VM bridge、browser/CDP、邮箱、xdotool GUI执行器也不是fresh compose已部署服务。第三方公网搜索/图片源可变化，源码存在不代表外网可访问。
 - [LICENSE](../LICENSE)、[THIRD_PARTY_NOTICES](../THIRD_PARTY_NOTICES.md)：本项目AGPL-3.0-only；保留上游原许可/版权/EULA/声明。复制源码、分发镜像和网络服务的实际许可合规需要按许可处理，不把审计文档当法律结论。
 
 ## 12. 已有测试入口、当前验收范围与未完成清单
 
-### 12.1 本文“有测试”不等于本轮“已经通过”
+### 12.1 已通过证据与仍未验证的边界（2026-10-31）
 
-模块盘点本身只读；修复阶段运行了合成提供方/临时磁盘的生产链路集成测试，没有真实上游模型、QQ账号或生产操作。全仓 `python -B -m pytest tests -q --tb=short` 实际结果为 **4991 passed、45 skipped、442 subtests passed**；随后新增损坏元数据、转义摘要和大预算边界测试，收尾定向 **57 passed**。`python -m pyflakes plugin bot_core qq_transport tools tests` 无错误，`tools/validate_release.py` 扫描148文件、failures为空，`git diff --check`通过。最后还修正兼容导出和探针包名告警；不能把测试源文件数当覆盖率。最终统一数字以交付消息为准。
+- **PowerShell 解释器选择修复后最终全仓回归：5,381 passed、49 skipped、460 subtests passed，354.64s**；先前私有缓存基线 `97cba97` 为 5,365/49/460。全范围 pyflakes 无错误；release validator 扫描 **155 个第一方文件，failures 为空**。启动器／资产／运行时专项 **185 passed、4 skipped**；缓存集成 **184 passed、4 skipped**；真实 Chromium 安装网页测试 **8 passed**，覆盖 native/container 两分支，但不证明 AstrBot Dashboard 浏览器渲染或桌面双击实装。实际 Dashboard 登录渲染另有后述证据。
+- **实际隔离 Python 3.13 全量依赖通过**：vendored AstrBot 4.28.1 `pyproject.toml` 的 **63 项适用 requirement 全部满足，`pip check` 通过**。官方同版本 wheel **7,063,082 bytes** 经固定 SHA256 校验，预构建 Dashboard 就绪；核心、插件与完整依赖未被精简或替代。
+- **实际已安装宿主 smoke 通过**（job `pwsh-11cf492cf5664a67`）：不改动的 AstrBot 4.28.1 + 复制的完整插件 + 私有 venv；loopback Dashboard HTML、初始密码 API 登录、认证 local health，以及同一完整模型/工具回路的可见文本。提供方是合成本地 OpenAI-compatible 服务，共两次模型请求，没有外部模型或 QQ。第二次请求被保持在途后 stop 接受，精确进程 HANDLE wait 证明仍在处理时进程存活；释放请求后可见回复完成，随后宿主实际退出。独立短命 CLI 父进程 `up` 后退出而 health 仍可用；持久状态重启得到新 PID，认证 stop 再次实际退出，所有测试宿主已停止。
+- **首次安装／默认网络未通过**：原默认 pip 的精确 owned child 在 SSL body read 卡住后安全终止；48 个完整 wheel 按官方文件名／长度／SHA256 校验，约 19 MB jieba 与 Dashboard wheel 用官方 64 KiB HTTPS range 恢复。最终下载借助产品外 `native_fixture_pip.py`（stdlib HTTPS、64 KiB、8 线程、精确官方 file host/Content-Range/length，pip link hash 不变）及 `native_full_install_retry.py`。产品基线 `97cba97` 只改实例私有 `runtime/pip-cache`，适配器不发货；默认 pip 网络成功与实际网络缓存复用均不能据此宣称。
+- **实际 Dashboard 浏览器登录通过**（job `410e1cb43f454865`）：Chromium 渲染固定版本 Dashboard 登录表单，42 次本地 JS 请求，初始密码登录 POST 200／取得 token 并离开登录路由，页面 JS 错误为 0；2 次非本地请求被阻断，无模型／QQ 调用。认证 stop 后精确进程 wait 确认退出；仅验收登录渲染／导航，不代表全部页面交互。
+- **实际 Windows PowerShell 5.1 wrapper 生命周期通过**（job `pwsh28a035e48f3547c6`）：修正解释器选择后，在同时安装 3.12/3.13 的主机上沿用该实例已有的 3.13，而非新偏好 3.12。实际 `windows-native.ps1 up` 父进程退出后 health 仍存活，wrapper health 的 PID 与宿主一致；wrapper stop 后 OS 进程 HANDLE wait 确认实际退出，无模型／QQ 调用，宿主已停止。仅验收已安装实例的 wrapper 生命周期，不证明新下载、winget／新电脑双击安装；修复后全仓回归结果单独记录在本节首项。
+- **ACL 与保密边界**：填充后 fixture 根的初次 `icacls` 在写秘密前 2s 超时；只针对精确已知 fixture 的 60s 有界隐私操作验证严格当前用户 SID ACL 后才进行宿主测试，未放宽产品 ACL。运行 key 全为随机合成本地值，不是生产凭据；不公开秘密或原始日志。
+- **仍未验收**：外部真实提供方协议／全模型、QQ 登录／收发及真实 QQ／外部工具排空、VM／mail／browser／Linux-only bridge、Windows Python 3.12 全量安装、全新电脑双击首次安装和默认网络、实际桌面安装窗关闭存活、Dashboard 全页面交互、未修改 Compose 端到端网络。上述 PowerShell 5.1 仅证明已安装实例 wrapper 生命周期，不能外推首次安装。已安装宿主生命周期通过与这些未验证项须分别判断；详见[部署验收证据](QUICK_DEPLOY_VERIFICATION.md)。
 
 已有核心测试锚点：
 
@@ -517,7 +533,7 @@ Windows默认新增[原生完整部署](WINDOWS_NATIVE_FULL.md)：[windows-nativ
 - 摘要验收使用真实 AST 加载的生产方法、真实 JSON 文件和实际 native HTTP 请求构造，仅替换外部模型/QQ边界。验证了模型摘要被保存、进入后续普通请求、重建实例后读取且不重复压缩。
 - 唤醒人验收使用真实 on_message 接入，验证 0% 回复/不回复时仍保存、同消息号重传不重写、重建实例读取、腐坏拒写、原子替换失败和并发不丢写。
 - 尚未进行：真实上游模型摘要质量评估、真实 QQ 登录与收发、生产重启验证、外部 VM/邮箱服务验收。离线通过不替代这些结果。
-- 最终统一测试数量和发布状态记录在交付消息；本文不把未经执行的生产、收费请求或账号操作写成通过。
+- 当前统一测试数量与原生宿主验收见第 12.1 节；本文不把未经执行的生产、收费请求或账号操作写成通过，实际发布状态仍以最终交付为准。
 
 ## 13. 本轮记忆修复：原因、实际链路与配置
 

@@ -8,7 +8,7 @@ Windows 双击根目录 [install.cmd](../install.cmd)，默认启动**原生完�
 
 模型在网页密码框中填写，角色和 QQ 管理员可跳过；启动后可以直接进行一次明确确认费用的真实试聊。顶部把环境、本机 Bot、模型回复与 QQ 连接分别标识，不会混为“部署成功”。第五步提供网页聊天、完整控制台与初始登录信息按钮，无需手敲查询命令。重复打开进入原 Bot 管理页，保留配置。
 
-下方 Windows CLI 指 `tools/windows-native.ps1`，无参数默认 `wizard`；显式 `up` 仍可交互初始化。旧 `install.ps1`、`tools/windows.ps1` / `windows-setup.ps1` 明确保留为 [WSL 兼容](WINDOWS_WSL.md)，不是原生入口。**原生完整启动 / 界面 / 模型 / QQ 尚待真实验收**，见 [验证记录](QUICK_DEPLOY_VERIFICATION.md)。无桌面服务器与端口转发见 [Linux](LINUX.md)。
+下方 Windows CLI 指 `tools/windows-native.ps1`，无参数默认 `wizard`；显式 `up` 仍可交互初始化。旧 `install.ps1`、`tools/windows.ps1` / `windows-setup.ps1` 明确保留为 [WSL 兼容](WINDOWS_WSL.md)，不是原生入口。**Python 3.13 隔离实测已通过完整宿主、面板登录、本地合成模型回复及排空停止 / 重启；首次默认下载仍有停滞验收缺口，真实模型与 QQ 未验收**，见 [验证记录](QUICK_DEPLOY_VERIFICATION.md)。无桌面服务器与端口转发见 [Linux](LINUX.md)。
 
 ## 1. 启动安装
 

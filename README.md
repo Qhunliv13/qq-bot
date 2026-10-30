@@ -4,7 +4,7 @@
 
 ## 零基础开始（完整版，启动即有界面）
 
-**Windows：**下载并完整解压仓库 ZIP，双击根目录 [`install.cmd`](install.cmd)，默认进入**原生完整版**浏览器向导，**无需 WSL / Docker / Node，不是 Lite**。需要 Windows Python 3.12 / 3.13；缺少时仅在明确同意后可通过 winget 安装官方 Python 3.12 到当前用户，不提权。完整依赖只安装到仓库外私有 venv。**原生完整启动 / 界面 / 模型 / QQ 尚待真实验收**，详见 [Windows 说明](docs/WINDOWS.md)。
+**Windows：**下载并完整解压仓库 ZIP，双击根目录 [`install.cmd`](install.cmd)，默认进入**原生完整版**浏览器向导，**无需 WSL / Docker / Node，不是 Lite**。需要 Windows Python 3.12 / 3.13；缺少时仅在明确同意后可通过 winget 安装官方 Python 3.12 到当前用户，不提权。完整依赖只安装到仓库外私有 venv。**Windows Python 3.13 隔离实测已通过完整宿主、面板登录、本地合成模型回复及排空停止 / 重启；首次默认下载曾停滞，实测使用官方摘要校验的下载恢复，尚不等于新机一键全流程验收。真实模型 / QQ 未验收**，详见 [Windows 说明](docs/WINDOWS.md)。
 
 浏览器按 **准备好了吗 → 连接模型 → 创建 Bot → 启动与试聊 → 开始使用** 引导。模型填三项；角色和 QQ 管理员可跳过。点击启动后可直接试聊，再选择网页使用或按指南连接 QQ。完整工具、记忆和任务保留，不是 Lite。重复打开进入同一 Bot 管理页，不覆盖原配置。[图文式零基础操作说明](docs/VISUAL_SETUP.md)
 

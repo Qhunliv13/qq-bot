@@ -1,10 +1,17 @@
 # Windows / Linux quick deployment verification
 
-Status (2026-10-30): **Windows now defaults to the native full runtime; its real
-installation/startup/UI/model/QQ/lifecycle integration is NOT yet accepted.**
-The image-build and isolated-container results below concern Linux/WSL only, not
-the new native entrypoint. Unmodified Compose end-to-end deployment and real model
-chat also remain **not yet accepted**. No production installation changed.
+Status (2026-10-31, Asia/Shanghai; private-cache baseline `97cba97`, followed by the existing-instance Python-selection fix): **Windows native installed-host
+lifecycle is accepted in an isolated real full-runtime smoke; clean first install
+and the default network download path are not accepted.** The actual private
+Python 3.13 environment satisfies all 63 applicable vendored requirements and
+`pip check`; completing its downloads required an external test-only adapter, not
+a product installer change. Dashboard HTML/login, authenticated same-instance
+synthetic-model chat, in-flight drain/process exit, detached CLI-parent survival
+and persisted-state restart passed. Actual Chromium Dashboard login-page rendering
+and login also passed; other Dashboard pages, desktop onboarding, an external model
+provider and QQ remain unverified.
+Unmodified Compose end-to-end deployment also remains unaccepted. No production
+installation changed.
 
 ## Single implementation
 
@@ -26,14 +33,19 @@ chat also remain **not yet accepted**. No production installation changed.
   `up` does not automatically upgrade installed source/plugins. Local readiness
   does not validate the model or QQ. No default QQ login is installed.
 
-## Windows native full: provisional implementation (2026-10-30)
+## Windows native full: installed-host acceptance; first-install boundary (2026-10-31)
 
-- Repository regression: **5,358 passed, 48 skipped, 460 subtests passed** on Windows; pyflakes and release validator passed (155 first-party files). Native lifecycle/dashboard/transport targeted regressions passed; the fresh-interpreter native setup served authenticated state without creating an installation. Skips include Unix-only/socket and unprivileged symlink boundaries. This is code-level evidence, not proof that an end-user install or QQ account works.
-- Follow-up safe setup-progress regression: **223 passed, 3 skipped**; pyflakes/release checks passed. The native browser setup now shows fixed creation/download/verification/assets stages from an exact allowlist, without raw pip output, secrets, guessed percentage or ETA.
-- Repeated-start safety follow-up: **270 passed, 5 skipped**; pyflakes/release checks passed. A separate setup byte lock spans provisioning/spawn/readiness, while the host byte lock protects asset/config writes; another wizard or an unhealthy/stopping live host cannot trigger concurrent package/config mutation. No unknown process is killed.
-- Private retry-cache integration regression: **184 passed, 4 skipped** across assets, native lifecycle, setup controller and real Chromium; pyflakes/release checks passed. The default installer now uses only the instance-owned `runtime/pip-cache`, guarded against redirected/reparse paths with the shared Windows private-leaf helper. Tests retain a simulated completed cache entry across an incomplete-venv retry while preserving all vendor requirements and leaving a global-cache sentinel untouched; real network cache reuse is not yet accepted. Four skips are real Windows symlink-creation cases; simulated symlink/reparse and unsafe-cache refusal cases pass.
-- Real Chromium setup-presentation regression: **8 passed**, covering both container and Windows-native text, consent, configuration preservation and model-call substitutes. This exercises the real setup DOM/JS/HTTP, not the AstrBot Dashboard, package installation or a real provider/QQ session.
-- The isolated actual Python 3.13 full dependency install has **not passed**. After a prolonged stall, two nonblocking stack snapshots located the exact owned pip child in TLS/socket body reads, not build/ACL/Rich deadlock. The test preserved 48 complete wheel payloads, verified each against the exact official PyPI release filename/size/SHA256, ended only that proven-owned stalled installer child, and collected its failed result. A serial test-only retry first reused those payloads with unchanged full requirements, but stalled again on the jieba source archive and was ended only after verifying its exact owned process. Official SHA256-verified jieba and Dashboard payloads were then recovered with small HTTPS ranges; a test-only pip adapter now uses bounded, exact official artifact ranges while retaining pip's link hash checks and the unchanged full requirements. This adapter is outside the product; it is not a default-installer pass. No second concurrent install, global packages, real model keys, QQ accounts or existing deployment state are involved. Full host smoke remains gated on actual asset completion.
+[Secret-free native acceptance evidence](evidence/windows-native-full-evidence.json) records public installed requirement versions and fixed host/browser/launcher results, without private paths, tokens, chat payloads or raw logs.
+
+- Final full regression **after the PowerShell wrapper-selection fix**: **5,381 passed, 49 skipped, 460 subtests passed in 354.64s** on Windows. All-scope pyflakes and the release validator passed (**155 first-party files**, no failures). The prior private-cache baseline `97cba97` was 5,365/49/460. Focused launcher/assets/runtime verification passed **185 tests, 4 skipped**. Skips include Unix-only/socket and Windows symlink boundaries; this is not clean-PC or external-service acceptance.
+- Private retry-cache integration: **184 passed, 4 skipped** across assets, native lifecycle, setup controller and real Chromium. Product baseline `97cba97` changes only private dependency caching: the instance-owned `runtime/pip-cache` is guarded by the shared Windows private-leaf helper. Tests retain a simulated complete cache entry across an incomplete-venv retry, preserve all vendor requirements and leave global cache untouched; **actual network cache reuse remains unverified**. The four skips are real Windows symlink-creation cases, not simulated reparse/unsafe-cache refusals.
+- Real Chromium setup presentation: **8 passed** for both container and Windows-native text, consent, configuration preservation and model-call substitutes. This is actual setup DOM/JS/HTTP coverage, not browser-rendered AstrBot Dashboard, full package installation, a real provider or QQ.
+- Actual isolated Python **3.13** full installation passed: all **63 applicable requirements** satisfy the unchanged vendored AstrBot **4.28.1 `pyproject.toml`**, and **`pip check` passed**. Assets are ready, including the official same-version AstrBot wheel (**7,063,082 bytes**) verified against its fixed SHA256 and its prebuilt Dashboard. Neither dependencies nor the core were reduced or replaced.
+- **Default-network first install did not pass.** The original exact owned pip child stalled in SSL/socket body reads and was safely ended; 48 complete wheels were preserved and matched official filename/length/SHA256. The roughly 19 MB jieba archive and Dashboard wheel were recovered with official **64 KiB HTTPS ranges**. Final completion used external test-only `native_fixture_pip.py` (stdlib HTTPS, 64 KiB chunks, eight threads, exact official file host/Content-Range/length checks, unchanged pip link-hash verification) and `native_full_install_retry.py`. Neither adapter is shipped or wired into the product; their success does not validate default pip networking or private-cache network reuse.
+- **Actual installed-host smoke passed** (job `pwsh-11cf492cf5664a67`): unchanged AstrBot 4.28.1, copied full plugin and a private venv served loopback Dashboard HTML, initial-password API login and authenticated local health. The actual same full model/tool loop returned visible text against a synthetic localhost OpenAI-compatible provider (**two model requests total**, no external model/QQ). With the second model request held in flight, authenticated stop was accepted; waiting on the exact process HANDLE proved it remained alive while processing. Releasing that request yielded the visible in-flight reply, then actual process exit. An independent short-lived CLI parent exited after `up` while host health survived; restart reused persisted state with a new PID, and authenticated stop again reached actual exit. All test hosts are stopped.
+- **Actual Dashboard browser login passed** (job `410e1cb43f454865`): Chromium rendered the pinned Dashboard login form, made **42 local JavaScript requests**, submitted the initial password successfully (login POST 200/token and navigation away from login), and recorded **zero page JavaScript errors**. Two nonlocal requests were blocked; no model or QQ calls were made. Authenticated stop was followed by exact-process wait confirming exit. This verifies login rendering/navigation, not all Dashboard pages or interactions.
+- **Actual Windows PowerShell 5.1 wrapper lifecycle passed** (job `pwsh28a035e48f3547c6`) after correcting interpreter selection: on a host with both Python 3.12 and 3.13, the wrapper selected the installed instance's existing 3.13 rather than newly preferring 3.12. Actual `windows-native.ps1 up` returned with its CLI parent exited while native health survived; wrapper health matched the host PID, and wrapper stop plus an OS process HANDLE wait confirmed actual exit. No model/QQ call was made and the host is stopped. This is installed-instance wrapper acceptance, not fresh downloads, winget installation or new-PC double-click; the separate post-fix full-suite result is recorded above.
+- The populated fixture's initial root `icacls` operation timed out at **2s before secrets were written**. A privacy operation limited to that exact known fixture, bounded at **60s**, then verified strict current-user SID ACLs before host smoke; no product ACL was weakened. Runtime keys were random synthetic local-only values, not production credentials. No raw logs or secret values are published.
 
 - The core remains the same vendored AstrBot **4.28.1**, copied into private
   `runtime/astrbot`; the plugin is copied, not installed through admin symlinks.
@@ -52,16 +64,18 @@ chat also remain **not yet accepted**. No production installation changed.
   QQ still needs a manually configured external OneBot/NapCat service or client;
   nothing packages/downloads/logs into QQ automatically.
 - Native `logs` reports only the private log path, not raw log contents. `stop`
-  sends authenticated shutdown; the implementation drains accepted local and QQ/
-  tool work before upstream core cancellation. Acceptance means the request was
-  received, not that the process has exited. Detached operation after closing the
-  setup window and graceful lifecycle still need real Windows smoke acceptance.
-- Current native checks are limited to mocked boundaries and scoped Windows ACL /
-  installer-step checks. A real private-venv dependency installation is in progress;
-  it is **not recorded as passed here**. No accepted native full-host startup,
-  rendered browser UI, real-model chat, QQ login/send-receive or stop/drain result
-  is available yet. Historical Linux/WSL and synthetic-UI test counts below must
-  not be reused as native acceptance. See [native deployment](WINDOWS_NATIVE_FULL.md).
+  sends authenticated shutdown and drains accepted work before core cancellation.
+  A stop acknowledgement alone still does not prove exit: the real smoke above
+  separately verified in-flight local reply completion and exact-process exit.
+  Detached CLI-parent survival passed; closing the actual desktop setup window
+  and draining real QQ/external-tool operations remain separate unverified cases.
+- Native evidence now includes an actual complete private-venv installation and
+  installed full-host lifecycle, **using test-assisted artifact retrieval**.
+  All-page Dashboard interaction/desktop click-through, default-network clean first
+  install, Windows Python 3.12 full install, external-provider protocols/models,
+  QQ login/send-receive, VM/mail/browser services and Linux-only bridges remain
+  unverified. Historical Linux/WSL counts are not native acceptance. See
+  [native deployment](WINDOWS_NATIVE_FULL.md).
 
 ## Historical Linux/WSL checks on 2026-10-30
 
@@ -209,12 +223,16 @@ acceptance. Those outstanding boundaries remain below.
 
 ## Remaining acceptance
 
-For Windows native, finish the real private-venv install, owned host startup,
-loopback Dashboard rendering/login and same-instance chat acceptance; separately
-verify current-user ACL fail-closed behavior, detached window-close survival and
-authenticated drain/stop completion with accepted local/QQ work. Real model and
-QQ acceptance need authorized services and remain distinct. Do not perform a host
-Python install during automated tests or claim all external capabilities work.
+For Windows native, installed-host acceptance above is complete within its
+isolated Python 3.13/synthetic-local-provider scope. Still verify clean-new-PC
+double-click installation,
+default pip networking and actual private-cache network reuse, Windows Python 3.12
+full installation, all-page Dashboard interactions and actual setup-window-close
+survival. External-provider protocol/model coverage, real QQ login/send-receive,
+real QQ/external-tool drain and VM/mail/browser/Linux-only bridges require separate
+authorized acceptance. The Windows PowerShell 5.1 result above covers the
+installed-instance wrapper lifecycle only. Do not install host Python during
+automated tests or describe these remaining boundaries as passed.
 
 For the explicitly retained Linux/WSL compatibility entrypoints, still verify
 unmodified Compose networking,

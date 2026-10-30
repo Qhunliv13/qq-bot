@@ -25,7 +25,9 @@ def _ps_quote(value):
 def _invoke_mock_native(tmp_path, command="", *, versions=None, marker=None,
                         consent=False, winget=True, install_exit=0, launch_exit=0,
                         pipe=False, stdin=None, browser_fails=False,
-                        real_probe=False, known_path=False, store_alias=False):
+                        real_probe=False, known_path=False, store_alias=False,
+                        venv_cfg=None, native_marker=True, existing_state=False,
+                        known_minor="312"):
     """Run the real entry code with only OS/process functions replaced by offline stubs."""
     checkout = tmp_path / "checkout with spaces"
     tools = checkout / "tools"
@@ -37,6 +39,17 @@ def _invoke_mock_native(tmp_path, command="", *, versions=None, marker=None,
     browser_log = tmp_path / "browser.txt"
     input_log = tmp_path / "stdin.txt"
     local_app_data = tmp_path / "Local App Data"
+    if venv_cfg is not None or existing_state:
+        # Metadata is intentionally untrusted: only the real Python entry may validate ownership.
+        data = local_app_data / "QhunlivBot" / "Full"
+        data.mkdir(parents=True)
+        (data / (".native-bootstrap.json" if native_marker else ".bootstrap.json")).write_text(
+            '{"runtime": "deliberately unverified"}\n', encoding="utf-8",
+        )
+        if venv_cfg is not None:
+            venv = data / "runtime" / ".venv"
+            venv.mkdir(parents=True)
+            (venv / "pyvenv.cfg").write_text(venv_cfg, encoding="utf-8")
     # Python launcher selectors are deliberately separate so fallback ordering is observable.
     version_map = versions if versions is not None else {"py:-3.12": "3.12"}
     version_json = _ps_quote(json.dumps(version_map))
@@ -50,7 +63,7 @@ def _invoke_mock_native(tmp_path, command="", *, versions=None, marker=None,
         f"  if ($Name -eq 'py.exe' -and -not ${str(known_path).lower()}) {{ return @{{Name='mock_py'; Source=''}} }}\n"
         + ("  if ($Name -in @('python.exe', 'python3.exe')) { return @{Name='python.exe'; Source='C:\\Users\\test\\AppData\\Local\\Microsoft\\WindowsApps\\python.exe'} }\n" if store_alias else
            f"  if ($Name -in @('python.exe', 'python3.exe') -and -not ${str(known_path).lower()}) {{ return @{{Name='mock_python'; Source=''}} }}\n")
-        + f"  if (${str(known_path).lower()} -and $Name -like '*Python312\\python.exe') {{ return @{{Name='mock_python'; Source=''}} }}\n"
+        + f"  if (${str(known_path).lower()} -and $Name -like '*Python{known_minor}\\python.exe') {{ return @{{Name='mock_python'; Source=''}} }}\n"
         f"  if ($Name -eq 'winget.exe' -and ${str(winget).lower()}) {{ return @{{Name='mock_winget'; Source=''}} }}\n"
         "  return $null\n"
         "}\n"
@@ -203,6 +216,104 @@ def test_known_user_install_is_discovered_without_mutating_path(tmp_path):
     assert result.returncode == 0, result.stderr
     assert _runtime_calls(calls)[0]["kind"] == "python"
     assert not any(call["kind"] in ("consent", "winget") for call in calls)
+
+
+@pytest.mark.skipif(POWERSHELL is None, reason="PowerShell is not installed")
+@pytest.mark.parametrize("minor", ["3.12", "3.13"])
+@pytest.mark.parametrize("explicit_data", [False, True])
+def test_existing_venv_selects_matching_system_minor_only(tmp_path, minor, explicit_data):
+    """Retain each existing venv minor without executing cfg paths or selecting the other minor."""
+    cfg = ("version = " + minor + ".9\ninclude-system-site-packages = false\n"
+           "home = C:\\untrusted\\python\nexecutable = https://example.invalid/python.exe\n")
+    command = "up"
+    if explicit_data:
+        # Version selection must use the validated caller-selected directory, not just the default.
+        command += " -DataDir " + _ps_quote(tmp_path / "Local App Data/QhunlivBot/Full")
+    result, calls, _, _, _, local = _invoke_mock_native(
+        tmp_path, command, versions={"py:-3.12": "3.12", "py:-3.13": "3.13"}, venv_cfg=cfg,
+    )
+    assert result.returncode == 0, result.stderr
+    assert _runtime_calls(calls)[0]["words"][0] == "-" + minor
+    probes = [call["words"] for call in calls if "-c" in call["words"]]
+    assert probes == [["-" + minor, "-c", "import sys; print(str(sys.version_info.major) + chr(46) + str(sys.version_info.minor))"]]
+    assert not any(call["kind"] in ("consent", "winget") for call in calls)
+    assert (local / "QhunlivBot/Full/runtime/.venv/pyvenv.cfg").read_text(encoding="utf-8") == cfg
+
+
+@pytest.mark.skipif(POWERSHELL is None, reason="PowerShell is not installed")
+def test_existing_313_known_install_fallback_rejects_wrong_probe_minor(tmp_path):
+    """Require the probed minor even for a matching selector, then try the known user install."""
+    result, calls, _, _, _, _ = _invoke_mock_native(
+        tmp_path, "up", versions={"python:": "3.13"}, known_path=True, known_minor="313",
+        venv_cfg="version = 3.13.9\ninclude-system-site-packages = false\n",
+    )
+    assert result.returncode == 0, result.stderr
+    assert _runtime_calls(calls)[0]["kind"] == "python"
+    assert not any(call["kind"] in ("consent", "winget") for call in calls)
+
+
+@pytest.mark.skipif(POWERSHELL is None, reason="PowerShell is not installed")
+def test_existing_313_missing_matching_base_never_installs_or_launches(tmp_path):
+    """Do not fall back to 3.12 or winget when the original 3.13 base is missing."""
+    result, calls, _, _, _, _ = _invoke_mock_native(
+        tmp_path, "up", versions={"py:-3.13": "3.12", "python:": "3.12"}, consent=True,
+        venv_cfg="version = 3.13.9\ninclude-system-site-packages = false\n",
+    )
+    assert result.returncode == 2
+    assert "matching Python" in result.stderr
+    assert not _runtime_calls(calls)
+    assert not any(call["kind"] in ("consent", "winget") for call in calls)
+    assert all("-3.12" not in call["words"] for call in calls)
+
+
+@pytest.mark.skipif(POWERSHELL is None, reason="PowerShell is not installed")
+@pytest.mark.parametrize("isolation", ["include-system-site-packages = true\n", ""])
+def test_version_hint_does_not_adopt_global_or_incomplete_venv(tmp_path, isolation):
+    """Select only the base interpreter; Python still rejects invalid isolation/completion unchanged."""
+    cfg = "version = 3.13.9\n" + isolation
+    result, calls, _, _, _, local = _invoke_mock_native(
+        tmp_path, "up", versions={"py:-3.13": "3.13"}, venv_cfg=cfg, launch_exit=2,
+    )
+    assert result.returncode == 2
+    assert _runtime_calls(calls)[0]["words"][0] == "-3.13"
+    assert not any(call["kind"] in ("consent", "winget") for call in calls)
+    assert (local / "QhunlivBot/Full/runtime/.venv/pyvenv.cfg").read_text(encoding="utf-8") == cfg
+
+
+@pytest.mark.skipif(POWERSHELL is None, reason="PowerShell is not installed")
+@pytest.mark.parametrize("cfg", ["", "version = 3.14.0\n", "version = https://example.invalid\n",
+                                 "version = 3.13.9\nversion = 3.12.9\n", "x" * 4097])
+def test_invalid_existing_venv_metadata_fails_without_discovery_or_install(tmp_path, cfg):
+    """Bound metadata reads and refuse ambiguous/unsupported hints without exposing their contents."""
+    result, calls, _, _, _, _ = _invoke_mock_native(tmp_path, "up", venv_cfg=cfg, consent=True)
+    assert result.returncode == 2
+    assert "Existing native state could not be inspected" in result.stderr
+    assert calls == []
+    assert "example.invalid" not in result.stdout + result.stderr
+
+
+@pytest.mark.skipif(POWERSHELL is None, reason="PowerShell is not installed")
+@pytest.mark.parametrize("native_marker", [False, True])
+def test_foreign_or_incomplete_state_never_triggers_automatic_install(tmp_path, native_marker):
+    """Existing state may only reach Python validation, never a new installer consent flow."""
+    result, calls, _, _, _, _ = _invoke_mock_native(
+        tmp_path, "up", versions={}, consent=True, existing_state=True, native_marker=native_marker,
+    )
+    assert result.returncode == 2
+    assert not _runtime_calls(calls)
+    assert not any(call["kind"] in ("consent", "winget") for call in calls)
+
+
+@pytest.mark.skipif(POWERSHELL is None, reason="PowerShell is not installed")
+def test_foreign_marker_never_selects_venv_version_or_executable(tmp_path):
+    """A Lite/container marker leaves default selection intact for Python's authoritative rejection."""
+    result, calls, _, _, _, _ = _invoke_mock_native(
+        tmp_path, "doctor", versions={"py:-3.12": "3.12", "py:-3.13": "3.13"},
+        venv_cfg="version = 3.13.9\nexecutable = C:\\foreign\\python.exe\n", native_marker=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert _runtime_calls(calls)[0]["words"][0] == "-3.12"
+    assert all("C:\\foreign\\python.exe" not in call["words"] for call in calls)
 
 
 @pytest.mark.skipif(POWERSHELL is None, reason="PowerShell is not installed")

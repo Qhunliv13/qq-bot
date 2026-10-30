@@ -1,0 +1,360 @@
+{
+  "as_of": "2026-10-31",
+  "time_zone": "Asia/Shanghai",
+  "scope": "isolated Windows installed full runtime",
+  "final_regression": {
+    "after_existing_instance_python_selection_fix": true,
+    "passed": 5381,
+    "skipped": 49,
+    "subtests_passed": 460,
+    "seconds": 354.64,
+    "pyflakes_passed": true,
+    "release_scanned_files": 155,
+    "release_failures": []
+  },
+  "core": {
+    "source": "unchanged vendored AstrBot",
+    "version": "4.28.1",
+    "plugin": "copied same full plugin"
+  },
+  "python_minor": "3.13",
+  "requirements": {
+    "vendored_core": "4.28.1",
+    "applicable_checked": 63,
+    "marker_skipped": [],
+    "failed": [],
+    "pip_check_passed": true,
+    "clean_default_install": false,
+    "official_range_cache_recovery_used": true,
+    "installed_requirements": [
+      {
+        "name": "aiocqhttp",
+        "version": "1.4.4"
+      },
+      {
+        "name": "aiodocker",
+        "version": "0.27.0"
+      },
+      {
+        "name": "aiohttp",
+        "version": "3.14.5"
+      },
+      {
+        "name": "aiosqlite",
+        "version": "0.22.1"
+      },
+      {
+        "name": "anthropic",
+        "version": "2.3.0"
+      },
+      {
+        "name": "apscheduler",
+        "version": "3.11.3"
+      },
+      {
+        "name": "certifi",
+        "version": "2026.10.23"
+      },
+      {
+        "name": "chardet",
+        "version": "5.1.0"
+      },
+      {
+        "name": "loguru",
+        "version": "0.7.3"
+      },
+      {
+        "name": "cryptography",
+        "version": "50.0.2"
+      },
+      {
+        "name": "dashscope",
+        "version": "2.0.3"
+      },
+      {
+        "name": "deprecated",
+        "version": "3.0.1"
+      },
+      {
+        "name": "dingtalk-stream",
+        "version": "0.24.3"
+      },
+      {
+        "name": "docstring-parser",
+        "version": "0.18.0"
+      },
+      {
+        "name": "faiss-cpu",
+        "version": "1.15.1"
+      },
+      {
+        "name": "fastapi",
+        "version": "0.162.0"
+      },
+      {
+        "name": "filelock",
+        "version": "4.2.4"
+      },
+      {
+        "name": "google-genai",
+        "version": "2.34.0"
+      },
+      {
+        "name": "httpx",
+        "version": "0.28.1"
+      },
+      {
+        "name": "lark-oapi",
+        "version": "1.7.5"
+      },
+      {
+        "name": "mcp",
+        "version": "1.30.0"
+      },
+      {
+        "name": "openai",
+        "version": "3.41.0"
+      },
+      {
+        "name": "ormsgpack",
+        "version": "1.13.0"
+      },
+      {
+        "name": "openpyxl",
+        "version": "3.1.5"
+      },
+      {
+        "name": "pandas",
+        "version": "3.1.0"
+      },
+      {
+        "name": "pillow",
+        "version": "13.0.0"
+      },
+      {
+        "name": "pip",
+        "version": "25.3"
+      },
+      {
+        "name": "psutil",
+        "version": "7.1.3"
+      },
+      {
+        "name": "py-cord",
+        "version": "2.8.1"
+      },
+      {
+        "name": "pydantic",
+        "version": "2.14.2"
+      },
+      {
+        "name": "pydub",
+        "version": "0.25.1"
+      },
+      {
+        "name": "pyjwt",
+        "version": "2.15.1"
+      },
+      {
+        "name": "qrcode",
+        "version": "8.2"
+      },
+      {
+        "name": "quart",
+        "version": "0.23.1"
+      },
+      {
+        "name": "python-telegram-bot",
+        "version": "22.8"
+      },
+      {
+        "name": "qq-botpy",
+        "version": "1.2.1"
+      },
+      {
+        "name": "silk-python",
+        "version": "0.2.9"
+      },
+      {
+        "name": "slack-sdk",
+        "version": "3.46.0"
+      },
+      {
+        "name": "sqlalchemy",
+        "version": "2.1.6"
+      },
+      {
+        "name": "sqlmodel",
+        "version": "0.0.48"
+      },
+      {
+        "name": "telegramify-markdown",
+        "version": "1.4.2"
+      },
+      {
+        "name": "watchfiles",
+        "version": "1.3.0"
+      },
+      {
+        "name": "websockets",
+        "version": "15.0.1"
+      },
+      {
+        "name": "wechatpy",
+        "version": "1.8.18"
+      },
+      {
+        "name": "audioop-lts",
+        "version": "0.2.2"
+      },
+      {
+        "name": "click",
+        "version": "8.5.0"
+      },
+      {
+        "name": "pypdf",
+        "version": "6.21.4"
+      },
+      {
+        "name": "aiofiles",
+        "version": "25.1.0"
+      },
+      {
+        "name": "rank-bm25",
+        "version": "0.2.2"
+      },
+      {
+        "name": "jieba",
+        "version": "0.42.1"
+      },
+      {
+        "name": "markitdown-no-magika",
+        "version": "0.1.2"
+      },
+      {
+        "name": "xinference-client",
+        "version": "4.1.0"
+      },
+      {
+        "name": "tenacity",
+        "version": "9.1.4"
+      },
+      {
+        "name": "shipyard-python-sdk",
+        "version": "0.2.4"
+      },
+      {
+        "name": "shipyard-neo-sdk",
+        "version": "0.2.0"
+      },
+      {
+        "name": "python-socks",
+        "version": "3.2.0"
+      },
+      {
+        "name": "pysocks",
+        "version": "1.7.1"
+      },
+      {
+        "name": "packaging",
+        "version": "26.3"
+      },
+      {
+        "name": "python-ripgrep",
+        "version": "0.0.8"
+      },
+      {
+        "name": "python-docx",
+        "version": "1.2.0"
+      },
+      {
+        "name": "pyotp",
+        "version": "2.10.0"
+      },
+      {
+        "name": "reportlab",
+        "version": "5.1.0"
+      },
+      {
+        "name": "xlrd",
+        "version": "2.0.2"
+      }
+    ]
+  },
+  "dashboard_wheel": {
+    "filename": "astrbot-4.28.1-py3-none-any.whl",
+    "bytes": 7063082,
+    "sha256": "37eff8bcd33d25c39f9b2dd0c23f7354ab528c4ca594fa59a43ea0ce7d72bebf"
+  },
+  "download_boundary": {
+    "clean_default_install_passed": false,
+    "default_pip_body_read_stalled": true,
+    "official_completed_wheels_preserved_and_verified": 48,
+    "test_only_official_https_range_and_cache_recovery_used": true,
+    "test_download_adapter_shipped_in_product": false,
+    "dependencies_reduced": false,
+    "global_packages_modified": false,
+    "product_private_cache_real_network_reuse_verified": false
+  },
+  "actual_host": {
+    "job": "pwsh-11cf492cf5664a67",
+    "dashboard_html": true,
+    "dashboard_initial_password_login": true,
+    "authenticated_same_instance_health": true,
+    "same_full_model_tool_loop_visible_reply": true,
+    "synthetic_loopback_model_requests": 2,
+    "actual_model_used": false,
+    "qq_used": false,
+    "inflight_model_alive_after_stop_ack": true,
+    "inflight_visible_reply_drained": true,
+    "exact_os_process_handle_exit_confirmed": true,
+    "independent_cli_parent_exit_survival": true,
+    "persisted_state_restart_new_pid": true,
+    "authenticated_restart_stop_exit": true
+  },
+  "actual_dashboard_browser": {
+    "job": "pwsh-410e1cb43f454865",
+    "browser": "Chromium",
+    "pinned_login_form_rendered": true,
+    "local_script_requests": 42,
+    "login_post_200_token_and_route_navigation": true,
+    "page_javascript_errors": 0,
+    "nonlocal_requests_blocked": 2,
+    "all_pages_verified": false,
+    "host_exit_confirmed": true
+  },
+  "actual_windows_launcher": {
+    "job": "pwsh-28a035e48f3547c6",
+    "shell": "Windows PowerShell 5.1",
+    "both_system_312_and_313_available": true,
+    "existing_313_minor_preserved": true,
+    "up": true,
+    "wrapper_health_same_pid": true,
+    "parent_exit_survival": true,
+    "wrapper_stop_exact_os_process_exit": true,
+    "model_called": false,
+    "qq_used": false
+  },
+  "safety": {
+    "production_changed": false,
+    "real_provider_credentials_used": false,
+    "private_chat_databases_read": false,
+    "fixture_hosts_stopped": true,
+    "populated_fixture_initial_acl_timeout_seconds": 2,
+    "exact_fixture_only_acl_retry_bound_seconds": 60,
+    "product_acl_weakened": false
+  },
+  "not_verified": [
+    "new-PC double-click full first install",
+    "default network download path",
+    "Python 3.12 full installation",
+    "actual private-cache network reuse",
+    "all Dashboard pages",
+    "whole terminal window closure and user logoff",
+    "external model providers",
+    "real QQ login or delivery",
+    "real QQ and external tool in-flight drain",
+    "external VM/mail/browser/Linux-only bridges"
+  ],
+  "evidence_note": "Fixed results transcribed from collected tool jobs; no credentials, raw logs, chat payloads, locators or private paths. Final regression counts are recorded separately in QUICK_DEPLOY_VERIFICATION.md."
+}

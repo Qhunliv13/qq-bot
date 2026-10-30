@@ -39,18 +39,47 @@ function Assert-NativeArgument {
     }
 }
 
+function Get-NativeVenvVersion {
+    <# Read only a bounded version hint; Python remains the authority for ownership and venv validity. #>
+    param([string] $Directory)
+    $marker = Join-Path $Directory '.native-bootstrap.json'
+    $configuration = Join-Path $Directory 'runtime\.venv\pyvenv.cfg'
+    if (-not (Test-Path -LiteralPath $marker -PathType Leaf) -or -not (Test-Path -LiteralPath $configuration -PathType Leaf)) {
+        # Foreign/Lite state never supplies interpreter paths or a version preference.
+        return $null
+    }
+    $reader = [IO.File]::OpenText($configuration)
+    try {
+        # Never use home/executable/command from this untrusted file, or read unbounded metadata.
+        $buffer = New-Object char[] 4097
+        $length = $reader.ReadBlock($buffer, 0, $buffer.Length)
+        if ($length -eq 0 -or $length -gt 4096) { throw 'Invalid venv metadata.' }
+        $text = -join $buffer[0..($length - 1)]
+        $versions = [regex]::Matches($text, '(?m)^version[ \t]*=[^\r\n]*')
+        if ($versions.Count -ne 1 -or $versions[0].Value -cnotmatch '^version[ \t]*=[ \t]*(3\.(?:12|13))\.[0-9]+[ \t]*$') {
+            throw 'Unsupported venv metadata.'
+        }
+        return $Matches[1]
+    } finally { $reader.Dispose() }
+}
+
 function Get-NativePython {
-    <# Prefer supported 3.12, accept 3.13, and probe real interpreters instead of trusting executable names. #>
-    $candidates = @(
-        @{ Name = 'py.exe'; Prefix = @('-3.12') },
-        @{ Name = 'py.exe'; Prefix = @('-3.13') },
+    <# Prefer 3.12 for new installs; existing venvs require a matching supported system interpreter. #>
+    param([string] $RequiredVersion = '')
+    $minors = if ($RequiredVersion) { @($RequiredVersion) } else { @('3.12', '3.13') }
+    $candidates = @()
+    foreach ($minor in $minors) {
+        $candidates += @{ Name = 'py.exe'; Prefix = @('-' + $minor) }
+    }
+    $candidates += @(
         @{ Name = 'python.exe'; Prefix = @() },
         @{ Name = 'python3.exe'; Prefix = @() }
     )
     if ($env:LOCALAPPDATA) {
         # winget installs may not update this running process's PATH; do not mutate user/machine PATH.
-        foreach ($minor in @('312', '313')) {
-            $candidates += @{ Name = (Join-Path $env:LOCALAPPDATA "Programs\Python\Python$minor\python.exe"); Prefix = @() }
+        foreach ($minor in $minors) {
+            $directoryMinor = $minor.Replace('.', '')
+            $candidates += @{ Name = (Join-Path $env:LOCALAPPDATA "Programs\Python\Python$directoryMinor\python.exe"); Prefix = @() }
         }
     }
     foreach ($candidate in $candidates) {
@@ -65,6 +94,8 @@ function Get-NativePython {
             # This finite probe reads no stdin and never imports third-party modules.
             $version = @(& $executable @prefix -c 'import sys; print(str(sys.version_info.major) + chr(46) + str(sys.version_info.minor))' 2>$null)
             if ($LASTEXITCODE -eq 0 -and $version.Count -eq 1 -and [string] $version[0] -cmatch '^3\.(12|13)$') {
+                # Selector names and PATH may resolve to a different minor; the probe is authoritative.
+                if ($RequiredVersion -and [string] $version[0] -cne $RequiredVersion) { continue }
                 return @{ Executable = $executable; Prefix = $prefix }
             }
         } catch {
@@ -151,9 +182,17 @@ try {
     # The launcher consumes the existing marker; never let Python launch a second browser.
     if ($Command -eq 'wizard') { $runtimeArgs += '--no-browser' }
 
-    $failureHint = 'Python 3.12 or 3.13 is required. Install Python 3.12 for your account, then retry; no WSL or Docker is needed.'
-    $python = Get-NativePython
-    if (-not $python -and -not $NonInteractive -and $Command -in @('wizard', 'init', 'up')) {
+    $failureHint = 'Existing native state could not be inspected. Restore the original private data directory; no files were changed.'
+    # Existing/foreign/incomplete state must never trigger an automatic Python installation.
+    $existingState = (Test-Path -LiteralPath $DataDir) -and (@(Get-ChildItem -LiteralPath $DataDir -Force -ErrorAction Stop | Select-Object -First 1).Count -gt 0)
+    $requiredVersion = Get-NativeVenvVersion $DataDir
+    $failureHint = if ($requiredVersion) {
+        'The existing native runtime requires its matching Python 3.12 or 3.13 base installation. Restore the original Python version for your account and retry; the private venv was not changed.'
+    } else {
+        'Python 3.12 or 3.13 is required. Install Python 3.12 for your account, then retry; no WSL or Docker is needed.'
+    }
+    $python = Get-NativePython $requiredVersion
+    if (-not $python -and -not $existingState -and -not $NonInteractive -and $Command -in @('wizard', 'init', 'up')) {
         $wingetCommand = Get-Command 'winget.exe' -ErrorAction SilentlyContinue
         if ($wingetCommand -and (Confirm-NativePythonInstall)) {
             $winget = if ($wingetCommand.Source) { [string] $wingetCommand.Source } else { [string] $wingetCommand.Name }
