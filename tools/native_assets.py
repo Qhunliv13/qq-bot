@@ -85,9 +85,16 @@ def _paths(data, repo):
     root = runtime / "astrbot"
     venv = runtime / ".venv"
     dashboard = root / "astrbot" / "dashboard" / "dist"
-    # Existing junctions/symlinks must not turn an owned write into a foreign one.
-    for target in (runtime, root, venv, root / "astrbot", root / "astrbot" / "dashboard", dashboard):
-        if target.is_symlink() or target.resolve() != target:
+    # Include pip's persistent cache in the same owned boundary as the runtime.
+    for target in (runtime, root, venv, runtime / "pip-cache",
+                   root / "astrbot", root / "astrbot" / "dashboard", dashboard):
+        try:
+            info = target.lstat()
+        except FileNotFoundError:
+            continue  # Missing owned directories are created only during preparation.
+        # Reparse tags can redirect writes even when resolve() leaves the spelling alone.
+        if (stat.S_ISLNK(info.st_mode) or target.resolve() != target
+                or getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT):
             raise AssetError("Native asset paths must not be symlinks or junctions.")
     return {"python": venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python"),
             "astrbot_root": root, "dashboard": dashboard}
@@ -428,9 +435,16 @@ def prepare_assets(data, repo):
         completion = {"schema": 1, "source_sha256": manifest["source_sha256"],
                       "python": list(sys.version_info[:2]), "complete": True}
         if _json_file(runtime / DEPENDENCY_MARKER) != completion:
-            # Pass each authoritative PEP 508 requirement as one argv element.
+            cache = runtime / "pip-cache"
+            # Reuse the owned-leaf ACL helper; never repair an existing foreign cache.
+            if os.name == "nt":
+                from plugin.local_runtime import ensure_private_windows_path
+                ensure_private_windows_path(cache)
+            else:
+                cache.mkdir(mode=0o700, exist_ok=True)
+            # Pip owns cache contents across failures; the full vendor list still owns installs.
             _run([python, "-m", "pip", "--isolated", "--disable-pip-version-check", "install",
-                  "--no-input", "--no-cache-dir", "--index-url", "https://pypi.org/simple",
+                  "--no-input", "--cache-dir", str(cache), "--index-url", "https://pypi.org/simple",
                   *dependencies], root, "dependency installation")
             _run([python, "-m", "pip", "--isolated", "check"], root, "dependency verification")
             _write_json(runtime / DEPENDENCY_MARKER, completion)

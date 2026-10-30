@@ -6,6 +6,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
 import stat
 import subprocess
 import sys
@@ -59,6 +60,15 @@ def fake_run(monkeypatch):
             (venv / "pyvenv.cfg").write_text("include-system-site-packages = false\nversion = " + ".".join(map(str, sys.version_info[:3])) + "\n", encoding="utf-8")
 
     monkeypatch.setattr(assets, "_run", run)
+    if os.name == "nt":
+        from plugin import local_runtime
+
+        def private_cache(path, *, create=True):
+            """Stub only the shared cache-leaf ACL boundary, never real OS tooling."""
+            path.mkdir(exist_ok=True)
+            return path
+
+        monkeypatch.setattr(local_runtime, "ensure_private_windows_path", private_cache)
     return calls
 
 
@@ -127,6 +137,9 @@ def test_provision_copies_full_core_without_frontend_or_vendor_mutation(vendor_r
     assert install[1:4] == ["-m", "pip", "--isolated"]
     assert install[-2:] == ["quart>=0.20.0", "audioop-lts ; python_full_version >= '3.13'"]
     assert "--index-url" in install and "https://pypi.org/simple" in install
+    assert install[install.index("--cache-dir") + 1] == str(data / "runtime" / "pip-cache")
+    assert "--no-cache-dir" not in install
+    assert (data / "runtime" / "pip-cache").is_dir()
     assert [label for _, _, label in fake_run] == ["venv creation", "dependency installation", "dependency verification"]
     assert assets.inspect_assets(data, vendor_repo)["ready"]
     assert before == {str(path.relative_to(vendor)): path.read_bytes() for path in vendor.rglob("*") if path.is_file()}
@@ -204,13 +217,24 @@ def test_empty_root_is_supported_without_erasing_persistent_state(vendor_repo, t
 
 
 def test_failed_dependencies_are_not_marked_complete_and_can_retry(vendor_repo, tmp_path, fake_run, official_download, monkeypatch):
-    """A partial pip step must not trick doctor or future setup into reporting ready."""
+    """Pip cache survives a clean venv retry; every vendor requirement is installed again."""
     data = tmp_path / "state"
+    cache = data / "runtime" / "pip-cache"
+    wheel = cache / "completed-wheel.whl"
+    global_cache = tmp_path / "global-cache"
+    global_cache.mkdir()
+    sentinel = global_cache / "untouched"
+    sentinel.write_bytes(b"global cache must not change")
+    original = sentinel.stat().st_mtime_ns
+    monkeypatch.setenv("PIP_CACHE_DIR", str(global_cache))
     successful = assets._run
+    failed_install = []
 
     def fail(arguments, cwd, label):
-        """Simulate package tooling with a secret-bearing raw exception."""
+        """Model pip's completed cache artifact without running pip or downloading."""
         if label == "dependency installation":
+            failed_install.extend(arguments)
+            wheel.write_bytes(b"retained completed download")
             raise RuntimeError("https://private-token-secret@untrusted.invalid/package")
         successful(arguments, cwd, label)
 
@@ -220,8 +244,19 @@ def test_failed_dependencies_are_not_marked_complete_and_can_retry(vendor_repo, 
     assert "private-token-secret" not in str(caught.value)
     assert not (data / "runtime" / assets.DEPENDENCY_MARKER).exists()
     assert not assets.inspect_assets(data, vendor_repo)["ready"]
+    # Model an explicit cleanup of this test's incomplete venv, not a product repair.
+    shutil.rmtree(data / "runtime" / ".venv")
+    assert wheel.read_bytes() == b"retained completed download"
     monkeypatch.setattr(assets, "_run", successful)
     assert assets.prepare_assets(data, vendor_repo)
+    install = next(arguments for arguments, _, label in fake_run if label == "dependency installation")
+    assert install == failed_install
+    assert install[install.index("--cache-dir") + 1] == str(cache)
+    assert install[-2:] == ["quart>=0.20.0", "audioop-lts ; python_full_version >= '3.13'"]
+    assert wheel.read_bytes() == b"retained completed download"
+    assert list(global_cache.iterdir()) == [sentinel]
+    assert sentinel.read_bytes() == b"global cache must not change"
+    assert sentinel.stat().st_mtime_ns == original
     assert assets.inspect_assets(data, vendor_repo)["ready"]
 
 
@@ -311,7 +346,7 @@ def test_mutated_dashboard_is_not_silently_replaced(vendor_repo, tmp_path, fake_
     assert entry.read_text(encoding="utf-8") == "user modified UI"
 
 
-@pytest.mark.parametrize("directory", ["runtime", "runtime/astrbot", "runtime/.venv"])
+@pytest.mark.parametrize("directory", ["runtime", "runtime/astrbot", "runtime/.venv", "runtime/pip-cache"])
 def test_redirected_runtime_paths_are_rejected(vendor_repo, tmp_path, directory):
     """Do not write through symlinked runtime ownership boundaries."""
     data = tmp_path / "state"
@@ -326,6 +361,53 @@ def test_redirected_runtime_paths_are_rejected(vendor_repo, tmp_path, directory)
     with pytest.raises(assets.AssetError, match="symlinks or junctions"):
         assets.prepare_assets(data, vendor_repo)
     assert not list(foreign.iterdir())
+
+
+@pytest.mark.parametrize("kind", ["symlink", "reparse"])
+def test_existing_cache_link_attributes_are_rejected(vendor_repo, tmp_path, monkeypatch, kind):
+    """Reject link/reparse metadata without requiring Windows symlink privileges."""
+    data = tmp_path / "state"
+    cache = data / "runtime" / "pip-cache"
+    cache.mkdir(parents=True)
+    sentinel = cache / "foreign"
+    sentinel.write_bytes(b"do not repair")
+    original_lstat = Path.lstat
+
+    def lstat(path, *args, **kwargs):
+        """Model an existing Windows reparse point without creating one on the host."""
+        info = original_lstat(path, *args, **kwargs)
+        if path == cache:
+            return SimpleNamespace(st_mode=stat.S_IFLNK if kind == "symlink" else info.st_mode,
+                                   st_file_attributes=stat.FILE_ATTRIBUTE_REPARSE_POINT if kind == "reparse" else 0)
+        return info
+
+    monkeypatch.setattr(Path, "lstat", lstat)
+    with pytest.raises(assets.AssetError, match="symlinks or junctions"):
+        assets.prepare_assets(data, vendor_repo)
+    assert sentinel.read_bytes() == b"do not repair"
+    assert sorted(path.name for path in cache.parent.iterdir()) == ["pip-cache"]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows private-leaf ACL contract")
+def test_existing_unsafe_cache_is_not_repaired(vendor_repo, tmp_path, fake_run, official_download, monkeypatch):
+    """Delegate cache privacy to the existing fail-closed helper before any pip call."""
+    from plugin import local_runtime
+    data = tmp_path / "state"
+    cache = data / "runtime" / "pip-cache"
+    cache.mkdir(parents=True)
+    calls = []
+
+    def refuse(path, *, create=True):
+        """Model an unsafe preexisting DACL; do not grant or repair anything."""
+        calls.append(path)
+        raise RuntimeError("local_windows_path_insecure")
+
+    monkeypatch.setattr(local_runtime, "ensure_private_windows_path", refuse)
+    with pytest.raises(assets.AssetError, match="existing state was retained"):
+        assets.prepare_assets(data, vendor_repo)
+    assert calls == [cache]
+    assert not any(label.startswith("dependency") for _, _, label in fake_run)
+    assert not (cache.parent / assets.DEPENDENCY_MARKER).exists()
 
 
 def test_global_or_incomplete_venv_is_not_reused(vendor_repo, tmp_path, fake_run, official_download):
@@ -362,6 +444,7 @@ def test_process_environment_and_log_are_secret_safe(tmp_path, monkeypatch):
     root = runtime / "astrbot"
     root.mkdir(parents=True)
     monkeypatch.setenv("PIP_TARGET", "global-location-secret")
+    monkeypatch.setenv("PIP_CACHE_DIR", "global-cache-location-secret")
     monkeypatch.setenv("PYTHONPATH", "global-modules-secret")
     monkeypatch.setenv("PIP_INDEX_URL", "https://credential-secret@invalid.example/simple")
     captured = {}
@@ -379,6 +462,7 @@ def test_process_environment_and_log_are_secret_safe(tmp_path, monkeypatch):
         assets._run(["fake-python", "-m", "pip"], root, "dependency installation")
     assert "secret" not in str(caught.value)
     assert "PIP_TARGET" not in captured["env"]
+    assert "PIP_CACHE_DIR" not in captured["env"]
     assert "PIP_INDEX_URL" not in captured["env"]
     assert "PYTHONPATH" not in captured["env"]
     assert captured["env"]["PIP_CONFIG_FILE"] == os.devnull

@@ -30,6 +30,7 @@
 | `.native-bootstrap.json` | 原生实例类型 / 运行名标记，不用于接管 Lite 或 WSL 状态 |
 | `runtime/astrbot` | 固定 vendored 核心副本；其中 `data` 保存 AstrBot 状态和插件副本 |
 | `runtime/.venv` | 此实例专用 Python 环境；不继承全局 site-packages |
+| `runtime/pip-cache` | 此实例私有 pip 缓存；重试可复用已缓存下载 / 构建产物，不使用全局缓存，不保证部分文件续传 |
 | `higan` | 同一插件的记忆、历史、任务和本地操作端点等私有状态 |
 | `runtime/setup.log` | 资产安装固定步骤 / 退出状态；不保存 pip 原始输出 |
 | `run/runtime.log` | 宿主私有运行日志，可能含聊天 / URL，**不得原样上传** |
