@@ -19,11 +19,14 @@ playwright = pytest.importorskip("playwright.sync_api")
 pytest_plugins = ("test_setup_wizard_controller",)
 
 
-@pytest.fixture
-def browser_session(core, tmp_path, monkeypatch):
+@pytest.fixture(params=["container", "windows-native"])
+def browser_session(core, tmp_path, monkeypatch, request):
     """Serve real setup over loopback and open an isolated, unrecorded browser tab."""
     from tools.setup_wizard import Controller, Server
 
+    # Only deployment-specific presentation varies; lifecycle/model remain
+    # deterministic substitutes, not native full-host or package-install proof.
+    monkeypatch.setattr(core, "DEPLOYMENT_MODE", request.param, raising=False)
     controller = Controller(core, tmp_path / "browser private state", "browser-wizard")
     calls = []
 
@@ -139,6 +142,12 @@ def test_real_browser_full_wizard_consent_credentials_and_mobile(browser_session
     page, controller, server, calls = browser_session
     _open(page, server)
     playwright.expect(page.get_by_role("heading", name="让你的第一个 Bot 上线")).to_be_visible()
+    if controller.core.DEPLOYMENT_MODE == "windows-native":
+        playwright.expect(page.locator("#runtimeRequirements")).to_contain_text("原生 Windows 完整版")
+        playwright.expect(page.locator("#runtimeRequirements")).to_contain_text("不需要 WSL")
+        playwright.expect(page.locator("#environmentHelp")).to_contain_text("不修改全局 Python")
+    else:
+        playwright.expect(page.locator("#runtimeRequirements")).to_contain_text("容器部署")
     _capture(page, "bot-setup-welcome")
     page.locator('[data-panel="0"] [data-action="check"]').click()
     playwright.expect(page.locator("#environment")).to_have_text("已验证", timeout=10000)
