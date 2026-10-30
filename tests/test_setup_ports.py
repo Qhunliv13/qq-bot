@@ -40,6 +40,34 @@ def test_explicit_occupied_port_is_not_silently_changed():
         assert first.fileno() >= 0
 
 
+@pytest.mark.parametrize('address', ['0.0.0.0', '127.0.0.1'])
+@pytest.mark.parametrize('exclusive', [False, True])
+def test_default_avoids_existing_listener_across_interfaces(address, exclusive):
+    """Windows must not mistake a bindable specific interface for a free port."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        if exclusive and hasattr(socket, 'SO_EXCLUSIVEADDRUSE'):
+            listener.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        listener.bind((address, 0))
+        listener.listen(1)
+        occupied = listener.getsockname()[1]
+        with first_install_ports(occupied, 0) as selected:
+            assert selected['web_port'] != occupied
+            assert selected['web_port'] != selected['onebot_port']
+        assert listener.getsockname()[1] == occupied and listener.fileno() >= 0
+
+
+@pytest.mark.parametrize('address', ['0.0.0.0', '127.0.0.1'])
+def test_explicit_nonexclusive_listener_is_refused(address):
+    """An explicitly requested occupied port fails without touching its listener."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind((address, 0))
+        listener.listen(1)
+        with pytest.raises(ValueError, match='explicitly selected host port'):
+            with first_install_ports(listener.getsockname()[1], 0, web_explicit=True):
+                pytest.fail('an occupied explicit port must not be reassigned')
+        assert listener.fileno() >= 0
+
+
 def test_partial_reservation_closes_on_explicit_failure():
     """No socket reservation survives a failed initialization attempt."""
     with occupied_socket() as busy:

@@ -42,7 +42,9 @@ def test_info_no_docker_no_password_no_key_and_no_mutation(bootstrap, tmp_path, 
     capsys.readouterr()
     assert bootstrap.main(['info', '--data-dir', str(data)]) == 0
     output = capsys.readouterr().out
-    assert str(data) in output and 'http://127.0.0.1:6185' in output
+    # Busy implicit defaults may select another free port; info must show the
+    # actual saved installation rather than assuming 6185 is free on this host.
+    assert str(data) in output and ('http://127.0.0.1:' + str(settings['deployment']['web_port'])) in output
     assert 'astrbot' in output and 'not a readiness check' in output
     assert 'initial setup values' in output and 'does not reset credentials' in output
     assert settings['model']['api_key'] not in output and settings['dashboard_password'] not in output

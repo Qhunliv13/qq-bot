@@ -1,4 +1,4 @@
-"""First-install loopback port selection; never stop an existing service to free a port."""
+"""First-install TCP port selection; never stop an existing service to free a port."""
 from contextlib import contextmanager
 import socket
 
@@ -14,6 +14,11 @@ def first_install_ports(web_port, onebot_port, *, web_explicit=False, onebot_exp
     """
     held = []
     selected = {}
+    # On Windows a specific-interface bind can succeed beside an existing
+    # nonexclusive wildcard listener. Reserve the wildcard with EXCLUSIVEADDRUSE
+    # so it proves the port free across interfaces. These sockets never listen;
+    # the eventual Dashboard remains explicitly bound to loopback.
+    address = '0.0.0.0' if hasattr(socket, 'SO_EXCLUSIVEADDRUSE') else '127.0.0.1'
     choices = [("web_port", web_port, web_explicit), ("onebot_port", onebot_port, onebot_explicit)]
     # Bind explicit requests first so an ephemeral fallback cannot occupy them.
     choices.sort(key=lambda item: not item[2])
@@ -24,11 +29,11 @@ def first_install_ports(web_port, onebot_port, *, web_explicit=False, onebot_exp
             if hasattr(socket, 'SO_EXCLUSIVEADDRUSE'):
                 handle.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
             try:
-                handle.bind(('127.0.0.1', preferred))
+                handle.bind((address, preferred))
             except OSError as error:
                 if explicit:
                     raise ValueError('An explicitly selected host port is unavailable; select a free port or release it yourself. No existing service was stopped.') from error
-                handle.bind(('127.0.0.1', 0))
+                handle.bind((address, 0))
             selected[name] = handle.getsockname()[1]
         yield selected
     finally:
