@@ -7,10 +7,11 @@
 | 版本 | 平台与启动 | 包含内容 | 不包含 |
 |---|---|---|---|
 | 完整 Linux | Linux + Docker Compose，`python3 tools/bootstrap.py up` | 内嵌 AstrBot、本地入口、插件能力与独立状态 | 默认不安装或登录 QQ |
-| 完整 Windows | Windows + WSL2，双击 `install.cmd`（复用 Desktop 或 Linux Engine） | **复用同一** Linux 安装器和完整容器，不另起一套核心 | 不是原生 Windows QQ；需要 WSL 与 Docker |
+| 完整 Windows 原生（当前默认） | 双击 `install.cmd`，Python 3.12 / 3.13，无 WSL / Docker / Node | 同一固定 AstrBot 4.28.1、复制插件、私有 venv、完整工具 / 记忆 / 任务；同版本 SHA256 校验预构建 Dashboard | 原生整体验收待完成；不包含 QQ 客户端 / 自动登录，也不自动补齐外部工具依赖 |
+| 完整 Windows WSL 兼容 | 显式 `install.ps1` 或 `tools/windows-setup.ps1 -Graphical`，WSL2 + Docker | 保留原 Linux 安装器与完整容器、原数据目录和权限 | 不随默认入口迁移；不是 Windows 原生或独立原生 QQ 后端 |
 | Lite 文字版 | Windows / Linux，`python tools/lite.py --system-file persona.txt --interactive` | 仅 Python 标准库和已有模型 HTTP 适配器，进程内最多保留可配置轮数 | 不提供 QQ、AstrBot、工具、持久记忆、后台任务或网页面板 |
 
-分别参见 [Windows 操作说明](WINDOWS.md)与 [Lite 操作说明](LITE.md)。这三个入口均不接管现有生产实例；Lite 不是删减生产配置，也不承诺处理无标记的模型内部规划。首次安装需用户自己的模型地址、模型名与凭据；真实 QQ 登录与独立原生 QQ 接入仍未完成。
+分别参见 [Windows 操作说明](WINDOWS.md)、[原生完整部署](WINDOWS_NATIVE_FULL.md)、[WSL 兼容指南](WINDOWS_WSL.md)与 [Lite 操作说明](LITE.md)。这些入口均不接管现有生产实例；Lite 不是删减生产配置，也不承诺处理无标记的模型内部规划。首次安装需用户自己的模型地址、模型名与凭据；真实 QQ 登录与独立原生 QQ 接入仍未完成。
 
 ### 保留全部能力的轻量请求模式
 
@@ -30,7 +31,7 @@
 - **委派 worker**：异步运行只读原生工具子任务，支持查看、排队补充指令和中断；结果回执按会话范围保存。补充指令不打断正在进行的模型请求；进程重启后不自动恢复失去执行者的 worker。
 - **后台任务与回执**：任务持久化、执行前认领，失败暂停；未确认结果的认领不自动重试。后台轮次使用独立的任务输入，不继承前台待处理消息；任务结束、暂停或认领失效后，不再请求下一轮模型或发送滞后的最终回复。当前任务上限 50 个、最短间隔 30 秒，约每 25 秒检查到期任务并等待执行锁；不是准点交付保证。QQ 消息发送依赖平台消息 ID 回执，不能以模型文本、HTTP 成功或服务存活替代送达证据。
 
-模型和工具仍受各自请求超时、可配置回合/整轮预算、平台权限与外部服务可用性约束；不承诺无限执行、全部工具可用或测试覆盖真实部署的所有路径。
+模型和工具仍受各自请求超时、可配置回合/整轮预算、平台权限与外部服务可用性约束；不承诺无限执行、全部工具可用或测试覆盖真实部署的所有路径。Windows 原生保留完整持久任务、工具和上述 60/40 聊天区分配，不代表 VM、浏览器、邮件、指针桥接等外部 / Linux 依赖已变成 Windows 宿主工具；外部能力需单独准备服务、路径和授权。QQ 仍需外部 OneBot / NapCat 服务或手动客户端配置，不自动下载或登录。原生完整安装、UI、模型、QQ 与停机尚待真实验收，见 [部署验证记录](QUICK_DEPLOY_VERIFICATION.md)。
 
 ## 目录与工具
 
@@ -51,7 +52,7 @@ python -m pytest tests -q
 python -m compileall -q plugin
 ```
 
-这些命令验证本地源码，不代表实际 QQ 登录、模型请求或生产部署已通过。全新实例使用安装器配置模型与隔离数据；内嵌 AstrBot 不需另行克隆，QQ 接入仍需独立配置。容器保留 `/root/higan` 内部路径以兼容现有模块，绑定到所选外部数据目录；不要直接迁移或覆盖旧数据。
+这些命令验证本地源码，不代表实际 QQ 登录、模型请求或生产部署已通过。全新实例使用安装器配置模型与隔离数据；内嵌 AstrBot 不需另行克隆，QQ 接入仍需独立配置。Linux / WSL 容器保留 `/root/higan` 内部路径以兼容现有模块，绑定到外部数据目录；Windows 原生使用私有 `runtime/astrbot/data` 与 `higan`。不要直接迁移或覆盖旧数据。
 
 密钥、密码和令牌仅从私有运行配置或相应环境变量提供。不要提交运行数据库、聊天档案、图片附件、工具观察文件、会话资料或 Dashboard / 上游凭据；非秘密路径与账号标识也应在部署前复核。
 
@@ -61,7 +62,7 @@ python -m compileall -q plugin
 
 ## QQ 作为能力，而非唯一入口
 
-[原完整实例的本地入口](LOCAL_FULL_CORE.md)在同一个现有 bot 上接入 root-only Unix socket，复用人设、模型、工具、记忆、任务和全局队列；不再要求请求先来自 QQ。QQ 登录和全部旧状态不迁移，QQ 仍作为原生能力保留；当前宿主仍是 AstrBot，不宣称已移除其生命周期。[简单独立 harness](BOT_HARNESS.md)继续供显式嵌入使用，不另建第二套生产状态。[核心解耦设计](BOT_CORE_DECOUPLING.md)仅保留为后续参考。
+[原完整实例的本地入口](LOCAL_FULL_CORE.md)在同一个现有 bot 上接入 root-only Unix socket，复用人设、模型、工具、记忆、任务和全局队列；不再要求请求先来自 QQ。QQ 登录和全部旧状态不迁移，QQ 仍作为原生能力保留；当前宿主仍是 AstrBot，不宣称已移除其生命周期。Windows 原生完整版为同一完整插件提供 loopback + operator token + 当前用户 SID 私有 ACL 的本地端点，不把 Linux root-only Unix socket 说明冒充 Windows 权限模型；不隔离同用户恶意进程。`stop` 通过认证通道请求排空后清理，accepted 不等于退出验收。[简单独立 harness](BOT_HARNESS.md)继续供显式嵌入使用，不另建第二套生产状态。[核心解耦设计](BOT_CORE_DECOUPLING.md)仅保留为后续参考。
 
 ## 版本、档案与许可
 

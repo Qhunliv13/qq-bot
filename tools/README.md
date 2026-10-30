@@ -4,9 +4,12 @@
 
 ## 完整版可视化部署
 
-- 根目录 [install.cmd](../install.cmd) 使用原生 [Windows 图形提示层](windows-setup-ui.ps1)，环境准备仍复用 [windows-setup.ps1](windows-setup.ps1)，不是第二套安装器。
+- 根目录 [install.cmd](../install.cmd) 现以 `-STA` 默认进入 [windows-native.ps1](windows-native.ps1) 的 `wizard`，**Windows 原生完整版**，无需 WSL / Docker / Node；同一固定 AstrBot 4.28.1 与插件，不是 Lite。详细步骤见 [原生完整部署](../docs/WINDOWS_NATIVE_FULL.md)，真实原生整体验收仍待完成。
+- [native_runtime.py](native_runtime.py) 复用共享设置 / 浏览器向导和完整上游宿主；命令为 `wizard/init/up/doctor/info/status/stop/logs/health/chat`。`logs` 只显示私有路径；`up` 不自动升级；`stop` 经认证端点请求排空，accepted 不证明退出。默认状态在 `%LOCALAPPDATA%\QhunlivBot\Full`，新目录当前用户 SID 私有 ACL、无提权。
+- [native_assets.py](native_assets.py) 将 vendored 核心复制到私有 `runtime/astrbot`，按同版 `pyproject.toml` 完整依赖安装到 `runtime/.venv`；官方 PyPI 同版本预构建 Dashboard 同时核对固定 SHA256 / HTTPS 元数据 / 下载字节，不需 Node，不用 wheel 替换核心，不是作者签名。没有全局 pip 安装；缺 Python 的当前用户 winget 安装必须先明确同意，测试不得执行宿主安装。
+- 原 [windows-setup.ps1](windows-setup.ps1) / [Windows 图形提示层](windows-setup-ui.ps1)、[windows.ps1](windows.ps1) 与根 `install.ps1` 保留为**显式 WSL / Docker 兼容**入口，不删除，不管理新的原生状态；见 [WSL 指南](../docs/WINDOWS_WSL.md)。
 - [bootstrap.py](bootstrap.py) 的 `wizard` 命令通过 [setup_wizard.py](setup_wizard.py) 与 [本地固定页面](setup_wizard.html) 提供五步部署 UI；Linux 无参数入口也进入向导。只绑定 loopback，授权片段仅留在标签页内存，修改请求要求精确 Host / Origin / Bearer，状态不导出密钥。
-- 初始化、启停和试聊复用原完整部署核心；试聊需明确确认并可能计费或调用工具，不是只读检查。关闭向导不停止 Bot；重复打开不覆盖配置。见 [零基础指南](../docs/VISUAL_SETUP.md)。
+- 初始化、启停和试聊复用同一完整部署能力；试聊需明确确认并可能计费或调用工具，不是只读检查。原生本地端点为 loopback + operator token + 当前用户 SID ACL，不是 Linux Unix socket，也不隔离同用户恶意进程。重复打开不覆盖配置；detached 关窗续跑和排空停机仍待真实 smoke。QQ / NapCat 不打包、不自动登录；VM、浏览器、邮件、指针桥接等外部 / Linux 依赖不自动成为宿主工具。见 [零基础指南](../docs/VISUAL_SETUP.md)。
 
 ## Windows 原生轻量入口
 

@@ -36,7 +36,7 @@ def test_launcher_delegates_to_existing_linux_bootstrap():
 
 def test_guide_warns_about_linux_secret_and_local_full_runtime():
     """Document critical platform boundaries without claiming key forwarding or QQ provisioning."""
-    guide = (ROOT / "docs" / "WINDOWS.md").read_text(encoding="utf-8")
+    guide = (ROOT / "docs" / "WINDOWS_WSL.md").read_text(encoding="utf-8")
     for term in ("WSL2", "Docker Desktop", "WSL Integration", "Linux", "-ApiKeyEnv",
                  "-Distro", "-DataDir", "standard input", "full local", "QQ"):
         assert term in guide

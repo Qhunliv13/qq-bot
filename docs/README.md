@@ -11,16 +11,17 @@
 | 查看待处理恢复、超长批次拆分与历史写盘确认 | [可靠消息入口](RELIABLE_INTAKE.md) |
 | 完全不懂代码，按图形界面一步一步创建 Bot | [零基础可视化部署](VISUAL_SETUP.md) |
 | 安装、找面板密码、排查常见错误 | [快速开始](QUICKSTART.md) |
-| 不用 WSL / Docker 的 Windows 原生网页和命令行 | [原生极轻量版](WINDOWS_LITE.md)，双击 `lite.cmd` |
-| 完整版 Windows 双击向导或 PowerShell 管理 | [Windows](WINDOWS.md) |
+| 默认 Windows 原生完整版：无 WSL / Docker / Node，保留完整工具、记忆与任务 | [Windows](WINDOWS.md) / [原生完整部署](WINDOWS_NATIVE_FULL.md)，双击 `install.cmd`；原生整体验收待完成 |
+| 管理原有 WSL / Docker 完整实例，显式选择兼容安装 | [WSL 兼容指南](WINDOWS_WSL.md)，`install.ps1` 不等于原生入口 |
+| 仅 Windows 原生文字聊天，不含 QQ、工具、记忆与任务 | [原生极轻量版](WINDOWS_LITE.md)，双击 `lite.cmd` |
 | Linux 安装、私有目录、多实例端口 | [Linux](LINUX.md) |
 | 了解完整能力、具体限制与源码目录 | [功能细节](FEATURES.md)（原根 README 技术说明保留） |
 | 理解外部配置、账号授权和数据边界 | [配置与仓库边界](CONFIGURATION.md) |
 | 核对哪些部署环节已测、哪些尚未验收 | [部署验证记录](QUICK_DEPLOY_VERIFICATION.md) |
 
-`info` 查看配置地址、账号和数据路径，默认隐藏密码；`health` 只查本地入口；`chat` 才主动请求模型，可能收费；`stop` 停止所选且归属验证通过的实例、不删除数据。命令参数与显式显示面板密码方式见平台指南。配置中的地址、容器健康、真实模型请求、QQ 登录与送达不能互相替代。
+`info` 查看配置地址、账号和数据路径，默认隐藏密码；`health` 只查本地入口；`chat` 才主动请求模型，可能收费；`stop` 停止所选且归属验证通过的实例、不删除数据。命令参数与显式显示面板密码方式见平台指南。配置中的地址、原生 / 容器健康、真实模型请求、QQ 登录与送达不能互相替代。原生 `logs` 只显示私有日志路径；原生 `stop` 的 accepted 只表示排空请求已接受，不证明进程已退出。
 
-新安装不接管已有实例。重复初始化不是配置覆盖或升级；初始模型设置与已有 AstrBot 面板运行配置不同，不承诺手改初始化文件即可热更新模型。密钥、密码、聊天档案与私有状态不放进 Git。
+新安装不接管已有实例。重复初始化不是配置覆盖或升级；初始模型设置与已有 AstrBot 面板运行配置不同，不承诺手改初始化文件即可热更新模型。密钥、密码、聊天档案与私有状态不放进 Git。原生默认 `%LOCALAPPDATA%\QhunlivBot\Full`，新目录限当前用户 SID ACL，不与 Lite / WSL 自动共享或迁移。保留完整工具不代表外部 VM、浏览器、邮件、指针桥接等 Linux 依赖已成为 Windows 宿主能力。
 
 ## 可选入口与高级用法
 

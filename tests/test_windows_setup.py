@@ -14,7 +14,7 @@ SETUP = ROOT / 'tools/windows-setup.ps1'
 def test_double_click_entry_is_thin_and_checkout_relative():
     """Double-click must resolve its own checkout without another setup implementation."""
     cmd = (ROOT / 'install.cmd').read_text(encoding='utf-8')
-    assert '%~dp0tools\\windows-setup.ps1' in cmd
+    assert '%~dp0tools\\windows-native.ps1' in cmd
     assert 'pause' in cmd and 'exit /b %result%' in cmd
     setup = SETUP.read_text(encoding='utf-8')
     assert 'bootstrap.py' in setup

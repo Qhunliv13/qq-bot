@@ -48,7 +48,8 @@ class Controller:
     def snapshot(self):
         """Expose readiness and local access only, never saved credentials or raw logs."""
         with self.lock:
-            value = dict(self.state, initialized=self.initialized, busy=self.busy)
+            value = dict(self.state, initialized=self.initialized, busy=self.busy,
+                         deployment_mode=getattr(self.core, "DEPLOYMENT_MODE", "container"))
             if self.initialized:
                 settings = self.core.load_install(self.data, self.name)
                 env = self.core.docker_environment(self.data, settings)
@@ -63,7 +64,7 @@ class Controller:
     def _command(self, action, *, timeout=60):
         """Reuse bootstrap CLI with fixed argv, discarded diagnostics and no input keys."""
         return subprocess.run(
-            [sys.executable, str(self.core.REPO_ROOT / "tools" / "bootstrap.py"), action,
+            [sys.executable, str(self.core.REPO_ROOT / "tools" / getattr(self.core, "CLI_FILE", "bootstrap.py")), action,
              "--data-dir", str(self.data), "--runtime-name", self.name, "--non-interactive"],
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL, cwd=self.core.REPO_ROOT,
@@ -77,7 +78,7 @@ class Controller:
         use a nonsensitive test message. An ambiguous outcome is never retried.
         """
         result = subprocess.run(
-            [sys.executable, str(self.core.REPO_ROOT / "tools" / "bootstrap.py"), "chat",
+            [sys.executable, str(self.core.REPO_ROOT / "tools" / getattr(self.core, "CLI_FILE", "bootstrap.py")), "chat",
              "--data-dir", str(self.data), "--runtime-name", self.name, "--non-interactive"],
             input=prompt.encode("utf-8"), stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             cwd=self.core.REPO_ROOT, env=self.core.docker_environment(self.data), shell=False, check=True)
@@ -184,7 +185,10 @@ class Controller:
                 self._set(environment="ready", runtime="ready", message="Bot 已启动！先在这里试聊，再按需连接 QQ。")
             elif action == "stop":
                 self._command("stop", timeout=None)
-                self._set(runtime="unverified", model="unverified", qq="unverified", message="这一个 Bot 已停止。数据已保留，随时可以重新启动。")
+                message = "这一个 Bot 已停止。数据已保留，随时可以重新启动。"
+                if getattr(self.core, "DEPLOYMENT_MODE", "container") == "windows-native":
+                    message = "这一个 Bot 已接受停止请求，正在排空已接收工作；不强制中断模型或工具。数据已保留，进程退出后可重新启动。"
+                self._set(runtime="unverified", model="unverified", qq="unverified", message=message)
             elif action == "chat":
                 self._set(model="checking", answer="")
                 answer = self._local(payload["prompt"])
@@ -197,6 +201,8 @@ class Controller:
                        "没有确认收到回复。请在高级控制台检查模型地址、名称和余额；不要反复点击，以免重复计费。"
                        if action == "chat" else
                        "操作未完成。首次构建需要网络和磁盘空间；检查运行环境后重试。已有配置和数据不会重置。")
+            if action == "check" and getattr(self.core, "DEPLOYMENT_MODE", "container") == "windows-native":
+                message = "原生环境尚未就绪。需要 Windows 与 Python 3.12/3.13；重新打开 install.cmd 可检查 Python。无需 WSL 或 Docker。首次下载还需联网和足够磁盘空间。"
             self._set(**{field: "failed"}, message=message)
         finally:
             with self.lock:

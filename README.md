@@ -4,7 +4,7 @@
 
 ## 零基础开始（完整版，启动即有界面）
 
-**Windows：**下载并完整解压仓库 ZIP，双击根目录 [`install.cmd`](install.cmd)。先出现中文图形欢迎与环境确认，环境就绪后自动打开浏览器部署向导。**不需要写代码，不需要理解 Agent，也不需要先安装 Windows Python。**缺少 WSL2 / Docker 时先征求同意；Windows 提示重启或初始化 Ubuntu 时按提示完成，再次双击继续，不会强制重启。
+**Windows：**下载并完整解压仓库 ZIP，双击根目录 [`install.cmd`](install.cmd)，默认进入**原生完整版**浏览器向导，**无需 WSL / Docker / Node，不是 Lite**。需要 Windows Python 3.12 / 3.13；缺少时仅在明确同意后可通过 winget 安装官方 Python 3.12 到当前用户，不提权。完整依赖只安装到仓库外私有 venv。**原生完整启动 / 界面 / 模型 / QQ 尚待真实验收**，详见 [Windows 说明](docs/WINDOWS.md)。
 
 浏览器按 **准备好了吗 → 连接模型 → 创建 Bot → 启动与试聊 → 开始使用** 引导。模型填三项；角色和 QQ 管理员可跳过。点击启动后可直接试聊，再选择网页使用或按指南连接 QQ。完整工具、记忆和任务保留，不是 Lite。重复打开进入同一 Bot 管理页，不覆盖原配置。[图文式零基础操作说明](docs/VISUAL_SETUP.md)
 
@@ -14,7 +14,7 @@
 bash ./install.sh
 ```
 
-首次构建需网络、时间和磁盘；Linux 入口不自动安装系统依赖。已有 Docker 不替换；Windows Docker Desktop 需开启所选 WSL 发行版的 Integration。[Windows 说明](docs/WINDOWS.md) · [Linux 说明](docs/LINUX.md)
+首次准备需网络、时间和磁盘；Linux 入口不自动安装系统依赖。Linux 完整版仍用 Docker；已有 Windows WSL 实例可显式使用保留的 [WSL / Docker 兼容入口](docs/WINDOWS_WSL.md)，不自动迁移。[原生 Windows 详细部署](docs/WINDOWS_NATIVE_FULL.md) · [Linux 说明](docs/LINUX.md)
 
 ## 可选：Windows 原生极轻量版
 
@@ -34,24 +34,24 @@ bash ./install.sh
 
 ## 常用操作
 
-在仓库根目录操作，沿用首次安装的发行版、用户、数据目录、运行名与端口。Windows 向导若打印了带 `-Distro`、`-User`、`-DataDir` 的命令，请使用实际参数。
+在仓库根目录操作，沿用首次安装的数据目录、运行名与端口。下表 Windows 指**原生完整版**，自定义安装每条均沿用同一 `-DataDir`（绝对 Windows 路径）和 `-RuntimeName`。旧 `install.ps1` 仅管理 [WSL 兼容实例](docs/WINDOWS_WSL.md)。
 
 | 操作 | Linux | Windows PowerShell |
 |---|---|---|
-| 地址、账号与数据位置 | `bash ./install.sh info` | `.\install.ps1 info` |
-| 环境预检 | `bash ./install.sh doctor` | `.\install.ps1 doctor` |
-| 容器状态 | `bash ./install.sh status` | `.\install.ps1 status` |
-| 本地健康检查 | `bash ./install.sh health` | `.\install.ps1 health` |
-| 跟踪日志 | `bash ./install.sh logs` | `.\install.ps1 logs` |
-| 本地请求一次模型 | `bash ./install.sh chat --prompt '你好'` | `'Hello' \| .\install.ps1 chat` |
-| 停止此实例（保留数据） | `bash ./install.sh stop` | `.\install.ps1 stop` |
-| 使用原数据启动 | `bash ./install.sh up` | `.\install.ps1 up` |
+| 地址、账号与数据位置 | `bash ./install.sh info` | `.\tools\windows-native.ps1 info` |
+| 环境预检 | `bash ./install.sh doctor` | `.\tools\windows-native.ps1 doctor` |
+| 实例状态 | `bash ./install.sh status` | `.\tools\windows-native.ps1 status` |
+| 本地健康检查 | `bash ./install.sh health` | `.\tools\windows-native.ps1 health` |
+| 日志入口 | `bash ./install.sh logs` | `.\tools\windows-native.ps1 logs` |
+| 本地请求一次模型 | `bash ./install.sh chat --prompt '你好'` | `'Hello' \| .\tools\windows-native.ps1 chat` |
+| 停止此实例（保留数据） | `bash ./install.sh stop` | `.\tools\windows-native.ps1 stop` |
+| 使用原数据启动 | `bash ./install.sh up` | `.\tools\windows-native.ps1 up` |
 
-PowerShell 若阻止脚本，用 `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 info`（其它命令替换 `info`）；仅本次进程放行，不改系统策略。
+PowerShell 若阻止脚本，用 `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\windows-native.ps1 info`（其它命令替换 `info`）；仅本次进程放行，不改系统策略。
 
 - `info` 不需要 Docker、不联网，默认隐藏密码；显式显示的也只有面板密码，不显示模型 API Key。配置中的 URL 不是就绪证明。
-- `health` 不调用模型、不发 QQ 消息；`chat` 会请求你的模型，可能收费并按请求执行获授权工具。Ctrl+C 退出日志查看不停止 bot。
-- 私有数据在仓库外（Windows 在 WSL 中）；`stop` 不擦除数据。重复安装保留配置，`up` 可能构建镜像，不是升级、迁移或模型配置覆盖命令。
+- `health` 不调用模型、不发 QQ 消息；`chat` 请求同一完整回路，可能收费并执行获授权工具。原生 `logs` 只显示私有日志路径，不输出原始日志；Linux 的 Ctrl+C 仅退出日志跟踪。
+- 原生 Windows 私有数据默认在 `%LOCALAPPDATA%\QhunlivBot\Full`，新目录限当前用户 SID ACL；Linux / WSL 仍在各自 Linux 私有目录。`stop` 保留数据；原生停止回复只表示接受排空请求，不证明已退出。原生 `up` 不自动升级；Linux `up` 可能构建镜像，均不是迁移 / 配置覆盖命令。
 - 初始模型设置用于生成配置；已有 AstrBot 面板另有运行配置，不保证改初始化文件就更新当前模型。遇到问题先读[快速开始与排障](docs/QUICKSTART.md)。
 
 ## 全系统架构与状态
@@ -67,9 +67,9 @@ PowerShell 若阻止脚本，用 `powershell.exe -NoProfile -ExecutionPolicy Byp
 | 记忆、文件、任务等原生工具 | 工具目录存在不等于可用，依赖模型、权限与外部服务；虚拟机/邮件等需另配服务 |
 | 排队、主动观察、后台任务、只读委派 | 受预算、执行锁与服务可用性约束，不保证准点交付或无限执行 |
 | 可选 QQ / OneBot 接入 | 不打包 NapCat/QQ，不自动登录；实际发送需平台回执，健康不等于送达 |
-| 完整运行时与可选 Lite 文字入口 | 完整版依赖 Docker；Lite 不含面板、QQ、工具、持久记忆或后台任务 |
+| 完整运行时与可选 Lite 文字入口 | Windows 原生完整版保留同一核心、工具、记忆、任务与 60/40 聊天区预算；Linux / WSL 完整版仍用 Docker。Lite 不含完整面板、QQ、工具、持久记忆或任务 |
 
-完整功能说明与已知限制见 [功能细节](docs/FEATURES.md)。独立原生 QQ 后端仍未完成，不能据静态清单或离线测试替换现有接入。实际构建、模型请求与 QQ 登录的验收范围见 [部署验证记录](docs/QUICK_DEPLOY_VERIFICATION.md)，不把安装入口测试当作完整部署成功。
+完整功能说明与已知限制见 [功能细节](docs/FEATURES.md)。Windows 原生不等于独立原生 QQ 后端完成：QQ / NapCat 仍须外部服务或客户端手动配置，不自动登录。VM、浏览器、邮件与指针桥接的 Linux 依赖不会自动变成 Windows 宿主工具，不能宣称全部外部能力一键可用。实际构建、模型请求与 QQ 登录的验收范围见 [部署验证记录](docs/QUICK_DEPLOY_VERIFICATION.md)，不把安装入口测试当作完整部署成功。
 
 ## 文档
 

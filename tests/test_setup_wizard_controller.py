@@ -241,8 +241,11 @@ def test_start_reuses_same_instance_bootstrap_then_health(core, tmp_path, monkey
     assert state["model"] == state["qq"] == "unverified"
 
 
-def test_stop_is_deliberate_preserves_state_and_uses_shared_command(core, tmp_path, monkeypatch):
-    """Stopping one owned runtime does not reset data or destroy Compose resources."""
+@pytest.mark.parametrize("native_mode", [False, True])
+def test_stop_is_deliberate_preserves_state_and_uses_shared_command(core, tmp_path, monkeypatch, native_mode):
+    """Stopping preserves data; native acceptance must not falsely report process exit."""
+    if native_mode:
+        monkeypatch.setattr(core, "DEPLOYMENT_MODE", "windows-native", raising=False)
     controller = _controller(core, tmp_path)
     _save(controller)
     before = (controller.data / "settings.json").read_bytes()
@@ -255,6 +258,9 @@ def test_stop_is_deliberate_preserves_state_and_uses_shared_command(core, tmp_pa
     assert calls == ["stop"]
     assert before == (controller.data / "settings.json").read_bytes()
     assert controller.snapshot()["runtime"] != "ready"
+    if native_mode:
+        assert "已接受停止请求" in controller.snapshot()["message"]
+        assert "Bot 已停止" not in controller.snapshot()["message"]
 
 
 def test_model_test_requires_consent_and_ready_runtime_then_runs_once(core, tmp_path, monkeypatch):

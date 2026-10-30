@@ -71,7 +71,8 @@ def _mock_graphical_setup(tmp_path, *, missing_wsl=False, consent=False,
 def test_double_click_is_sta_graphical_and_ui_has_no_install_implementation():
     """Only the desktop adapter owns Chinese prompts, not another package installer."""
     entry = (ROOT / 'install.cmd').read_text(encoding='utf-8')
-    assert '-STA' in entry and '-Graphical' in entry
+    assert '-STA' in entry and 'windows-native.ps1' in entry
+    assert 'windows-setup.ps1' not in entry  # WSL is now an explicit compatibility path.
     ui_path = ROOT / 'tools/windows-setup-ui.ps1'
     assert ui_path.read_bytes().startswith(b'\xef\xbb\xbf')
     ui = ui_path.read_text(encoding='utf-8-sig')

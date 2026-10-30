@@ -17,8 +17,11 @@ import sys
 import threading
 from urllib.parse import urlsplit
 
+import pytest
 
-def test_fresh_bootstrap_wizard_no_browser_serves_private_state_without_initializing(tmp_path):
+
+@pytest.mark.parametrize("entry", ["bootstrap.py", "native_runtime.py"])
+def test_fresh_bootstrap_wizard_no_browser_serves_private_state_without_initializing(tmp_path, entry):
     """The actual script launch emits one capability without requiring package imports."""
     repo = Path(__file__).resolve().parents[1]
     data = tmp_path / "fresh external process state"
@@ -29,7 +32,7 @@ def test_fresh_bootstrap_wizard_no_browser_serves_private_state_without_initiali
     environment.pop("BOT_WEB_PORT", None)
     environment.pop("BOT_ONEBOT_PORT", None)
     process = subprocess.Popen(
-        [sys.executable, "-B", str(repo / "tools" / "bootstrap.py"), "wizard",
+        [sys.executable, "-B", str(repo / "tools" / entry), "wizard",
          "--no-browser", "--data-dir", str(data), "--runtime-name", "process-wizard"],
         cwd=tmp_path, env=environment, stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -66,6 +69,7 @@ def test_fresh_bootstrap_wizard_no_browser_serves_private_state_without_initiali
             connection.close()
         assert status == 200
         value = json.loads(raw)
+        assert value["deployment_mode"] == ("windows-native" if entry == "native_runtime.py" else "container")
         assert value["initialized"] is False
         assert value["busy"] is False
         assert value["environment"] == "unknown"

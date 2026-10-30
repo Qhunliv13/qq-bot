@@ -33,7 +33,7 @@ Linux install.sh ─────────────────────
                ┌──────────────────┼──────────────────────┐
                v                  v                      v
           on_message        LocalRuntime            后台循环
-      QQ / WebChat等     root Unix socket       autonomy / tasks / 成员观察
+      QQ / WebChat等   Linux root Unix / Windows私有ACL+token   autonomy / tasks / 成员观察
                └──────────────────┼──────────────────────┘
                             单实例 execution_lock
                                   |
@@ -57,13 +57,15 @@ Linux install.sh ─────────────────────
 
 | 文件 | 实际职责与边界 |
 |---|---|
-| [install.cmd](../install.cmd#L1-L9) | 双击入口；启动 Windows PowerShell 的 `windows-setup.ps1 -Graphical`，保留退出码和窗口。不是 Python 业务入口。 |
+| [install.cmd](../install.cmd#L1-L9) | 双击默认原生完整入口；转交Windows PowerShell的windows-native.ps1，Python缺失须同意用户级安装，无WSL/Docker/Lite隐式依赖；原WSL安装助手显式保留。 |
 | [install.ps1](../install.ps1#L1-L15) | 薄转发层，保留原始参数与 pipeline 输入到 `tools/windows.ps1`；异常不回显私密参数。 |
 | [install.sh](../install.sh#L1-L21) | Bash 校验、定位自身目录、检查 python3；无参数进 `wizard`，最后 `exec bootstrap.py`。不安装 Linux 系统依赖。 |
 | [lite.cmd](../lite.cmd#L1-L10) | 可选原生轻量双击入口，转交 `lite.ps1`；不是完整安装器的隐式降级。 |
 | [lite.ps1](../lite.ps1#L1-L14) | 薄转发到 `windows-lite.ps1`，传递 pipeline；不读取模型配置。 |
 
 ### 2.2 完整启动生命周期
+
+Windows默认新增[原生完整部署](WINDOWS_NATIVE_FULL.md)：[windows-native.ps1](../tools/windows-native.ps1)→[native_runtime.py](../tools/native_runtime.py)→[native_assets.py](../tools/native_assets.py)。复用原安装网页和deploy.prepare配置语义，独立venv安装vendored pyproject全部依赖、复制固定核心/插件、SHA256固定同版本面板文件，无Node/WSL/Docker宿主依赖；Windows私有SID ACL+token本地通道复用同一插件回路。原容器/WSL与Lite仍保留；真实原生完整实装和QQ/外部桥能力分别验收，见[验证记录](QUICK_DEPLOY_VERIFICATION.md)。
 
 - [bootstrap](../tools/bootstrap.py#L38-L82) 将数据目录限制在仓库外，也不接受源码目录祖先；默认安装路径是当前运行账号下 `.local/share/qhunliv-bot`。实例名可明确指定，否则由数据路径 hash 隔离。
 - [initialize_settings](../tools/bootstrap.py#L144-L189) 验证后只初始化 fresh state：创建 `astrbot/`、`higan/`、`config/`，写私有 `settings.json`、`compose.env`，最后才写 `.bootstrap.json`。已有受管安装仅核验，不重置密钥；外来非空目录拒绝接管。

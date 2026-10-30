@@ -1,21 +1,65 @@
 # Windows / Linux quick deployment verification
 
-Status: launchers/preflight, complete image builds and isolated container health/
-restart checks passed. Unmodified Compose end-to-end deployment and real model
-chat **not yet accepted**. No production installation changed.
+Status (2026-10-30): **Windows now defaults to the native full runtime; its real
+installation/startup/UI/model/QQ/lifecycle integration is NOT yet accepted.**
+The image-build and isolated-container results below concern Linux/WSL only, not
+the new native entrypoint. Unmodified Compose end-to-end deployment and real model
+chat also remain **not yet accepted**. No production installation changed.
 
 ## Single implementation
 
 - Linux: `bash ./install.sh` from the checkout now defaults to shared bootstrap `wizard`; explicit `up` retains terminal setup.
-- Windows: double-click `install.cmd` shows native novice prompts then opens the same
-  browser wizard through WSL; advanced `install.ps1` still defaults to `up`.
+- Windows default: `install.cmd` uses PowerShell `-STA` and `tools/windows-native.ps1`
+  (default `wizard`) to open the same setup UI for the native full host. Python
+  3.12/3.13 is required, without WSL, Docker, Node or elevation. Missing Python can
+  be installed with official user-scope winget only after explicit consent; mocked
+  installer tests must never perform a host install.
+- Explicit WSL compatibility remains in `install.ps1`, `tools/windows.ps1` and
+  `tools/windows-setup.ps1`; these are not native commands and are not deleted.
+  Existing WSL state is not automatically migrated. Lite remains separate.
 - Explicit commands are wizard/init/doctor/up/info/stop/status/logs/health/chat. Existing private
   state is validated, not overwritten. Unmanaged directories and project ownership
   conflicts fail closed. Default full tool exposure remains unchanged.
-- `up` waits for Compose health with a 300-second default (configurable 1–3600).
-  Success describes local runtime readiness only. No default QQ login is installed.
+- Linux/WSL `up` waits for Compose health; native `up` prepares private assets and
+  waits for authenticated same-instance readiness. Both default to 300 seconds
+  (configurable 1–3600); this is not a dependency-download/build deadline. Native
+  `up` does not automatically upgrade installed source/plugins. Local readiness
+  does not validate the model or QQ. No default QQ login is installed.
 
-## Actual checks on 2026-10-30
+## Windows native full: provisional implementation (2026-10-30)
+
+- Repository regression: **5,326 passed, 48 skipped, 460 subtests passed** on Windows; pyflakes and release validator passed (155 first-party files). Native lifecycle/dashboard/transport targeted regressions passed; the fresh-interpreter native setup served authenticated state without creating an installation. Skips include Unix-only/socket and unprivileged symlink boundaries. This is code-level evidence, not proof that an end-user install or QQ account works.
+- The isolated actual Python 3.13 full dependency install is still resolving/downloading from official PyPI. This environment has slow direct public-network downloads; there is no success marker yet. No model keys, QQ accounts, existing deployment state or global pip packages are used. Full host smoke remains gated on that real installation completing.
+
+- The core remains the same vendored AstrBot **4.28.1**, copied into private
+  `runtime/astrbot`; the plugin is copied, not installed through admin symlinks.
+  Full dependencies come from its `pyproject.toml` into `runtime/.venv`, never
+  global pip. Only prebuilt Dashboard files are extracted from the official
+  same-version PyPI wheel after fixed SHA256 + HTTPS metadata + byte checks; this
+  is not an author signature. No Node build or different Python core is substituted.
+- Default state is `%LOCALAPPDATA%\QhunlivBot\Full`, outside the checkout; new
+  private directories use the current-user SID ACL without elevation. Loopback
+  Dashboard candidate port 6185 and OneBot candidate 6199 are selected/saved at
+  first initialization; a saved URL is not listening/readiness evidence.
+- Native operator requests use an owned loopback endpoint, random token and SID
+  ACL, not Linux root peer credentials. Full tools, persistent tasks, memory and
+  the available-chat 60/40 source/summary split are retained. External VM/browser/
+  mail/pointer bridges and Linux dependencies do not become Windows host tools.
+  QQ still needs a manually configured external OneBot/NapCat service or client;
+  nothing packages/downloads/logs into QQ automatically.
+- Native `logs` reports only the private log path, not raw log contents. `stop`
+  sends authenticated shutdown; the implementation drains accepted local and QQ/
+  tool work before upstream core cancellation. Acceptance means the request was
+  received, not that the process has exited. Detached operation after closing the
+  setup window and graceful lifecycle still need real Windows smoke acceptance.
+- Current native checks are limited to mocked boundaries and scoped Windows ACL /
+  installer-step checks. A real private-venv dependency installation is in progress;
+  it is **not recorded as passed here**. No accepted native full-host startup,
+  rendered browser UI, real-model chat, QQ login/send-receive or stop/drain result
+  is available yet. Historical Linux/WSL and synthetic-UI test counts below must
+  not be reused as native acceptance. See [native deployment](WINDOWS_NATIVE_FULL.md).
+
+## Historical Linux/WSL checks on 2026-10-30
 
 - Windows PowerShell 5.1 tests use a substituted WSL boundary for argv, space paths,
   default command, stdin, exit-code forwarding and invalid argument rejection.
@@ -120,7 +164,7 @@ configured model; the dashboard's per-conversation model override is not yet hon
 
 ## Zero-code visual onboarding (2026-10-30)
 
-The full installer now provides native Windows welcome/consent/distribution dialogs,
+The WSL-compatible installer at this historical checkpoint provided Windows welcome/consent/distribution dialogs,
 then a five-step browser wizard. The frontend is a fixed local page, not a modified
 vendored dashboard or an alternate agent runtime. Initial configuration uses the
 same exclusive bootstrap writer; lifecycle actions invoke the same owned CLI;
@@ -161,7 +205,15 @@ acceptance. Those outstanding boundaries remain below.
 
 ## Remaining acceptance
 
-Still verify both quick-launch entrypoints through unmodified Compose networking,
+For Windows native, finish the real private-venv install, owned host startup,
+loopback Dashboard rendering/login and same-instance chat acceptance; separately
+verify current-user ACL fail-closed behavior, detached window-close survival and
+authenticated drain/stop completion with accepted local/QQ work. Real model and
+QQ acceptance need authorized services and remain distinct. Do not perform a host
+Python install during automated tests or claim all external capabilities work.
+
+For the explicitly retained Linux/WSL compatibility entrypoints, still verify
+unmodified Compose networking,
 host loopback dashboard access and explicit same-instance chat with authorized
 model access. The isolated image run above does not prove those outcomes. After verification, the dedicated daemon was sent
 SIGTERM only after its PID command line matched the private data root; it exited

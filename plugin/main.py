@@ -226,6 +226,15 @@ class HiganPlugin(Star):
         self._ensure_task_loop()
         # Start after old-instance admission closes; failure must not disable QQ.
         from .local_runtime import LocalRuntime
+        # Only the native host's in-process, exact-instance callback enables its
+        # authenticated graceful stop. JSON/model tools cannot create this hook.
+        import sys
+        control = sys.modules.get("qhunliv_native_host_control")
+        if (os.name == "nt" and control is not None and getattr(control, "pid", None) == os.getpid()
+                and Path(getattr(control, "root", "")).resolve() == Path(HIGAN_ROOT).resolve()
+                and callable(getattr(control, "request_stop", None))):
+            self._native_shutdown_requested = control.request_stop
+            control.plugin = self
         self._local_runtime = LocalRuntime(self, root=Path(HIGAN_ROOT))
         try:
             await self._local_runtime.start()
@@ -3387,6 +3396,10 @@ class HiganPlugin(Star):
                     # Repeated polling/skip under pending chat could otherwise
                     # starve an explicitly scheduled task indefinitely.
                     async with self._execution_lock:
+                        # Native graceful stop can begin while this scheduler is
+                        # waiting. Never claim new persistent work after its drain.
+                        if getattr(self, "_stopping", False):
+                            return
                         task = await asyncio.to_thread(tasks.claim, str(candidate["id"]))
                         if task is None:
                             continue

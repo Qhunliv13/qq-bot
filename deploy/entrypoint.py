@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import sys
 import runpy
+import shutil
 import tomllib
 from typing import Any
 from urllib.parse import urlsplit
@@ -49,6 +50,7 @@ def prepare(
     higan_root: Path,
     plugin_root: Path,
     default_config: dict[str, Any],
+    *, plugin_mode: str = "symlink", dashboard_host: str = "0.0.0.0", dashboard_port: int = 6185,
 ) -> dict[str, str]:
     """Seed new state once; refuse existing foreign plugins instead of replacing them.
 
@@ -56,6 +58,10 @@ def prepare(
     content manifest prevents silent plugin upgrades when an old data volume is
     reused with a different image; controlled upgrades must be explicit.
     """
+    if plugin_mode not in {"symlink", "copy"} or dashboard_host not in {"127.0.0.1", "0.0.0.0"}:
+        raise ValueError("Unsupported explicit runtime layout")
+    if type(dashboard_port) is not int or not 1 <= dashboard_port <= 65535:
+        raise ValueError("Invalid dashboard port")
     settings = read_settings(settings_path)
     plugin_root = plugin_root.resolve(strict=True)
     if not (plugin_root / "main.py").is_file():
@@ -74,8 +80,22 @@ def prepare(
     if marker.exists():
         if json.loads(marker.read_text(encoding="utf-8")) != expected_marker:
             raise ValueError("Plugin image changed; controlled update is required")
-        if not plugin_link.is_symlink() or plugin_link.resolve() != plugin_root:
-            raise ValueError("Plugin installation changed; controlled update is required")
+        if plugin_mode == "symlink":
+            if not plugin_link.is_symlink() or plugin_link.resolve() != plugin_root:
+                raise ValueError("Plugin installation changed; controlled update is required")
+        else:
+            # Native Windows copies avoid admin/Developer Mode symlink privileges.
+            # Validate content, never silently update an already-running instance.
+            copied = hashlib.sha256()
+            for path in sorted(plugin_link.rglob("*")):
+                if path.is_symlink():
+                    raise ValueError("Native plugin contains an unexpected link")
+                if path.is_file() and "__pycache__" not in path.parts:
+                    copied.update(path.relative_to(plugin_link).as_posix().encode("utf-8"))
+                    copied.update(b"\0")
+                    copied.update(path.read_bytes())
+            if not plugin_link.is_dir() or copied.hexdigest() != manifest.hexdigest():
+                raise ValueError("Native plugin copy changed; controlled update is required")
         if not config_path.is_file():
             raise ValueError("Initialized configuration is missing")
     else:
@@ -116,7 +136,7 @@ def prepare(
         config["platform"] = []
         dashboard = config.setdefault("dashboard", {})
         dashboard.update({
-            "enable": True, "host": "0.0.0.0", "port": 6185,
+            "enable": True, "host": dashboard_host, "port": dashboard_port,
             "username": "astrbot",
             # Upstream auth_password.py explicitly supports this legacy hash.
             "password": hashlib.md5(settings["dashboard_password"].encode("utf-8")).hexdigest(),
@@ -124,7 +144,13 @@ def prepare(
             "password_change_required": False,
         })
         plugin_link.parent.mkdir(parents=True, exist_ok=True)
-        plugin_link.symlink_to(plugin_root, target_is_directory=True)
+        if plugin_mode == "symlink":
+            plugin_link.symlink_to(plugin_root, target_is_directory=True)
+        else:
+            # Copy once for a fresh owned native install, with no elevation and
+            # no links to source paths writable by another runtime instance.
+            shutil.copytree(plugin_root, plugin_link,
+                            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
         # Exclusive creation and restrictive mode avoid overwriting secrets.
         descriptor = os.open(config_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(descriptor, "w", encoding="utf-8") as stream:

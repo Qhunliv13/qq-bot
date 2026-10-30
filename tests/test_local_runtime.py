@@ -330,7 +330,8 @@ def test_refuses_existing_file_and_insecure_directory(runtime):
 
 
 def test_start_fails_closed_on_non_linux_or_non_root(runtime, monkeypatch):
-    """Unsupported hosts must not open an unauthenticated alternative transport."""
+    """Unsupported Unix hosts must not bypass root; Windows has a separate ACL gate."""
+    monkeypatch.setattr("plugin.local_runtime._is_windows", lambda: False)
     monkeypatch.setattr(os, "geteuid", lambda: 1000, raising=False)
     with pytest.raises(RuntimeError, match="requires_linux_root"):
         asyncio.run(runtime.start())

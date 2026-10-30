@@ -95,3 +95,44 @@ def test_due_task_waits_without_preemption_then_precedes_later_chat(production, 
 
     asyncio.run(scenario())
     assert trace == ["foreground_running", "due", "foreground_released", "claim", "run", "mark", "later_chat"]
+
+
+def test_native_shutdown_while_scheduler_waits_never_claims_new_work(production, monkeypatch):
+    """Recheck shutdown under the FIFO lock, not only before the polling candidate loop."""
+    plugin = production()
+    claimed = []
+
+    async def scenario():
+        """Hold the actual execution lock until stop closes new task admission."""
+        waiting = asyncio.Event()
+
+        class ObservedLock(asyncio.Lock):
+            """Expose the scheduler reaching the blocked acquisition."""
+            async def acquire(self):
+                """Notify only contention, preserving the native asyncio lock implementation."""
+                if self.locked():
+                    waiting.set()
+                return await super().acquire()
+
+        async def tick(_delay):
+            """Avoid a real twenty-five second polling delay in this isolated test."""
+            return None
+
+        plugin._execution_lock = ObservedLock()
+        plugin._tasks_mod = lambda: SimpleNamespace(
+            due=lambda: [{"id": "pending", "origin": "offline:42"}],
+            claim=lambda ident: claimed.append(ident))
+        monkeypatch.setattr(asyncio, "sleep", tick)
+        await plugin._execution_lock.acquire()
+        task = asyncio.create_task(plugin._task_loop())
+        try:
+            await asyncio.wait_for(waiting.wait(), 2)
+            plugin._stopping = True
+            plugin._execution_lock.release()
+            await asyncio.wait_for(task, 2)
+        finally:
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+    asyncio.run(scenario())
+    assert claimed == []
