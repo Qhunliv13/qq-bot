@@ -75,6 +75,14 @@ def _assert_context(envelope, expected):
     assert coverage["used_chars"] <= coverage["max_chars"] == coverage["limit"]
     assert 0 < coverage["max_chars"] < coverage["max_context_chars"] == 600000
     assert coverage["fixed_chars"] > 0
+    available = max(0, coverage["max_context_chars"] - coverage["fixed_chars"] - 2048)
+    assert coverage["max_chars"] == available * 3 // 5
+    assert coverage["allocation"] == {
+        "available_chars": available, "raw_chars": available * 3 // 5,
+        "summary_chars": available - available * 3 // 5,
+        "raw_fraction": 0.6, "summary_archive_fraction": 0.4, "overhead_chars": 2048,
+    }
+    assert coverage["archive_deleted_records"] == 0
     assert coverage["archive_preserved"] is True
     assert "cache_padding" not in coverage
     return conversation

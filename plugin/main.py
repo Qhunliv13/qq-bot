@@ -3635,7 +3635,7 @@ class HiganPlugin(Star):
                        "tool_describe to expose exact schemas on the next request. "
                        "All existing permissions and execution requirements still apply.")
         context_started = time.monotonic()
-        from .context_budget import limits, size
+        from .context_budget import allocation, limits, size
         from .context_summary import prepare as prepare_summary
         budgets = limits()
         # Exact private archive rows remain separate from shared public groups;
@@ -3647,11 +3647,12 @@ class HiganPlugin(Star):
         baseline = self._request_context(event, group, text, has_image)
         schemas = self._tool_schemas() if tool_profile is None else tool_profile.schemas()
         fixed_chars = len(system) + len(baseline) + size(schemas)
-        history_chars = max(0, budgets["max_context_chars"] - fixed_chars - budgets["summary_chars"] - 2048)
+        regions = allocation(budgets["max_context_chars"], fixed_chars)
+        history_chars = regions["raw_chars"]
         # Summarization is actually executed, checked on disk and supplied as
         # separately marked untrusted data, not merely a request-building helper.
         turn["history"], length_coverage, turn["context_summary"] = await prepare_summary(
-            self, str(group), full_history, history_chars, budgets["summary_chars"], root=HIGAN_ROOT)
+            self, str(group), full_history, history_chars, regions["summary_chars"], root=HIGAN_ROOT)
         turn.setdefault("history_context", {"mode": "scoped_history", "source": "native_archive"})
         prior_coverage = dict(turn["history_context"].get("coverage") or {})
         prior_coverage.update(length_coverage)
@@ -3660,14 +3661,29 @@ class HiganPlugin(Star):
                                              if scope in selected_scopes]
         turn["history_context"]["coverage"] = dict(prior_coverage,
             limit=history_chars, max_context_chars=budgets["max_context_chars"], fixed_chars=fixed_chars,
-            budget_unit="serialized_unicode_characters", archive_preserved=True)
+            budget_unit="serialized_unicode_characters", archive_preserved=True,
+            allocation=regions, archive_deleted_records=0)
         prompt = self._request_context(event, group, text, has_image)
         if len(system) + len(prompt) + size(schemas) > budgets["max_context_chars"]:
             # Never silently drop current input, facts or tool schemas to claim a
             # false fit. History can shrink further; irreducible inputs fail closed.
             from .context_budget import suffix
             excess = len(system) + len(prompt) + size(schemas) - budgets["max_context_chars"]
-            turn["history"], _ = suffix(turn["history"], max(0, length_coverage["used_chars"] - excess - 1024))
+            turn["history"], final_coverage = suffix(full_history,
+                max(0, length_coverage["used_chars"] - excess - 1024))
+            turn["history_context"]["coverage"].update(final_coverage)
+            final_scopes = {str(row.get("scope", group)) for row in turn["history"] if isinstance(row, dict)}
+            turn["history_context"]["coverage"]["returned_scopes"] = [scope
+                for scope in prior_coverage.get("archive_scopes", []) if scope in final_scopes]
+            turn["history_context"]["coverage"]["final_fit_reduced_raw"] = True
+            newly_archived = full_history[length_coverage["omitted"]:final_coverage["omitted"]]
+            extra_chars = sum(size(row) for row in newly_archived)
+            # Extra framing may exclude more originals than the first baseline;
+            # those stay archived and are not falsely counted as summarized.
+            for key in ("archived_source_records", "archive_only_records"):
+                turn["context_summary"][key] += len(newly_archived)
+            for key in ("archived_source_chars", "archive_only_chars"):
+                turn["context_summary"][key] += extra_chars
             prompt = self._request_context(event, group, text, has_image)
             if len(system) + len(prompt) + size(schemas) > budgets["max_context_chars"]:
                 logger.warning("[higan] context_budget_exceeded fixed_input_cannot_fit")

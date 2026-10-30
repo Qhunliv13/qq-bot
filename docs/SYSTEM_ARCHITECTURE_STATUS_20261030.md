@@ -350,7 +350,7 @@ Linux install.sh ─────────────────────
 | `BOT_DATA_DIR` | bootstrap固定所选外部root。 | compose bind paths；create_host_path=false，必须先init。 |
 | `BOT_MODEL_BASE_URL/BOT_MODEL/BOT_MODEL_API_KEY` | 独立bot_core/Lite CLI明确env，无预设provider。 | 不属于完整AstrBot每轮配置；key参数只能是env名。 |
 
-**本轮新增配置 `context_memory.max_context_chars` 默认600000序列化Unicode字符；摘要预留1/8，唤醒观察不设条数淘汰。配置片段与边界详见13.4，不沿用旧条数参数冒充长度。**
+**本轮新增配置 `context_memory.max_context_chars` 默认600000序列化Unicode字符；扣除固定请求成本后的聊天区60%保留原文、40%摘要/归档，唤醒观察不设条数淘汰。配置片段与边界详见13.4，不沿用旧条数参数冒充长度。**
 
 ## 10. tools完整清单（按执行层和副作用分组）
 
@@ -409,6 +409,7 @@ Linux install.sh ─────────────────────
 | [cache_prefix_probe.py](../tools/cache_prefix_probe.py) | synthetic matched滑窗的真实model/cache比较。 |
 | [history_cache_probe.py](../tools/history_cache_probe.py) | timing-last vs aligned histories的真实usage比较。 |
 | [shared_history_cache_probe.py](../tools/shared_history_cache_probe.py) | 默认离线序列化前缀对照，显式--live才真实model四请求；无工具/QQ发送。 |
+| [context_retention_probe.py](../tools/context_retention_probe.py) | 完全离线合成饱和输入，量化旧策略与60/40长度分区原文保留、转摘要/归档长度和自动删除数；不读运行状态、不联网。 |
 | [prompt_structure_cache_probe.py](../tools/prompt_structure_cache_probe.py) | metadata-only lossless layout对照，默认离线，--live四请求。 |
 | [cache_layout_probe.py](../tools/cache_layout_probe.py) | 显式data-root读取真实历史/观察+真实model四请求，无QQ/tool effect；输出含敏感性边界，不能读取未授权目录。 |
 
@@ -514,6 +515,8 @@ Linux install.sh ─────────────────────
 
 ## 13. 本轮记忆修复：原因、实际链路与配置
 
+后续完整性复核和60%原文/40%摘要归档的饱和数字见[完整性与保留检查](RETENTION_AND_COMPLETENESS_20261030.md)；本文不把窗口退出、摘要有损与真实写盘失败混为“永久删除”。
+
 ### 13.1 三个问题的真实原因
 
 | 用户观察 | 源码原因 | 本轮结果 |
@@ -527,7 +530,7 @@ Linux install.sh ─────────────────────
 ### 13.2 按上下文长度选历史
 
 1. 群聊按真实时间合并所有公共群归档，按 `(scope, native message ID)` 排除当前批次；私聊只读取自己的 exact `private:QQ`，本地入口附加自己的 local 记录，绝不把外来私聊并入公共池。
-2. 读取配置预算、生成不含历史的基线上下文，计入人格/system、当前输入、可见事实/观察/任务等基线及当前暴露的工具schema。保留1/8摘要区域与2048字符结构余量，剩余给最新完整历史后缀。
+2. 读取配置预算、生成不含历史的基线上下文，计入人格/system、当前输入、可见事实/观察/任务等基线及当前暴露的工具schema。扣除固定内容与2048字符结构余量后，可用聊天上下文按60%最新完整原文、40%摘要/归档处理分区；不是按全量永久历史的条数或60%比例删除。
 3. `size` 采用 compact JSON + `ensure_ascii=False` 的Unicode字符数：文本、字段名、引号、转义、来源元数据都计入；不是只统计正文，也不是按行数或消息数。
 4. 从新到旧加入完整记录，遇到不能容纳的记录停止；不会偷偷截断它并冒称全文。被排除的旧记录交摘要链路，原始内容仍可检索。单条过长也不会绕过预算。
 5. 最终重建请求再次检查 system/prompt/schema 字符长度，必要时再缩历史；若当前输入/事实/工具本身已经无法容纳，不暗删当前输入或长期事实，记录 `context_budget_exceeded` 并停止该次模型请求。

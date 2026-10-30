@@ -11,7 +11,7 @@ import json
 import re
 import threading
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from bot_core.http_host import ChatCompletionHost
 from tools import lite_web
@@ -245,6 +245,61 @@ class LiteWebTests(unittest.TestCase):
                 self.assertIsInstance(json.loads(raw)["error"], str)
         self.assertFalse(self.host.calls)
 
+    def test_rejected_posts_discard_without_parsing_or_mutating(self):
+        """Drain framed rejects before response close, never JSON-parse or execute them."""
+        self.server.history[:] = [("kept", "answer")]
+        cases = (("/api/reset", b"not-json", {}, False, 401),
+                 ("/api/chat", b"not-json", {"Authorization": "Basic invalid"}, False, 401),
+                 ("/api/chat", b"not-json", {"Host": "evil.example"}, True, 403),
+                 ("/api/reset", b"not-json", {"Origin": "null"}, True, 403),
+                 ("/unknown", b"not-json", {}, True, 404),
+                 ("/api/chat", b"x" * (lite_web._MAX_BODY + 1), {}, True, 413),
+                 ("/api/chat", b"not-json", {"Content-Type": "text/plain"}, True, 415))
+        original = lite_web._Handler._discard_rejected_body
+        discarded = []
+
+        def observed_discard(handler):
+            """Observe real reads before replying, without changing transport behavior."""
+            reader = handler.rfile
+            with patch.object(reader, "read1", wraps=reader.read1) as read:
+                original(handler)
+                discarded.append(read.call_count)
+
+        with patch.object(lite_web._Handler, "_discard_rejected_body", observed_discard), \
+             patch.object(lite_web.json, "loads", side_effect=AssertionError("rejected JSON parsed")):
+            for path, body, headers, auth, expected in cases:
+                with self.subTest(path=path, expected=expected):
+                    status, _, raw = self.request("POST", path, body, headers, auth=auth)
+                    self.assertEqual(status, expected)
+                    self.assertIn('"error"', raw)
+        self.assertEqual(len(discarded), len(cases))
+        self.assertTrue(all(discarded))
+        self.assertEqual(self.server.history, [("kept", "answer")])
+        self.assertFalse(self.host.calls)
+
+    def test_withheld_rejected_bodies_return_under_short_deadline(self):
+        """Real sockets cannot hold auth or size errors for the normal 30s read timeout."""
+        for auth, length, expected in ((False, 2, 401),
+                                       (True, lite_web._MAX_BODY + 1, 413),
+                                       (True, 999999999, 413)):
+            with self.subTest(auth=auth, length=length):
+                connection = http.client.HTTPConnection(*self.server.server_address, timeout=2)
+                try:
+                    connection.putrequest("POST", "/api/chat")
+                    connection.putheader("Content-Length", str(length))
+                    connection.putheader("Content-Type", "application/json")
+                    if auth:
+                        connection.putheader("Authorization", "Bearer " + self.server.token)
+                    # Keep the write side open but intentionally send no body bytes.
+                    connection.endheaders()
+                    response = connection.getresponse()
+                    self.assertEqual(response.status, expected)
+                    self.assertIn(b'"error"', response.read())
+                finally:
+                    connection.close()
+        self.assertFalse(self.host.calls)
+        self.assertEqual(self.server.history, [])
+
     def test_unicode_bounded_history_and_shared_reset(self):
         """Reuse CLI algorithm, keeping only successful pairs and clearing all tabs."""
         for prompt in ("一", "二", "三"):
@@ -391,6 +446,66 @@ class LiteWebTests(unittest.TestCase):
             self.assertIn(server.url, out.getvalue())
             self.assertNotIn("PRIVATE", out.getvalue())
             self.assertEqual(server.socket.fileno(), -1)
+
+
+class LiteWebRejectedBodyTests(unittest.TestCase):
+    """Prove discard limits independently of platform-dependent TCP reset timing."""
+
+    def handler(self, headers):
+        """Build only the rejection reader with no listener or real credentials."""
+        handler = object.__new__(lite_web._Handler)
+        handler.headers = http.client.parse_headers(io.BytesIO(headers + b"\r\n"))
+        handler.connection = Mock()
+        handler.connection.gettimeout.return_value = 30
+        handler.rfile = Mock()
+        handler.rfile.read1.return_value = b"x"
+        return handler
+
+    def test_ambiguous_malformed_and_huge_lengths_never_read(self):
+        """Attacker framing cannot cause speculative reads or unbounded conversion."""
+        cases = (b"", b"Content-Length: -1\r\n", b"Content-Length: bad\r\n",
+                 b"Content-Length: 2\r\nContent-Length: 2\r\n",
+                 b"Content-Length: 2\r\nTransfer-Encoding: chunked\r\n",
+                 b"Content-Length: 999999999\r\n",
+                 b"Content-Length: " + b"9" * 5000 + b"\r\n",
+                 f"Content-Length: {lite_web._MAX_REJECT_BODY + 1}\r\n".encode())
+        for headers in cases:
+            with self.subTest(length=len(headers)):
+                handler = self.handler(headers)
+                handler._discard_rejected_body()
+                handler.rfile.read1.assert_not_called()
+                handler.connection.settimeout.assert_not_called()
+
+    def test_discard_has_total_deadline_and_restores_socket_timeout(self):
+        """Trickling bytes cannot renew a read deadline beyond the fixed half-second."""
+        handler = self.handler(b"Content-Length: 3\r\n")
+        with patch.object(lite_web.time, "monotonic", side_effect=[10, 10.1, 10.6]):
+            handler._discard_rejected_body()
+        handler.rfile.read1.assert_called_once_with(3)
+        self.assertAlmostEqual(handler.connection.settimeout.call_args_list[0].args[0], 0.4)
+        self.assertEqual(handler.connection.settimeout.call_args_list[-1].args, (30,))
+
+    def test_discard_timeout_still_allows_fixed_error_response(self):
+        """A stalled or closed rejected client does not turn rejection into execution."""
+        handler = self.handler(b"Content-Length: 2\r\n")
+        handler.rfile.read1.side_effect = TimeoutError
+        handler._discard_rejected_body()
+        handler.rfile.read1.assert_called_once_with(2)
+        self.assertEqual(handler.connection.settimeout.call_args_list[-1].args, (30,))
+
+    def test_body_already_read_is_not_discarded_twice(self):
+        """JSON errors after reading cannot wait again for the declared request size."""
+        handler = self.handler(b"Content-Length: 2\r\n")
+        handler.command = "POST"
+        handler._body_started = True
+        handler.server = Mock(nonce="public")
+        handler.wfile = io.BytesIO()
+        handler.send_response = Mock()
+        handler.send_header = Mock()
+        handler.end_headers = Mock()
+        handler._json(400, {"error": lite_web._BAD_REQUEST})
+        handler.rfile.read1.assert_not_called()
+        self.assertTrue(handler.close_connection)
 
 
 class _ProviderHandler(BaseHTTPRequestHandler):

@@ -12,6 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import re
 import secrets
 import threading
+import time
 import webbrowser
 
 # Reuse the portable CLI's sole model path in both package and direct-script modes.
@@ -22,6 +23,9 @@ else:
 
 # Keep incoming bodies and prompts small independently (UTF-8 can use four bytes).
 _MAX_BODY = 128 * 1024
+# A small rejection-only allowance includes just-over-limit uploads, not valid JSON.
+_MAX_REJECT_BODY = 2 * _MAX_BODY
+_REJECT_BODY_TIMEOUT = 0.5  # Total discard deadline, not a timeout renewed by each byte.
 _MAX_PROMPT = 32000
 _BAD_REQUEST = "Invalid request. / 请求格式无效。"
 _MODEL_ERROR = "Reply unavailable. Please try again. / 暂时无法回复，请重试。"
@@ -246,8 +250,47 @@ class _Handler(BaseHTTPRequestHandler):
         """Replace stdlib HTML errors and reflected request text with fixed JSON."""
         self._json(code, {"error": _BAD_REQUEST})
 
+    def _discard_rejected_body(self) -> None:
+        """Avoid Windows resets for small, clearly framed rejected POSTs; never parse.
+
+        Keep this portable runtime independent of setup_wizard, absent from lite ZIPs.
+        Unlike an idle timeout, the absolute deadline also bounds trickling clients.
+        """
+        headers = getattr(self, "headers", None)
+        if headers is None:
+            return
+        lengths = headers.get_all("Content-Length", [])
+        # Ambiguous framing and huge uploads must not choose how much we drain.
+        if (headers.get_all("Transfer-Encoding", []) or len(lengths) != 1
+                or not re.fullmatch(r"[0-9]{1,9}", lengths[0], flags=re.ASCII)):
+            return
+        remaining = int(lengths[0])
+        if not 0 < remaining <= _MAX_REJECT_BODY:
+            return
+        timeout = self.connection.gettimeout()
+        deadline = time.monotonic() + _REJECT_BODY_TIMEOUT
+        try:
+            while remaining:
+                budget = deadline - time.monotonic()
+                if budget <= 0:
+                    break
+                self.connection.settimeout(budget)
+                # read1 performs at most one socket read, so a slow sender cannot
+                # repeatedly renew a buffered read's timeout past our deadline.
+                chunk = self.rfile.read1(min(remaining, 8192))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+        except OSError:
+            # A closed or stalled rejected peer must not suppress its fixed error.
+            pass
+        finally:
+            self.connection.settimeout(timeout)
+
     def _send(self, status: int, body: bytes, content_type: str) -> None:
         """Use explicit lengths and defensive headers; never allow CORS or caching."""
+        if status >= 400 and self.command == "POST" and not getattr(self, "_body_started", False):
+            self._discard_rejected_body()
         self.close_connection = True
         self.send_response(status)
         self.send_header("Content-Type", content_type)
@@ -303,6 +346,8 @@ class _Handler(BaseHTTPRequestHandler):
         if len(types) != 1 or types[0].split(";", 1)[0].strip().lower() != "application/json":
             self._json(415, {"error": "JSON required."})
             return None
+        # Rejections after this read must not wait for an already-consumed body.
+        self._body_started = True
         try:
             raw = self.rfile.read(length)
             if len(raw) != length:

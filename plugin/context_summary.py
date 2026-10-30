@@ -54,7 +54,13 @@ async def prepare(plugin, scope, rows, max_history_chars, max_summary_chars, *, 
     omitted = list(rows[:coverage["omitted"]])
     path = Path(root) / "memory" / "memory.json"
     state = {"source": "context_compaction", "trust": "untrusted_data", "status": "not_needed",
-             "generated": False, "archive_preserved": True, "summaries": []}
+             "generated": False, "archive_preserved": True, "summaries": [],
+             "archived_source_records": len(omitted),
+             "archived_source_chars": sum(size(row) for row in omitted),
+             "summarized_source_records": 0, "summarized_source_chars": 0,
+             "archive_only_records": len(omitted),
+             "archive_only_chars": sum(size(row) for row in omitted),
+             "archive_deleted_records": 0}
     try:
         memory = _load(path)
     except (OSError, ValueError, TypeError):
@@ -185,7 +191,28 @@ async def prepare(plugin, scope, rows, max_history_chars, max_summary_chars, *, 
     # The summary region also obeys a length budget; it cannot grow indefinitely
     # as more public groups appear. Omitted summaries remain on disk.
     chosen, summary_coverage = suffix(summaries, max_summary_chars)
-    state.update(summaries=chosen, coverage=summary_coverage)
+    # Report exact whole-source coverage, not a blanket “nothing lost” claim.
+    # Partially summarized enormous records stay archive-only until complete;
+    # this conservatively avoids counting an unseen suffix as compressed.
+    summarized_rows = 0
+    summarized_chars = 0
+    for candidate, source in by_scope.items():
+        saved = memory.data.get("scopes", {}).get(candidate, {})
+        cursor = saved.get("context_compaction", {})
+        covered = cursor.get("covered_rows", 0)
+        if type(covered) is not int or not 0 <= covered <= len(source):
+            continue
+        if cursor.get("covered_sha256") != _digest(source[:covered]):
+            continue
+        summarized_rows += covered
+        summarized_chars += sum(size(row) for row in source[:covered])
+    state.update(summaries=chosen, coverage=summary_coverage,
+        archived_source_records=len(omitted),
+        archived_source_chars=sum(size(row) for row in omitted),
+        summarized_source_records=summarized_rows, summarized_source_chars=summarized_chars,
+        archive_only_records=len(omitted) - summarized_rows,
+        archive_only_chars=sum(size(row) for row in omitted) - summarized_chars,
+        archive_deleted_records=0)
     if chosen and state["status"] == "not_needed":
         state["status"] = "loaded"
     return selected, coverage, state
