@@ -1,19 +1,45 @@
 """Disable or restore one reviewed built-in command using the native hot command API."""
 import argparse
 import json
+import os
 from pathlib import Path
 import urllib.parse
 import urllib.request
+
+
+def dashboard_base_url():
+    """Keep credentials on a configured numeric loopback endpoint, never an arbitrary host."""
+    value = os.environ.get('HIGAN_DASHBOARD_URL', 'http://127.0.0.1:6185')
+    try:
+        parsed = urllib.parse.urlsplit(value)
+        port = parsed.port
+    except ValueError:
+        raise ValueError('invalid HIGAN_DASHBOARD_URL') from None
+    if (parsed.scheme != 'http' or parsed.hostname not in ('127.0.0.1', '::1')
+            or parsed.username or parsed.password or parsed.query or parsed.fragment
+            or parsed.path not in ('', '/') or port is None or not 1 <= port <= 65535):
+        raise ValueError('HIGAN_DASHBOARD_URL must be a numeric loopback HTTP origin with a port')
+    return value.rstrip('/')
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Never redirect a privileged API key away from its explicit local origin."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        """Reject redirects instead of forwarding authentication headers."""
+        return None
 
 
 def request(method,path,credential,payload=None):
     """Use a scoped legitimate key on localhost; never log authentication headers."""
     secret=json.loads(credential.read_text(encoding='utf-8'))
     if secret.get('scopes')!=['tool']:raise RuntimeError('tool_scoped_key_required')
-    req=urllib.request.Request('http://127.0.0.1:6185/api/v1'+path,
+    req=urllib.request.Request(dashboard_base_url()+'/api/v1'+path,
           data=json.dumps(payload).encode() if payload is not None else None,
           headers={'Content-Type':'application/json','X-API-Key':secret['api_key']},method=method)
-    with urllib.request.urlopen(req,timeout=30) as response:result=json.load(response)
+    # Local privileged calls bypass system proxies and refuse all redirects.
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
+    with opener.open(req,timeout=30) as response:result=json.load(response)
     if result.get('status') not in ('ok','success'):raise RuntimeError('command_api_failed')
     return result.get('data')
 

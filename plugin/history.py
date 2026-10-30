@@ -19,6 +19,11 @@ import re
 import time
 from threading import RLock
 
+if __package__:
+    from .runtime_paths import data_root
+else:
+    from plugin.runtime_paths import data_root
+
 MAX_LINES = 5000
 MAX_SCOPES = 30
 
@@ -26,8 +31,9 @@ MAX_SCOPES = 30
 class Recorder:
     """按 scope 存聊天记录（JSONL，一行一条）。"""
 
-    def __init__(self, root: str = "/root/higan/history") -> None:
-        """初始化（目录不存在就建）。"""
+    def __init__(self, root: str | None = None) -> None:
+        """Initialize the explicit archive or configured data root, never another account's path."""
+        root = str(data_root() / "history") if root is None else root
         self.root = root
         # One detached tail/count per file; the lock also protects future threaded readers.
         self._snapshot_lock = RLock()

@@ -15,7 +15,8 @@ import pytest
 @pytest.fixture
 def tool(monkeypatch):
     """Import only the standard-library administrative modules, never AstrBot."""
-    tools = Path(__file__).parents[1] / "tools"
+    # Archive-local imports keep private administrative dependencies out of the active tools directory.
+    tools = Path(__file__).parents[1] / "trash" / "20261030-personal-operations" / "tools"
     monkeypatch.syspath_prepend(str(tools))
     spec = importlib.util.spec_from_file_location("runtime_routing_config", tools / "runtime_routing_config.py")
     module = importlib.util.module_from_spec(spec)

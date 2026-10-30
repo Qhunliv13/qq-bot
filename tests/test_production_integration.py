@@ -160,6 +160,8 @@ def _load_production(root):
         "At": At, "Reply": Reply, "Image": Image, "MessageChain": MessageChain,
         "ToolContextArchive": ToolContextArchive,
         "configured_owners": __import__("plugin.runtime_settings", fromlist=["configured_owners"]).configured_owners,
+        "configured_member_watch_groups": __import__("plugin.runtime_settings", fromlist=["configured_member_watch_groups"]).configured_member_watch_groups,
+        "data_root": __import__("plugin.runtime_paths", fromlist=["data_root"]).data_root,
     }
     exec(compile(ast.fix_missing_locations(module), str(path), "exec"), namespace)
     namespace["HIGAN_ROOT"] = str(root)
@@ -174,6 +176,10 @@ def production(tmp_path, monkeypatch):
         raise AssertionError("real network forbidden in production integration tests")
 
     monkeypatch.setattr(urllib.request, "urlopen", deny_network)
+    # Synthetic test authority must not inherit private files or bundled real accounts.
+    monkeypatch.delenv('HIGAN_SETTINGS_FILE', raising=False)
+    monkeypatch.delenv('HIGAN_MEMBER_WATCH_GROUPS', raising=False)
+    monkeypatch.setenv('HIGAN_OWNER_QQS', '["123456789"]')
     klass = _load_production(tmp_path)
 
     def make_instance():

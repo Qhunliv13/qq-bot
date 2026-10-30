@@ -8,6 +8,7 @@
 | 入口 | 用途 |
 |---|---|
 | [快速开始](QUICKSTART.md) | 新安装、外置配置、本地调用与可选外接 QQ |
+| [配置与仓库边界](CONFIGURATION.md) | 无个人默认身份、数据目录与服务地址配置、旧运维归档 |
 | [Windows](WINDOWS.md) / [Linux](LINUX.md) | 各平台安装与运行要求 |
 | [部署验证记录](QUICK_DEPLOY_VERIFICATION.md) | 已验证项目、实际失败与未验收边界 |
 | [本地完整核心](LOCAL_FULL_CORE.md) | 现有完整 bot 的本地入口、权限与结果语义 |

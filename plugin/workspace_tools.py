@@ -10,9 +10,13 @@ permissions are NOT a security sandbox. No delete/move/shell tool is provided.
 import base64
 import json
 
-# State belongs to the bot VM, not the production application or the DSH host.
-# Resolve at call time so offline tests can monkeypatch the root safely.
-_ROOT = "/root/higan"
+if __package__:
+    from .runtime_paths import data_root
+else:
+    from plugin.runtime_paths import data_root
+
+# State belongs to the bot VM; tests can override this without touching live state.
+_ROOT = str(data_root())
 _NAMES = ("workspace_read", "workspace_write", "workspace_edit", "workspace_glob",
           "workspace_grep", "workspace_cwd", "workspace_present", "workspace_read_image")
 
@@ -468,7 +472,7 @@ def schema():
          {"pattern": {"type": "string"}, "path": path, "offset": offset, "limit": page}, ["pattern"]),
         ("workspace_grep", "Search UTF-8 files with Python stdlib re.search (NOT ripgrep syntax). include uses Python fnmatch glob; stable path/line ordering, offset counts matching lines, max 100/page. Binary/non-UTF8/>8MiB files explicitly skipped; long match lines previewed.",
          {"pattern": {"type": "string"}, "path": path, "include": {"type": "string"}, "offset": offset, "limit": page}, ["pattern"]),
-        ("workspace_cwd", "Get/set persistent bot VM cwd in /root/higan/workspace.json. Setting requires existing directory. First get creates only the default /root/higan/workspace. Not host cwd or a sandbox.",
+        ("workspace_cwd", "Get/set persistent bot VM cwd under the configured bot data root. Setting requires an existing directory. First get creates only its default workspace directory. Not host cwd or a sandbox.",
          {"path": path}, []),
         ("workspace_present", "Return 1-4 existing regular VM file descriptors for references only. Does NOT upload, send QQ messages, or access the host.",
          {"paths": {"type": "array", "items": path, "minItems": 1, "maxItems": 4}}, ["paths"]),

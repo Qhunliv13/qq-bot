@@ -23,7 +23,7 @@ from plugin.reply_selection import decode_reply
 production = _production_fixture
 
 
-OWNER_ID = "2084526117"  # Existing production owner allowlist, not a display-name inference.
+OWNER_ID = "123456789"  # Synthetic owner selected explicitly by the shared test fixture.
 MEMBER_ID = "61001"  # Synthetic non-owner publisher, independent of the active host user.
 
 

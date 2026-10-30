@@ -72,7 +72,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
 | [`tools/README.md`](tools/README.md) | 当前检查、探针、策略与发布工具索引 |
 | [`trash/`](trash/README.md) | 历史报告、本机记录及旧补丁脚本归档；不作为当前使用入口 |
 
-`tools/*_probe.py` 等探针的联网、读取和发送范围并不相同，执行前先读脚本；不把所有探针统一视为只读。`tools/validate_release.py` 检查发布文件，`tools/release_apply.py` 提供校验、备份、应用与回滚入口，使用前仍需核对目标、权限及影响。
+`tools/*_probe.py` 等探针的联网、读取和发送范围并不相同，执行前先读脚本；不把所有探针统一视为只读。`tools/validate_release.py` 检查发布文件；绑定原作者服务器的旧发布工具已移入[个人运维归档](trash/20261030-personal-operations/README.md)，不作为通用部署入口。新安装不带个人所有者/群默认值，模型、地址和数据目录由[外部配置](docs/CONFIGURATION.md)决定。
 
 ## 本地检查与配置
 

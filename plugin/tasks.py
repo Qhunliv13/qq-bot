@@ -3,7 +3,7 @@
 """后台任务的持久存储、排程、认领和结果记录。
 
 存储与执行约束：
-  · 单一存储：/root/higan/tasks/tasks.json（持久 在虚拟机里）
+  · 单一存储：配置的数据根目录下 tasks/tasks.json（持久化于执行环境）
   · 任务字段：id / title / goal / scope（群号或 private:QQ）/ interval_s / repeat /
               status（active|paused|done|cancelled）/ next_run_at / nudges / origin
   · `due()` 只列候选；执行前必须 `claim(id)`，执行后 `mark(id, result, ...)`。
@@ -73,7 +73,13 @@ def _locked(function):
                 return function(*args, **kwargs)
     return wrapper
 
-ROOT = "/root/higan/tasks"
+# AstrBot imports a package; standalone offline probes import this file directly.
+if __package__:
+    from .runtime_paths import data_root
+else:
+    from plugin.runtime_paths import data_root
+
+ROOT = str(data_root() / "tasks")
 STORE = os.path.join(ROOT, "tasks.json")
 MIN_INTERVAL = 30          # 防手抖：最短 30 秒
 MAX_TASKS = 50             # 防暴涨

@@ -23,13 +23,12 @@ python tools/validate_release.py
 
 ## 发布与配置
 
+原私有部署的 `release_apply.py`、`release_access.py`、`sid_native_disable.py` 和 `runtime_routing_config.py` 作为完整依赖组保存在 [2026-10-30 历史归档](../trash/20261030-personal-operations/README.md)。它们包含原部署的路径、端口、服务名或版本绑定，不是当前安装、发布或配置入口；归档并不授权执行。对应离线回归测试仍保留。
+
 | 工具 | 用途与边界 |
 |---|---|
-| [release_apply.py](release_apply.py) | 指定插件的基线／清单核验、备份、文件分发和优雅重载；仅适用于源码指定的部署目标 |
-| [release_access.py](release_access.py) | 创建或撤销受限发布权限；需合法管理授权，不是公开服务接口 |
 | [set_group_policy.py](set_group_policy.py) | 管理群策略；会写配置 |
 | [command_toggle.py](command_toggle.py) | 管理命令状态；会改变运行配置 |
-| [sid_native_disable.py](sid_native_disable.py) | 管理指定原生命令配置；执行前核对目标与备份 |
 | [task_deadline_review.py](task_deadline_review.py) | 审核绝对执行时间变更；默认预览，应用前校验任务快照 |
 | [task_cadence_review.py](task_cadence_review.py) | 审核任务周期变更；默认预览，应用前校验任务快照 |
 
@@ -47,7 +46,7 @@ python tools/validate_release.py
 | 指令来源与条件 | [instruction_provenance_probe.py](instruction_provenance_probe.py)：真实模型、小型合成上下文验证历史条件与当前触发分离；工具副作用禁用，不代替真实大上下文行为验证 |
 | 上下文与附件 | [attachment_read_probe.py](attachment_read_probe.py)、[forward_read_probe.py](forward_read_probe.py)、[nontext_read_probe.py](nontext_read_probe.py)、[file_source_probe.py](file_source_probe.py) |
 | 能力与主动观察 | [capability_probe.py](capability_probe.py)、[dsh_capability_probe.py](dsh_capability_probe.py)、[autonomy_read_probe.py](autonomy_read_probe.py) |
-| 缓存与历史 | [shared_history_cache_probe.py](shared_history_cache_probe.py) 默认离线对照精确滚窗和 30 条块对齐：保留最新 240 条及完整来源，比较实际序列化前缀；显式 `--live` 才发四次隔离模型请求，不执行工具或发送 QQ。[prompt_structure_cache_probe.py](prompt_structure_cache_probe.py) 默认离线比较同内容布局，显式 `--live` 才发四次隔离模型请求。真实命中须读提供方 token，合成场景不代表生产整体收益。[cache_layout_probe.py](cache_layout_probe.py)、[cache_prefix_probe.py](cache_prefix_probe.py)、[history_cache_probe.py](history_cache_probe.py) |
+| 缓存与历史 | [shared_history_cache_probe.py](shared_history_cache_probe.py) 默认离线对照精确滚窗和 30 条块对齐：保留最新 240 条及完整来源，比较实际序列化前缀；显式 `--live` 才发四次隔离模型请求，不执行工具或发送 QQ。[prompt_structure_cache_probe.py](prompt_structure_cache_probe.py) 默认离线比较同内容布局，显式 `--live` 才发四次隔离模型请求。真实命中须读提供方 token，合成场景不代表生产整体收益。[cache_layout_probe.py](cache_layout_probe.py) 必须显式传入 `--data-root`，它读取该目录的真实历史／观察并向已配置模型发送四次诊断请求（无 QQ 发送或工具执行）。[cache_prefix_probe.py](cache_prefix_probe.py)、[history_cache_probe.py](history_cache_probe.py) |
 | 图片发现 | [image_search_probe.py](image_search_probe.py) |
 
 密钥和运行数据库不随源码分发。输出记录应保存在受保护的独立目录，不提交聊天内容、原生请求 flag、二维码或令牌。

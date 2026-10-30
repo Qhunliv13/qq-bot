@@ -10,7 +10,8 @@ import pytest
 @pytest.fixture
 def release():
     """Load the sole reviewed deploy implementation without running its command-line entry."""
-    path=Path(__file__).resolve().parents[1]/'tools/release_apply.py'
+    # Preserve historical recovery coverage without exposing this private deployer as active tooling.
+    path=Path(__file__).resolve().parents[1]/'trash/20261030-personal-operations/tools/release_apply.py'
     spec=importlib.util.spec_from_file_location('tested_release_apply',path)
     module=importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

@@ -16,11 +16,16 @@ import types
 from production_probe import load_plugin
 
 
+# Isolated fixture identity, never a bundled administrator or an actual QQ destination.
+SIM_OWNER = "90003"
+
+
 class SimEvent:
     """Synthetic event; no actual account identity or platform sender exists."""
 
-    def __init__(self, text, scope, mentioned=True):
+    def __init__(self, text, scope, mentioned=True, sender="90002"):
         self.text, self.scope, self.mentioned = text, scope, mentioned
+        self.sender = sender
         self.unified_msg_origin = "isolated-simulation"
         self.message_obj = types.SimpleNamespace(message_id="sim-" + str(time.time_ns()), message=[])
 
@@ -29,8 +34,8 @@ class SimEvent:
         return "90001"
 
     def get_sender_id(self):
-        """Synthetic user is never the real owner."""
-        return "90002"
+        """Return only the selected synthetic actor, never an operator account."""
+        return self.sender
 
     def get_sender_name(self):
         """Stable sender name for contextual follow-up tests."""
@@ -125,6 +130,9 @@ class Fixtures:
 async def audit(plugin, output, all_tools, role="user"):
     """Run actual model decision paths and persist bounded, secret-filtered observations."""
     module = load_plugin(plugin)
+    # This separately imported probe module has no running service; isolate its ACL
+    # from real administrators and bind the owner role to the synthetic event below.
+    module.OWNER_QQS = {SIM_OWNER}
     from release_probe_plugin.tool_context import ToolContextArchive, redact
     from release_probe_plugin.group_policy import GroupPolicyStore
     from release_probe_plugin import tasks
@@ -148,7 +156,7 @@ async def audit(plugin, output, all_tools, role="user"):
         bot._turn_context, bot.manifest, bot._last_reply_at, bot._reply_times = {}, [], {}, {}
         bot._tool_evidence_store = ToolContextArchive(root / "observations")
         bot._audit_root = str(root)
-        bot._who = lambda event: ("模拟用户（主人，QQ %s，测试身份）" % next(iter(module.OWNER_QQS))
+        bot._who = lambda event: ("模拟用户（主人，QQ %s，测试身份）" % SIM_OWNER
                                   if role == "owner" else "模拟用户（普通群友，合成身份90002）")
         bot._quoted_text = lambda event: ""
         bot._image_refs = lambda event: []
@@ -171,7 +179,7 @@ async def audit(plugin, output, all_tools, role="user"):
 
     async def turn(bot, fixture, sent, label, text, scope, mentioned=True):
         """Use real _handle_one for both deterministic gating and model silence decisions."""
-        event = SimEvent(text, scope, mentioned)
+        event = SimEvent(text, scope, mentioned, sender=SIM_OWNER if role == "owner" else "90002")
         history = list(bot._recent[scope])
         bot._turn_context[scope] = {"history": tuple(history[-20:]), "clock": bot._clock_context()}
         bot._recent[scope].append("模拟用户：" + text)

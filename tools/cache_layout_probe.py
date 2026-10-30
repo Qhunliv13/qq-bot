@@ -27,8 +27,8 @@ def common(first,second):
     return next((i for i,(a,b) in enumerate(zip(first,second)) if a!=b),min(len(first),len(second)))
 
 
-async def probe(directory,output):
-    """Read one evidence-heavy existing scope privately and compare changed-current requests."""
+async def probe(directory,output,data_root):
+    """Read explicitly selected private state; never infer a personal server data root."""
     module=load_plugin(directory)
     from release_probe_plugin.conversation_context import build_context,system_prompt
     from release_probe_plugin.history_window import history_snapshot
@@ -37,13 +37,15 @@ async def probe(directory,output):
     bot=module.HiganPlugin.__new__(module.HiganPlugin)
     base,key,model=bot._her_llm_config()
     if not base or not key:raise RuntimeError('provider_not_configured')
-    groups=json.loads(Path('/root/higan/autonomy.json').read_text())['origins']
-    archive=ToolContextArchive('/root/higan/tool_observations')
+    # Private history reads require an operator-selected directory; no root/home fallback.
+    data_root=Path(data_root).resolve(strict=True)
+    groups=json.loads((data_root/'autonomy.json').read_text(encoding='utf-8'))['origins']
+    archive=ToolContextArchive(data_root/'tool_observations')
     snapshots=[(scope,archive.recent(scope)) for scope in groups]
     if not snapshots:raise RuntimeError('no_existing_scopes')
     scope,observations=max(snapshots,key=lambda pair:len(json.dumps(pair[1],ensure_ascii=False)))
     history=[]
-    path=Path('/root/higan/history')/(scope+'.jsonl')
+    path=(data_root/'history')/(scope+'.jsonl')
     if path.is_file():
         for line in path.read_text(encoding='utf-8').splitlines():
             try:record=json.loads(line)
@@ -87,11 +89,13 @@ async def probe(directory,output):
 
 
 def main():
-    """Require explicit candidate source and private numeric result file."""
+    """Require explicit candidate, private history root and numeric result file."""
     parser=argparse.ArgumentParser()
     parser.add_argument('--plugin',type=Path,required=True)
+    parser.add_argument('--data-root',type=Path,required=True,
+                        help='Private bot state to read; sends selected history to the configured model')
     parser.add_argument('--output',type=Path,required=True)
-    args=parser.parse_args();asyncio.run(probe(args.plugin,args.output))
+    args=parser.parse_args();asyncio.run(probe(args.plugin,args.output,args.data_root))
 
 
 if __name__=='__main__':main()

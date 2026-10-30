@@ -8,8 +8,14 @@ by the management protocol; a job's explicitly printed output is returned.
 
 import uuid
 
+# Keep generated job storage on the same explicit root as tasks and history.
+if __package__:
+    from .runtime_paths import data_root
+else:
+    from plugin.runtime_paths import data_root
+
 # Private override permits isolated local tests without touching the VM root.
-_ROOT = "/root/higan/jobs"
+_ROOT = str(data_root() / "jobs")
 # One shared runtime keeps ownership checks identical for status and cancellation.
 _COMMON = r'''
 import json

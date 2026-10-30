@@ -34,6 +34,8 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
+# Synthetic offline owner, never a bundled runtime administrator or real account.
+AUDIT_OWNER = "123456789"
 if str(ROOT / "tests") not in sys.path:
     sys.path.insert(0, str(ROOT / "tests"))
 import test_production_integration as integration  # noqa: E402
@@ -339,6 +341,9 @@ class AuditHarness:
         self.request_sequence = 0
         self.worker_calls = []
         self.worker_gate = asyncio.Event()
+        # Isolate trusted test identity from the operator's private settings and ACLs.
+        self.patch.delenv("HIGAN_SETTINGS_FILE", raising=False)
+        self.patch.setenv("HIGAN_OWNER_QQS", json.dumps([AUDIT_OWNER]))
         self.make_plugin = integration.production.__wrapped__(self.root, monkeypatch)
         self.plugin = self.make_plugin()
         self.bind_worker(self.plugin)
@@ -670,9 +675,9 @@ class AuditHarness:
             # Event.send is the fixture's recording transport; _send stays native.
             self.plugin._turn_context["42"] = {"messages": [message_record(event, event.text)]}
         # Identity is supplied only by the trusted fixture event, never tool arguments.
-        # This source owner ID remains independent of the production OWNER_QQS set.
+        # This synthetic owner matches only the temporary fixture's explicit configuration.
         if name in {"qq_set_signature", "qq_publish_post", "qq_set_profile", "autonomy_schedule", "skill_save"} | REQUEST_NAMES:
-            event.get_sender_id = lambda: "2084526117"
+            event.get_sender_id = lambda: AUDIT_OWNER
         event.action_results = {
             "get_group_root_files": {"files": [{"file_name": "contract-nonce.txt", "file_id": "file-contract", "file_size": 10}], "folders": []},
             "get_group_file_url": {"url": "https://audit.invalid/file"},
@@ -1038,7 +1043,7 @@ async def _audit(root, monkeypatch, batch_size):
             args = await harness.resolve_args(plugin, name, args, scope, event)
             calls.append(integration._call(name, args, "batch-%s-%s" % (offset, name)))
         # The mixed batch contains owner-only mutations; use a genuine event identity.
-        event.get_sender_id = lambda: "2084526117"
+        event.get_sender_id = lambda: AUDIT_OWNER
         event.group = scope
         # Native entry normally freezes this event's current-batch records before
         # the provider loop; exercise reply attribution with that same local input.

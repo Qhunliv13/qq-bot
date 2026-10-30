@@ -5,9 +5,11 @@ import logging
 import os
 from pathlib import Path
 
+import pytest
 
-def test_model_selection_uses_source_id_instead_of_first_source(tmp_path, monkeypatch):
-    """A fresh embedded installation must use its operator-selected endpoint/model."""
+
+def _provider_adapter():
+    """Compile the real selected-source reader without importing AstrBot or credentials."""
     source_path = Path(__file__).resolve().parents[1] / 'plugin/main.py'
     tree = ast.parse(source_path.read_text(encoding='utf-8'))
     cls = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == 'HiganPlugin')
@@ -15,7 +17,12 @@ def test_model_selection_uses_source_id_instead_of_first_source(tmp_path, monkey
     namespace = {'__package__': 'plugin', 'json': json, 'os': os, 'Path': Path,
                  'CHAT_TIMEOUT': 60, 'logger': logging.getLogger(__name__)}
     exec(compile(ast.Module(body=[method], type_ignores=[]), str(source_path), 'exec'), namespace)
-    plugin = type('SourceAdapter', (), {'_her_llm_config': namespace['_her_llm_config']})()
+    return type('SourceAdapter', (), {'_her_llm_config': namespace['_her_llm_config']})()
+
+
+def test_model_selection_uses_source_id_instead_of_first_source(tmp_path, monkeypatch):
+    """A fresh embedded installation must use its operator-selected endpoint/model."""
+    plugin = _provider_adapter()
     (tmp_path / 'data').mkdir()
     config = {'provider_sources': [{'id': 'unselected', 'api_base': 'https://wrong.invalid', 'key': ['not-used']},
                                   {'id': 'selected-source', 'api_base': 'https://chosen.invalid/v1', 'key': ['fixture']}],
@@ -24,3 +31,31 @@ def test_model_selection_uses_source_id_instead_of_first_source(tmp_path, monkey
     (tmp_path / 'data/cmd_config.json').write_text(json.dumps(config), encoding='utf-8')
     monkeypatch.setenv('ASTRBOT_ROOT', str(tmp_path))
     assert plugin._her_llm_config() == ('https://chosen.invalid/v1', 'fixture', 'operator-model')
+
+
+@pytest.mark.parametrize('config', [
+    {},
+    {'provider': [{'id': 'first'}, {'id': 'second'}]},
+    {'provider': [{'id': 'only'}], 'provider_settings': {'default_provider_id': 'missing'}},
+    {'provider': [{'id': 'only', 'provider_source_id': 'missing'}],
+     'provider_sources': [{'id': 'other', 'api_base': 'https://wrong.invalid', 'key': ['wrong']}]},
+    {'provider': [{'id': 'only'}],
+     'provider_sources': [{'id': 'one'}, {'id': 'two'}]},
+])
+def test_missing_or_ambiguous_selection_fails_closed(tmp_path, monkeypatch, config):
+    """No bundled brand/provider identity or first-source guess rescues invalid selection."""
+    (tmp_path / 'data').mkdir()
+    (tmp_path / 'data/cmd_config.json').write_text(json.dumps(config), encoding='utf-8')
+    monkeypatch.setenv('ASTRBOT_ROOT', str(tmp_path))
+    assert _provider_adapter()._her_llm_config() == ('', '', '')
+
+
+def test_unique_private_legacy_source_is_preserved_without_fixed_brand(tmp_path, monkeypatch):
+    """A sole operator-defined provider/source is unambiguous existing private configuration."""
+    (tmp_path / 'data').mkdir()
+    config = {'provider': [{'id': 'private-selection', 'model': 'private-model'}],
+              'provider_sources': [{'api_base': 'https://private.invalid/v1', 'key': ['fixture']}]}
+    (tmp_path / 'data/cmd_config.json').write_text(json.dumps(config), encoding='utf-8')
+    monkeypatch.delenv('ASTRBOT_ROOT', raising=False)
+    monkeypatch.chdir(tmp_path)
+    assert _provider_adapter()._her_llm_config() == ('https://private.invalid/v1', 'fixture', 'private-model')

@@ -31,16 +31,11 @@ def test_actual_provider_loader_sets_timeout_without_changing_credentials(tmp_pa
     import os
     ns={"__name__":"plugin.timeout_test", "__package__":"plugin", "json":json,
         "os":os,"Path":Path,"CHAT_TIMEOUT":45,"logger":logging.getLogger(__name__)}
-    config=tmp_path/"cmd_config.json"
+    (tmp_path / "data").mkdir()
+    config=tmp_path/"data"/"cmd_config.json"
     config.write_text(json.dumps({"provider_sources":[{"api_base":"https://offline.invalid/v1", "key":["offline-key"],"timeout":300}],
-                                  "provider":[{"id":"qapi-relay","model":"offline-model"}]}),encoding="utf-8")
-    actual_open=open
-
-    def config_open(path, *args, **kwargs):
-        """Redirect exactly the production configuration read into a private temporary fixture."""
-        return actual_open(config if str(path)=="/root/astrbot-src/data/cmd_config.json" else path,*args,**kwargs)
-
-    ns["open"]=config_open
+                                  "provider":[{"id":"operator-provider","model":"offline-model"}]}),encoding="utf-8")
+    monkeypatch.setenv("ASTRBOT_ROOT", str(tmp_path))
     exec(compile(ast.Module(body=[method],type_ignores=[]),str(source),"exec"),ns)
     bot=type("Bot",(),{"_her_llm_config":ns["_her_llm_config"]})()
     assert bot._her_llm_config()==("https://offline.invalid/v1","offline-key","offline-model")

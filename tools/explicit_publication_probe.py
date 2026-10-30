@@ -139,7 +139,7 @@ async def foreground_case(module, root, explicit, *, tool_media=False):
 
         async def simulated_vm(name, arguments):
             """Return a plugin-delivery request without any VM or platform IO."""
-            assert name == "vm_send_shot" and arguments == {"path": str(image_path)}
+            assert name == "vm_send_shot" and arguments == {"path": str(image_path), "kind": "group", "group_id": "42"}
             return {"ok": True, "deliver": "plugin", "path": str(image_path), "send_as": "image"}
 
         bot._vm_tool = simulated_vm

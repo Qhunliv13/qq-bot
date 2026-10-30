@@ -44,6 +44,8 @@ import time
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from .tool_context import ToolContextArchive
+from .runtime_paths import data_root
+from .runtime_settings import configured_member_watch_groups
 
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, MessageEventResult, filter
@@ -53,7 +55,7 @@ from astrbot.core.message.message_event_result import MessageChain
 
 PLUGIN_ID = "astrbot_plugin_higan"
 # Single runtime data root shared by status and durable tool observations.
-HIGAN_ROOT = os.environ.get("HIGAN_ROOT", "/root/higan")
+HIGAN_ROOT = str(data_root())
 STICKER_DIR = Path("data/stickers")
 MANIFEST = STICKER_DIR / "manifest.json"
 #: AstrBot 收到图片后会落到这个目录（本地路径形态）
@@ -64,7 +66,8 @@ TARGET_GROUPS: set[str] = set()
 #: 成员变动监听的群名单，与回复范围分开配置。
 #: TARGET_GROUPS 控制回复范围；这里仅控制名单观察。
 
-MEMBER_WATCH_GROUPS: set[str] = {"146045691"}
+# Empty means no member polling; operators opt in through private settings/env.
+MEMBER_WATCH_GROUPS: set[str] = configured_member_watch_groups()
 #: 普通回复之间的最小间隔（秒），0 表示无间隔。
 MIN_REPLY_INTERVAL = 0
 #: 唤醒回复之间的最小间隔（秒），与普通回复独立。
@@ -147,9 +150,9 @@ SILENT_MARKERS = ("SILENT", "silent", "（不回复）", "(不回复)", "不回�
 #: 提示词同时提供 QQ 与身份，避免仅凭昵称推断。
 
 from .runtime_settings import configured_owners
-OWNER_QQS = configured_owners({"2084526117", "3974648486"})
+OWNER_QQS = configured_owners()
 
-# 系统提示词单独放在 prompts.py（文案与逻辑分离，改文案不必碰逻辑）
+# 现行系统上下文从 conversation_context 组装；私人旧提示词仅保留在归档。
 from .conversation_context import system_prompt
 import random
 
@@ -224,7 +227,7 @@ class HiganPlugin(Star):
         self._ready.set()
         logger.info("[higan] 已启动群成员变动监听（每 %ds 一次，群=%s）"
                     % (MEMBER_WATCH_INTERVAL,
-                       ",".join(sorted(MEMBER_WATCH_GROUPS)) or "全部"))
+                       ",".join(sorted(MEMBER_WATCH_GROUPS)) or "未配置"))
 
     def _start_background(self, coroutine):
         """登记后台任务的实例归属，完成后移出跟踪集合。"""
@@ -374,7 +377,10 @@ class HiganPlugin(Star):
         if supplied is not None:
             return supplied
         import sqlite3
-        for db in ("data/data_v4.db", "/root/astrbot-src/data/data_v4.db"):
+        # Resolve the existing framework data from its selected root, not a
+        # different user's checked-out tree. The current working tree stays first.
+        for db in dict.fromkeys((Path("data/data_v4.db"),
+                                Path(os.environ.get("ASTRBOT_ROOT", Path.cwd())) / "data/data_v4.db")):
             if not os.path.exists(db):
                 continue
             try:
@@ -522,7 +528,6 @@ class HiganPlugin(Star):
             return "", ""
         return str(path), desc
 
-    @staticmethod
     async def _file_url_of_message(self, msg_id: str) -> str:
         """按消息号找到那条消息里的文件/语音/图片地址（用于 vm_fetch ）。
 
@@ -533,14 +538,11 @@ class HiganPlugin(Star):
             str: 可下载的 http 地址或本地路径；找不到返回空串。
         """
         try:
-            import urllib.request as _u
-            import json as _j
-            _payload = _j.dumps({"action": "get_msg",
-                                 "params": {"message_id": int(str(msg_id).lstrip("#"))}}).encode()
-            _req = _u.Request("http://127.0.0.1:3000/get_msg", data=_payload,
-                              headers={"Content-Type": "application/json"})
-            _resp = _u.urlopen(_req, timeout=10).read().decode("utf-8", "replace")
-            _data = (_j.loads(_resp) or {}).get("data") or {}
+            # Reuse the checked configured transport, including its auth token;
+            # a second implicit OneBot port could target a different account.
+            _resp = await asyncio.to_thread(
+                self._onebot_http, "get_msg", {"message_id": int(str(msg_id).lstrip("#"))})
+            _data = (_resp or {}).get("data") or {}
             for _seg in (_data.get("message") or []):
                 _t = _seg.get("type")
                 _d = _seg.get("data") or {}
@@ -563,7 +565,7 @@ class HiganPlugin(Star):
             dict: {"pct": float, "words": list, "hours": list}（缺省为全开）。
         """
         try:
-            with open("/root/higan/groups.json", encoding="utf-8") as handle:
+            with open(str(Path(HIGAN_ROOT) / "groups.json"), encoding="utf-8") as handle:
                 conf = json.load(handle)
         except Exception:                                  # noqa: BLE001
             return {"pct": 100.0, "words": [], "hours": []}
@@ -603,7 +605,7 @@ class HiganPlugin(Star):
             str: "person" / "word" / ""（未命中）。
         """
         try:
-            with open("/root/higan/groups.json", encoding="utf-8") as handle:
+            with open(str(Path(HIGAN_ROOT) / "groups.json"), encoding="utf-8") as handle:
                 conf = json.load(handle)
         except Exception:                                  # noqa: BLE001
             return ""
@@ -739,7 +741,7 @@ class HiganPlugin(Star):
         try:
             import json as _j
             from pathlib import Path as _P
-            _conf = _j.loads(_P("/root/higan/groups.json").read_text(encoding="utf-8"))
+            _conf = _j.loads(_P(str(Path(HIGAN_ROOT) / "groups.json")).read_text(encoding="utf-8"))
             _gid = str(event.get_group_id() or "")
             _wl = [_ for _v in ((_conf.get("wake_persons") or {}).get(_gid) or [])
                    for _ in [str(_v)]]
@@ -752,7 +754,7 @@ class HiganPlugin(Star):
                     _m = _ilu.module_from_spec(_sp)
                     _sp.loader.exec_module(_m)
                     _cnt = _m.WakePersonFacts(
-                        "/root/higan/memory/wake_persons.json").load().count(qq)
+                        str(Path(HIGAN_ROOT) / "memory" / "wake_persons.json")).load().count(qq)
                 except Exception:  # noqa: BLE001
                     _cnt = 0
                 return "【唤醒人 QQ %s · 我记了他 %d 条】%s" % (qq, _cnt, base)
@@ -1656,9 +1658,9 @@ class HiganPlugin(Star):
         import urllib.request
 
         base, key, model = self._her_llm_config()
-        if not base or not key:
+        if not base or not key or not model:
             return ""
-        payload = {"model": model or "deepseek-v4.1-flash-1017",
+        payload = {"model": model,
                    "messages": messages}
         if tools:
             payload["tools"] = _dedupe_tool_schemas(self._tool_schemas())
@@ -1753,21 +1755,23 @@ class HiganPlugin(Star):
     def _her_llm_config(self) -> tuple:
         """从 cmd_config 读她自己的上游（api_base / key / model）。"""
         try:
-            cfg_path = (Path(os.environ.get("ASTRBOT_ROOT", "/root/astrbot-src")) / "data/cmd_config.json").as_posix()
+            cfg_path = (Path(os.environ.get("ASTRBOT_ROOT", Path.cwd())) / "data/cmd_config.json").as_posix()
             with open(cfg_path, encoding="utf-8-sig") as fh:
                 cfg = json.load(fh)
             providers = cfg.get("provider") or []
             selected_id = (cfg.get("provider_settings") or {}).get("default_provider_id")
-            # New installs follow AstrBot's selected model/source binding. Preserve
-            # the existing deployment's selection when no explicit default exists.
+            # Honor the explicit provider binding. A sole legacy provider/source
+            # is unambiguous private configuration, not a branded public default.
             selected = next((item for item in providers if item.get("id") == selected_id), None) if selected_id else None
-            if selected_id and selected is None:
-                raise ValueError("selected_model_missing")
+            if selected is None and not selected_id and len(providers) == 1:
+                selected = providers[0]
             if selected is None:
-                selected = next((item for item in providers if item.get("id") == "qapi-relay"), {})
-            sources = cfg.get("provider_sources") or [{}]
+                raise ValueError("selected_model_missing")
+            sources = cfg.get("provider_sources") or []
             source_id = selected.get("provider_source_id")
-            source = next((item for item in sources if item.get("id") == source_id), None) if source_id else sources[0]
+            source = next((item for item in sources if item.get("id") == source_id), None) if source_id else None
+            if source is None and not source_id and len(sources) == 1:
+                source = sources[0]
             if source is None:
                 raise ValueError("selected_model_source_missing")
             from .model_transport import request_timeout
@@ -2006,10 +2010,10 @@ class HiganPlugin(Star):
         from pathlib import Path as _Path
 
         path = _Path(__file__).resolve().parent / "history.py"
-        spec = _ilu.spec_from_file_location("history", str(path))
+        spec = _ilu.spec_from_file_location(__package__ + ".history", str(path))
         mod = _ilu.module_from_spec(spec)
         spec.loader.exec_module(mod)
-        self._hist_obj = mod.Recorder("/root/higan/history")
+        self._hist_obj = mod.Recorder(str(Path(HIGAN_ROOT) / "history"))
         return self._hist_obj
 
     async def _forward_to_text(self, event) -> str:
@@ -2145,7 +2149,7 @@ class HiganPlugin(Star):
         import urllib.request
 
         base, key, model = self._her_llm_config()
-        if not base or not key:
+        if not base or not key or not model:
             return ""
         # Native and no-tools paths share identical image/source assembly. Keep
         # string content when no image converts, preserving the existing wire shape.
@@ -2159,7 +2163,7 @@ class HiganPlugin(Star):
                                source_records=origins)
         content = messages[0]["content"]
         payload = {
-            "model": model or "deepseek-v4.1-flash-1017",
+            "model": model,
             "messages": [{"role": "system", "content": system},
                          {"role": "user", "content": content}],
         }
@@ -2197,7 +2201,7 @@ class HiganPlugin(Star):
         import urllib.request
 
         base, key, model = self._her_llm_config()
-        if not base or not key:
+        if not base or not key or not model:
             return "", []
 
         # Native continuations already own frozen images; never reconvert/rewrite their prefix.
@@ -2214,7 +2218,7 @@ class HiganPlugin(Star):
         else:
             request_messages = list(messages)
         payload = {
-            "model": model or "deepseek-v4.1-flash-1017",
+            "model": model,
             "messages": request_messages,
         }
         if allow_tools:
@@ -2300,7 +2304,7 @@ class HiganPlugin(Star):
         from pathlib import Path as _Path
 
         path = _Path(__file__).resolve().parent / "tasks.py"
-        spec = _ilu.spec_from_file_location("tasks", str(path))
+        spec = _ilu.spec_from_file_location(__package__ + ".tasks", str(path))
         mod = _ilu.module_from_spec(spec)
         spec.loader.exec_module(mod)
         self._tasks_module = mod
@@ -2739,7 +2743,7 @@ class HiganPlugin(Star):
         if name in ("__wake_v1_disabled__",):
             #  她自己的唤醒词/唤醒人（命中就当作被叫到，绕过回复率）
             try:
-                _p = "/root/higan/groups.json"
+                _p = str(Path(HIGAN_ROOT) / "groups.json")
                 with open(_p, encoding="utf-8") as _h:
                     _c = json.load(_h)
                 _w = [str(x) for x in (_c.get("wake_words") or []) if str(x).strip()]
@@ -2772,7 +2776,7 @@ class HiganPlugin(Star):
         if name == "wake_person_info":
             # 查看唤醒人的配置、事实和定点时间。
             try:
-                with open("/root/higan/groups.json", encoding="utf-8") as _h:
+                with open(str(Path(HIGAN_ROOT) / "groups.json"), encoding="utf-8") as _h:
                     _c = json.load(_h)
                 _qq = str(args.get("qq") or "").strip()
                 if not _qq:
@@ -2790,7 +2794,7 @@ class HiganPlugin(Star):
                     _wpm = _ilu6.module_from_spec(_sp6)
                     _sp6.loader.exec_module(_wpm)
                     _st6 = _wpm.WakePersonFacts(
-                        "/root/higan/memory/wake_persons.json").load()
+                        str(Path(HIGAN_ROOT) / "memory" / "wake_persons.json")).load()
                     _facts = _st6.list(_qq)
                 except Exception:  # noqa: BLE001
                     _facts = []
@@ -2807,7 +2811,7 @@ class HiganPlugin(Star):
         if name in ("wake_person_set", "wake_person_show"):
             #  单唤醒人配置：pct / words / hours
             try:
-                _p = "/root/higan/groups.json"
+                _p = str(Path(HIGAN_ROOT) / "groups.json")
                 with open(_p, encoding="utf-8") as _h:
                     _c = json.load(_h)
                 _tbl = _c.setdefault("wake_person_conf", {})
@@ -2832,7 +2836,7 @@ class HiganPlugin(Star):
         if name in ("wake_list", "wake_add", "wake_remove", "wake_search"):
             # 按群管理唤醒人和唤醒词，支持删除与搜索。
             try:
-                _p = "/root/higan/groups.json"
+                _p = str(Path(HIGAN_ROOT) / "groups.json")
                 with open(_p, encoding="utf-8") as _h:
                     _c = json.load(_h)
                 _wp = _c.get("wake_persons") or {}
@@ -2915,7 +2919,7 @@ class HiganPlugin(Star):
                 _fid5 = str(args.get("id") or "").strip()
                 if not _qq5 or not _fid5:
                     return {"ok": False, "error": "要同时给 id 和 qq"}
-                _gm = _wpmod5.Memory("/root/higan/memory/memory.json").load()
+                _gm = _wpmod5.Memory(str(Path(HIGAN_ROOT) / "memory" / "memory.json")).load()
                 _hit = [f for f in _gm.list_facts() if str(f.get("id")) == _fid5]
                 if not _hit:
                     return {"ok": False, "error": "通用事实里没有 %s" % _fid5}
@@ -2925,7 +2929,7 @@ class HiganPlugin(Star):
                     return {"ok": False, "error": "destination_does_not_support_images"}
                 _text = str(_hit[0].get("text") or "")
                 _st5 = _wpmod5.WakePersonFacts(
-                    "/root/higan/memory/wake_persons.json").load()
+                    str(Path(HIGAN_ROOT) / "memory" / "wake_persons.json")).load()
                 _new_id = _st5.add(_qq5, _text)
                 if not _new_id:
                     return {"ok": False, "error": "写入唤醒人记录失败"}
@@ -2945,7 +2949,7 @@ class HiganPlugin(Star):
                     __package__ + ".memory_wp", str(_P3(BASE_DIR, "memory.py")))
                 _wpmod = _ilu3.module_from_spec(_sp3)
                 _sp3.loader.exec_module(_wpmod)
-                _st = _wpmod.WakePersonFacts("/root/higan/memory/wake_persons.json").load()
+                _st = _wpmod.WakePersonFacts(str(Path(HIGAN_ROOT) / "memory" / "wake_persons.json")).load()
                 _qq = str(args.get("qq") or "").strip()
                 if name == "wp_fact_add":
                     _fid = _st.add(_qq, str(args.get("text") or ""))
@@ -3153,7 +3157,23 @@ class HiganPlugin(Star):
                 return await asyncio.to_thread(self._onebot_http, action, parameters)
             return await recall(scope, count=args.get("count", 1), call_action=native_recall)
         if name == "send_shot":
-            return await self._vm_tool("vm_send_shot", args) or await self._vm_tool("send_shot", args)
+            # Bind an omitted target to this authenticated conversation only;
+            # never send a screenshot to a developer's historical group.
+            delivery = dict(args)
+            kind = str(delivery.get("kind") or ("private" if scope.startswith("private:") else "group"))
+            if kind not in ("group", "private"):
+                return {"ok": False, "error": "invalid_delivery_kind"}
+            key = "user_id" if kind == "private" else "group_id"
+            if not delivery.get(key) and scope.startswith("private:") == (kind == "private"):
+                delivery[key] = scope.split(":", 1)[-1]
+            target = delivery.get(key)
+            if isinstance(target, bool) or not str(target or "").isascii() or not str(target or "").isdigit() or int(target) <= 0:
+                return {"ok": False, "error": "explicit_destination_required"}
+            destination = ("private:" if kind == "private" else "") + str(target)
+            if not self._policy_allows(event, destination):
+                return {"ok": False, "error": "destination_policy_denied"}
+            delivery["kind"] = kind
+            return await self._vm_tool("vm_send_shot", delivery)
         if name == "qq_send":
             # Resolve omitted destinations from the real current scope, never a
             # hardcoded group. Cross-scope targets still undergo persisted policy.
@@ -3391,6 +3411,16 @@ class HiganPlugin(Star):
 
         from .browser_eval import build_eval_wrapper, decode_eval_response
         args = dict(args)
+        if name in ("vm_recall", "vm_send_shot"):
+            # Raw bridge callers have no authenticated scope to infer. Require an
+            # explicit destination before any transport or eager payload coercion.
+            kind = str(args.get("kind") or "group")
+            key = "group_id" if name == "vm_recall" or kind == "group" else "user_id"
+            target = args.get(key)
+            if (kind not in ("group", "private") or isinstance(target, bool)
+                    or not str(target or "").isascii() or not str(target or "").isdigit()
+                    or int(target) <= 0):
+                return {"ok": False, "error": "explicit_destination_required"}
         if name in ("vm_eval", "vm_frame_eval"):
             args["js"] = build_eval_wrapper(str(args.get("js") or ""))
         mapping = {
@@ -3408,7 +3438,7 @@ class HiganPlugin(Star):
             "vm_browse": ("POST", "/vm/browse", {"url": str(args.get("url") or "")}),
             "vm_exec": ("POST", "/vm/exec", {"code": str(args.get("code") or ""),
                                              "lang": str(args.get("lang") or "python")}),
-            "vm_recall": ("POST", "/vm/qq/recall", {"group_id": str(args.get("group_id") or "146045691"),
+            "vm_recall": ("POST", "/vm/qq/recall", {"group_id": str(args.get("group_id") or ""),
                                                     "count": int(args.get("count") or 1)}),
             "tab_action": ("POST", "/vm/tab", {"action": str(args.get("action") or "close"),
                                                "n": int(args.get("n") or 0)}),
@@ -3422,7 +3452,7 @@ class HiganPlugin(Star):
             "vm_send_shot": ("POST", "/vm/qq/send_shot", {"path": str(args.get("path") or ""),
                               "kind": str(args.get("kind") or "group"),
                               "user_id": int(args.get("user_id") or 0),
-                              "group_id": int(args.get("group_id") or 146045691)}),
+                              "group_id": int(args.get("group_id") or 0)}),
             "mail_recent": ("POST", "/vm/mail/recent", {"limit": int(args.get("limit") or 5)}),
             "mail_web_login": ("POST", "/vm/mail/web_login", {}),
             "mail_web_read": ("POST", "/vm/mail/web_read", {"limit": int(args.get("limit") or 2500)}),
@@ -3441,8 +3471,9 @@ class HiganPlugin(Star):
         def _call() -> dict:
             """执行一次虚拟机请求，保留结构化错误，不自动重试可能有副作用的操作。"""
             method, path, payload = mapping[name]
-            url = "http://127.0.0.1:18003" + path
             try:
+                from .runtime_settings import configured_vm_bridge
+                url = configured_vm_bridge() + path
                 if method == "GET":
                     with urllib.request.urlopen(url, timeout=35) as resp:
                         return json.loads(resp.read().decode("utf-8", "replace"))
@@ -4287,7 +4318,7 @@ class HiganPlugin(Star):
         """将收到的图片归档到机器人虚拟机的 images/inbox，供工具回看。"""
         import shutil as _shutil
         from pathlib import Path as _Path
-        out_dir = _Path("/root/higan/images/inbox")
+        out_dir = _Path(HIGAN_ROOT) / "images" / "inbox"
         try:
             out_dir.mkdir(parents=True, exist_ok=True)
         except Exception as exc:  # noqa: BLE001
@@ -4708,6 +4739,10 @@ class HiganPlugin(Star):
         while True:
             try:
                 await asyncio.sleep(MEMBER_WATCH_INTERVAL)
+                # No configured groups means no polling, not authorization to
+                # inspect every group belonging to an existing private account.
+                if not MEMBER_WATCH_GROUPS:
+                    continue
                 groups = await self._onebot("get_group_list", {})
                 for g in (groups.get("data") or []):
                     gid = str(g.get("group_id") or "")
