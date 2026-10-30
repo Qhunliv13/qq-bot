@@ -317,6 +317,19 @@
     "full_first_install_accepted": false,
     "default_large_download_stall_resolved": false
   },
+  "bounded_large_default_download_followup": {
+    "job": "pwsh-a62a17fb8f154d56",
+    "package": "faiss-cpu==1.15.1",
+    "expected_wheel_bytes": 16292975,
+    "result": "owned_child_wall_timeout",
+    "wall_seconds": 90,
+    "pip_transport_patched": false,
+    "directly_created_download_child_ended_and_collected": true,
+    "packages_installed": false,
+    "global_packages_modified": false,
+    "full_first_install_accepted": false,
+    "default_large_download_stall_resolved": false
+  },
   "actual_host": {
     "job": "pwsh-11cf492cf5664a67",
     "dashboard_html": true,
