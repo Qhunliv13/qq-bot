@@ -157,7 +157,7 @@ def test_fixed_mode_default_and_sources(monkeypatch):
 
 def test_actual_baseline_evidence_preserves_limits():
     """Pin measured facts without interpreting nonzero exits as a diagnosed cause."""
-    artifact = Path(__file__).resolve().parents[1] / "docs" / "qq-bus-admission-evidence.json"
+    artifact = Path(__file__).resolve().parents[1] / "docs" / "evidence" / "qq-bus-admission-evidence.json"
     report = json.loads(artifact.read_text(encoding="utf-8"))
     sample = report["bus_admission"]
     assert report["status"] == "observed" and sample["completed"] is True

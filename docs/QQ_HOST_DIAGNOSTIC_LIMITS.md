@@ -1,7 +1,7 @@
 # Native-free host diagnostic limits and next discriminating observation
 
-The frozen [dispatch](qq-host-dispatch-evidence.json) and
-[window-role](qq-host-dispatch-roles-evidence.json) observations do not establish a
+The frozen [dispatch](evidence/qq-host-dispatch-evidence.json) and
+[window-role](evidence/qq-host-dispatch-roles-evidence.json) observations do not establish a
 root cause, successful application readiness, or authentication. The next work
 must discriminate an actual hypothesis rather than repeat the same observation.
 

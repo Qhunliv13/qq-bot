@@ -1,6 +1,6 @@
 # Private bus admission: hypothesis, not a diagnosed root cause
 
-The host [capture evidence](qq-host-dispatch-capture-evidence.json) reports a missing
+The host [capture evidence](evidence/qq-host-dispatch-capture-evidence.json) reports a missing
 **system** bus socket and an unknown-scope DBus error. No private-session-path
 failure matched. That cannot establish whether the private session bus admitted
 the client, or whether any bus issue caused Electron's missing ready event.
@@ -61,7 +61,7 @@ system services or relax the runtime's security/resource limits to force success
 ## Subsequent baseline observation
 
 The [no-QQ control](QQ_BUS_ADMISSION_CONTROL.md) and its
-[immutable result](qq-bus-admission-evidence.json) now establish:
+[immutable result](evidence/qq-bus-admission-evidence.json) now establish:
 
 - A standalone raw EXTERNAL authentication connection returned the expected OK.
 - Separate public-client invocations for explicit Hello and automatic-Hello/GetId

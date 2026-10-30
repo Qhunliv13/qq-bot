@@ -29,7 +29,7 @@ def main(argv=None):
     parser.add_argument("--qq-root", required=True)
     parser.add_argument("--execute", action="store_true")
     args = parser.parse_args(argv)
-    artifact = Path(__file__).resolve().parents[1] / "docs" / "qq-bus-identity-evidence.json"
+    artifact = Path(__file__).resolve().parents[1] / "docs" / "evidence" / "qq-bus-identity-evidence.json"
     if args.execute:
         # Fail before execution if an artifact or symlink already occupies this name.
         with artifact.open("x", encoding="utf-8") as stream:

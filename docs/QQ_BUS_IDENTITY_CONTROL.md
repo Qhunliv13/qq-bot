@@ -18,8 +18,8 @@ no same-connection progression is claimed.
 | capabilities / NNP | zero / true | zero / true |
 | QQ invoked / runtime executed | false / false | false / false |
 
-Evidence: [baseline capture](<qq-bus-capture-evidence.json>) and
-[identity-only artifact](<qq-bus-identity-evidence.json>). Both retain unchanged
+Evidence: [baseline capture](<evidence/qq-bus-capture-evidence.json>) and
+[identity-only artifact](<evidence/qq-bus-identity-evidence.json>). Both retain unchanged
 before/after hashes for the pristine software and all offline network gates.
 The previous `no_reply_timeout` was a diagnostic category, not a measured one-second
 watchdog expiration. The 10ms observations remain consistent with fast rejection
@@ -66,8 +66,8 @@ SHA-256 of exact working-tree files at the approved run:
 
 | File | SHA-256 |
 |---|---|
-| [Baseline artifact](<qq-bus-capture-evidence.json>) | `0c7b8a23b3a7009553fdf14bab4fa5916a94b230022c28a5fd106e16bd855368` |
-| [Identity artifact](<qq-bus-identity-evidence.json>) | `46f4921ad413655f80e062a3a9630bc18a2b4d93aa0c8e31ccd9006f718bbdda` |
+| [Baseline artifact](<evidence/qq-bus-capture-evidence.json>) | `0c7b8a23b3a7009553fdf14bab4fa5916a94b230022c28a5fd106e16bd855368` |
+| [Identity artifact](<evidence/qq-bus-identity-evidence.json>) | `46f4921ad413655f80e062a3a9630bc18a2b4d93aa0c8e31ccd9006f718bbdda` |
 | [Detailed bus client](<../tools/qq_bus_admission_control.py>) | `2703501c713bcba9836bb0d074083ad4fda6557fbfd57350ceab66bf44d75f17` |
 | [Capture wrapper](<../tools/qq_bus_capture_control.py>) | `c4dbd6a9aedc5544f0d975c8d7696801ecf390907242d56bc55be4a56442620b` |
 

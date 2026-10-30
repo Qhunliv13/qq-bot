@@ -82,9 +82,18 @@ def prepare(
         # Never adopt unrelated persisted data or override operator changes.
         if data_root.exists() and any(data_root.iterdir()):
             raise ValueError("AstrBot data is not fresh; explicit migration is required")
+        # Never follow a foreign symlink while fixing the fresh bind-mount root.
+        if higan_root.is_symlink():
+            raise ValueError("Higan state root must not be a symlink")
         data_root.mkdir(parents=True, exist_ok=True)
         data_root.chmod(0o700)
         higan_root.mkdir(parents=True, exist_ok=True)
+        # Bootstrap may run as a normal WSL user, so its bind mount retains that
+        # UID inside the root container. LocalRuntime requires this exact root
+        # directory to belong to root; chmod alone cannot satisfy that check.
+        # Change only the fresh mount root, never descendants or existing installs.
+        if sys.platform.startswith("linux") and os.geteuid() == 0:
+            os.chown(higan_root, 0, 0)
         higan_root.chmod(0o700)
         config = copy.deepcopy(default_config)
         model = settings["model"]

@@ -5,6 +5,9 @@ param(
     [ValidateSet('init', 'doctor', 'up', 'status', 'logs', 'health', 'chat')]
     [string] $Command = 'up',
     [string] $Distro,
+    # The double-click wizard uses root for Docker without changing WSL's default user.
+    [string] $User,
+    [switch] $OpenDashboard,
     [string] $ModelBase,
     [string] $Model,
     [string] $ApiKeyEnv,
@@ -53,6 +56,13 @@ try {
         if ($Distro -notmatch '^[A-Za-z0-9][A-Za-z0-9_.-]*$') { throw 'Invalid Distro name.' }
         $distroArgs = @('--distribution', $Distro)
     }
+
+    if ($PSBoundParameters.ContainsKey('User')) {
+        # Native argv only; no sudo, shell expansion or persistent default-user change.
+        if ($User -notmatch '^[a-z_][a-z0-9_-]{0,31}$') { throw 'Invalid Linux user.' }
+        $distroArgs += @('--user', $User)
+    }
+    if ($OpenDashboard -and $Command -ne 'up') { throw 'OpenDashboard is only supported with up.' }
 
     $repo = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).ProviderPath
     # wslpath executes without bash -c; it translates the exact checkout containing this launcher.
@@ -117,7 +127,16 @@ try {
     if ($hasPipelineInput) { $pipelineInput | & $wsl @launchArgs }
     else { & $wsl @launchArgs }
     if ($null -eq $LASTEXITCODE) { throw 'WSL did not return an exit code.' }
-    exit $LASTEXITCODE
+    $launchExitCode = $LASTEXITCODE
+    if ($OpenDashboard -and $launchExitCode -eq 0) {
+        # Browser launch follows successful Compose health only; never imply model/QQ readiness.
+        $port = if ($env:BOT_WEB_PORT) { $env:BOT_WEB_PORT } else { '6185' }
+        if ($port -cmatch '^[0-9]{1,5}$' -and [int] $port -ge 1 -and [int] $port -le 65535) {
+            try { Start-Process ('http://127.0.0.1:' + [int] $port) | Out-Null }
+            catch { [Console]::Error.WriteLine('Runtime is ready, but the browser could not open. Use the dashboard URL printed above.') }
+        }
+    }
+    exit $launchExitCode
 } catch {
     # Do not include arbitrary exception details, native command lines or secret values.
     [Console]::Error.WriteLine('Windows launcher: ' + $failureHint)

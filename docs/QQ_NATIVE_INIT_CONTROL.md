@@ -84,7 +84,7 @@ by actual child exit, reported separately as `native_cleanup_by_process_exit=tru
 and `process_retired=true`. No guessed removal occurred and no successful native
 listener removal is claimed. No connect/QR/authentication/session operation was attempted.
 
-`docs/qq-native-init-evidence.json` is the actual bounded runner report. All five
+`docs/evidence/qq-native-init-evidence.json` is the actual bounded runner report. All five
 pristine hashes remained identical. `native_initialize_verified=true` is limited
 to the explicit process-scope initialization milestone. `native_login_verified`,
 `session_initialized`, `safe_to_login`, `independent_backend_ready`,

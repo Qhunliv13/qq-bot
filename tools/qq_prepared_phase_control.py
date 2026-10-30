@@ -19,7 +19,7 @@ WAITS = {"phase_baseline_1s": "runtime", "phase_loaded_1s": "after_binding_load"
 STAGES = tuple(part for stage in prepared.STAGES for part in
                (stage, *tuple(wait for wait, origin in WAITS.items() if origin == stage)))
 PROGRESS_PATH = "/tmp/qq-prepared-phase-progress.json"
-ARTIFACT = Path(__file__).resolve().parents[1] / "docs" / "qq-prepared-phase-evidence.json"
+ARTIFACT = Path(__file__).resolve().parents[1] / "docs" / "evidence" / "qq-prepared-phase-evidence.json"
 
 
 def invalid():

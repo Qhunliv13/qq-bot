@@ -112,7 +112,7 @@ def test_fatal_projection_has_no_payload():
 
 def test_actual_evidence_when_present():
     """Validate saved facts without performing a second native run."""
-    path = Path(__file__).parents[1] / "docs" / "qq-native-ready-evidence.json"
+    path = Path(__file__).parents[1] / "docs" / "evidence" / "qq-native-ready-evidence.json"
     if not path.exists():
         pytest.skip("one authorized actual diagnostic has not yet been recorded")
     evidence = json.loads(path.read_text(encoding="utf-8"))
@@ -134,7 +134,7 @@ def test_actual_evidence_when_present():
     assert evidence["native_login_verified"] is False
     source = shared.fixed_sources("connect_ready_offline")[shared.MAIN]
     assert hashlib.sha256(source.read_bytes()).hexdigest() == evidence["authored_source_sha256"]
-    for relative in ("tools/qq_native_ready_control.py", "tools/qq_native_ready_entry.js", "tests/test_qq_native_ready_control.py", "docs/QQ_NATIVE_READY_CONTROL.md", "docs/qq-native-ready-evidence.json"):
-        raw = (path.parents[1] / relative).read_bytes()
+    for relative in ("tools/qq_native_ready_control.py", "tools/qq_native_ready_entry.js", "tests/test_qq_native_ready_control.py", "docs/QQ_NATIVE_READY_CONTROL.md", "docs/evidence/qq-native-ready-evidence.json"):
+        raw = (Path(__file__).resolve().parents[1] / relative).read_bytes()
         assert not raw.startswith(b"\xef\xbb\xbf")
         raw.decode("utf-8")

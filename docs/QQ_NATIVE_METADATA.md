@@ -160,8 +160,8 @@ fixed sources; native initialization returning does **not** prove server-side
 acceptance or compatibility of those values. Do not silently change/coerce either
 value, construct a missing QUA or claim the Tencent manifest authenticates the
 consumer table. The pure resolver intentionally requires its owner to select and
-review the supplied version entry. See `qq-pristine-package-evidence.json` and
-`qq-native-init-evidence.json` for artifact and measured-control provenance.
+review the supplied version entry. See `evidence/qq-pristine-package-evidence.json` and
+`evidence/qq-native-init-evidence.json` for artifact and measured-control provenance.
 
 ## Verification
 

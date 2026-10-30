@@ -8,7 +8,7 @@ Accepted symbols match ASCII `[A-Za-z_][A-Za-z0-9_]{0,95}`. Before symbol matchi
 
 Task symbol counts retain the first eight distinct observed symbols under `symbol:` keys; keys are sorted after sampling. Additional unmatched symbol observations increase overflow_count, not an unbounded collection. Main wait retains a single projected symbol/category. New-mode coarse thread state and wait-category distributions are separate fixed-key counts (`thread_summary`), not paired/per-thread records; this bounds the complete worst-case report under the existing helper cap. All prior modes keep their existing `threads` list.
 
-All-numeric wchan observations mean visibility is opaque: numeric formatting does **not** establish the actual wait cause. A public symbol is a sampled kernel location, not proof of deadlock or root cause. Main and worker observations must be distinguished. The one actual report is reserved using exclusive creation at `docs/qq-host-waits-evidence.json`; a second run cannot overwrite it. Execute only after parent review GO on the nominated pristine WSL2 root.
+All-numeric wchan observations mean visibility is opaque: numeric formatting does **not** establish the actual wait cause. A public symbol is a sampled kernel location, not proof of deadlock or root cause. Main and worker observations must be distinguished. The one actual report is reserved using exclusive creation at `docs/evidence/qq-host-waits-evidence.json`; a second run cannot overwrite it. Execute only after parent review GO on the nominated pristine WSL2 root.
 
 ## Single approved actual result
 

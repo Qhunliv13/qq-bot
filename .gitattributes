@@ -4,3 +4,5 @@
 /vendor/astrbot/** -text
 # The Linux entry must remain executable shell text after Windows checkouts.
 /install.sh text eol=lf
+/tools/*.sh text eol=lf
+/install.cmd text eol=crlf

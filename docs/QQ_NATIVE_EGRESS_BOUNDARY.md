@@ -188,13 +188,13 @@ literals on loopback. A second check requires exact addresses and local routes,
 with no gateway or other interface, before accepting or connecting any TCP socket.
 The addresses are local test fixtures, not QQ endpoints or public destinations.
 
-The first [observation](qq-egress-kernel-evidence.json) stopped at `initial_routes`
+The first [observation](evidence/qq-egress-kernel-evidence.json) stopped at `initial_routes`
 before configuration or TCP: this WSL kernel represents an empty IPv4 route table
 as zero bytes, rather than a header. Read-only inspection established that format.
 The narrow correction accepts exactly empty text; whitespace/malformed nonempty
 text and usable routes still fail. The failed artifact remains unchanged.
 
-The separately reserved [second observation](qq-egress-kernel-v2-evidence.json)
+The separately reserved [second observation](evidence/qq-egress-kernel-v2-evidence.json)
 passed with exit 0 and stderr length 0: two real IPv4/IPv6 exchanges, six owned
 exchange sockets closed, one refused connection closed without fallback, two
 preallocation policy rejections and zero Python resolver-helper calls. Socket
@@ -212,7 +212,7 @@ observations; the explicit kernel fixture is not automatically launched by pytes
 ## Authorized WSL package installation
 
 The user explicitly approved test dependency installation, not QQ network launch
-or production replacement. [Installation evidence](qq-lab-network-packages-evidence.json)
+or production replacement. [Installation evidence](evidence/qq-lab-network-packages-evidence.json)
 records the five installed packages and downloaded archive SHA256 values:
 slirp4netns 1.2.1-1build2, nftables/libnftables1 1.0.9-1ubuntu0.1,
 libslirp0 4.7.0-1ubuntu3.1, and libnftnl11 1.2.6-2build1. The simulation and actual
@@ -238,8 +238,8 @@ drop rules. It does not expose arbitrary rule input, modify host rules, or start
 slirp/QQ. [Mocked unit tests](../tests/test_egress_nft_posix_check.py) check ordering,
 fixed commands and strict counter identity, and do not run nft automatically.
 
-The [initial run](qq-egress-nft-kernel-evidence.json) passed the TCP baseline but
-failed at an unclassified negative probe. A [diagnostic-only revision](qq-egress-nft-kernel-v2-evidence.json)
+The [initial run](evidence/qq-egress-nft-kernel-evidence.json) passed the TCP baseline but
+failed at an unclassified negative probe. A [diagnostic-only revision](evidence/qq-egress-nft-kernel-v2-evidence.json)
 identified UDP IPv4 send returning errno 1 (EPERM). Neither artifact was rewritten.
 Linux local OUTPUT drop can fail the send syscall rather than report successful
 send followed by receive timeout. The final test added successful UDP delivery
@@ -247,12 +247,12 @@ baselines for both families, permits only that observed EPERM after rules, still
 requires receive timeout, and requires all four exact drop counters to be positive.
 Other send errors, delivered packets or missing counters remain failures.
 
-The [third run](qq-egress-nft-kernel-v3-evidence.json) passed, exit 0/stderr 0:
+The [third run](evidence/qq-egress-nft-kernel-v3-evidence.json) passed, exit 0/stderr 0:
 IPv4/IPv6 TCP and UDP baselines succeeded; two TCP connections timed out and their
 allocations closed; both UDP sends returned EPERM with no received datagram; each
 of the four rules counted exactly one packet. Read-only parent ruleset hashes
-matched before/after every run ([first](qq-egress-nft-host-comparison.json),
-[second](qq-egress-nft-host-v2-comparison.json), [third](qq-egress-nft-host-v3-comparison.json)).
+matched before/after every run ([first](evidence/qq-egress-nft-host-comparison.json),
+[second](evidence/qq-egress-nft-host-v2-comparison.json), [third](evidence/qq-egress-nft-host-v3-comparison.json)).
 This comparison covers the tests, not a retroactive pre-installation ruleset hash.
 
 This proves the installed WSL kernel can enforce the tested all-drop rules in an
@@ -282,11 +282,11 @@ A single UDP attempt is then denied with EPERM and increments the IPv4 UDP count
 No packet can reach an external network: the slirp process itself is also inside
 the offline outer namespace. This does not test internet forwarding or upstream DNS.
 
-[Actual evidence](qq-slirp-offline-evidence.json): exit 0, bridge started/ready,
+[Actual evidence](evidence/qq-slirp-offline-evidence.json): exit 0, bridge started/ready,
 DROP verified before and after attach, IPv4 UDP counter 1 with the other three
 counters 0, and both slirp/helper cleanly retired. The exit pipe EOF terminates
 slirp; each owned child is waited/reaped. A forced kill would not count as clean
-retirement. The [parent ruleset hashes](qq-slirp-host-comparison.json) matched before
+retirement. The [parent ruleset hashes](evidence/qq-slirp-host-comparison.json) matched before
 and after. The test neither starts QQ nor supplies account data.
 
 This establishes real bridge lifecycle and deny-all containment, not selective
@@ -322,12 +322,12 @@ rules are not automatically installed by any transport or model tool.
 existing fresh namespace setup and binds real IPv4/IPv6 UDP receivers to its local
 test addresses. It first proves UDP delivery without rules, then compiles exact
 allowed endpoints and applies them only inside that offline namespace. In the
-[actual observation](qq-egress-selective-evidence.json), both allowed UDP endpoints
+[actual observation](evidence/qq-egress-selective-evidence.json), both allowed UDP endpoints
 received their token, two wrong-port UDP targets and a private loopback target
 received none, and a wrong-port TCP connection was denied and closed. The two UDP
 accept rules each counted one packet; TCP accepts counted zero; final drop counted
 four. Forged private and explicitly host-blocked candidate plans were rejected
-before apply. Exit was 0 and stderr length 0. [Host ruleset hashes](qq-egress-selective-host-comparison.json)
+before apply. Exit was 0 and stderr length 0. [Host ruleset hashes](evidence/qq-egress-selective-host-comparison.json)
 matched before and after.
 
 This is real selective UDP delivery and TCP denial evidence, not a positive TCP

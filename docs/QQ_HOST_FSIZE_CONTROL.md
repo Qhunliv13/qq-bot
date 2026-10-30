@@ -37,7 +37,7 @@ A false diagnostic token is not evidence that an OS operation succeeded.
 The private reader, base64 envelope, strict parser, and outer128KiB helper report
 limit remain unchanged. Public evidence has hashes/lengths/categories, never raw
 application bytes. Generic CLI requires an external private path and reserves
-public evidence exclusively at `docs/qq-host-fsize-evidence.json`.
+public evidence exclusively at `docs/evidence/qq-host-fsize-evidence.json`.
 
 The reviewed external wrapper writes Linux `/tmp/qq-host-fsize-private-20261030.json`,
 verifies owner/mode0600, then exports at most300KiB to the external Windows

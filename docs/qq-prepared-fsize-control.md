@@ -47,7 +47,7 @@ No production, account, repository commit or full-suite execution by the child.
 
 ## One approved actual observation (2026-10-30)
 
-[Public evidence](qq-prepared-fsize-evidence.json): status `observed`, exit 0,
+[Public evidence](evidence/qq-prepared-fsize-evidence.json): status `observed`, exit 0,
 `application_exited` in 8.33s, no watchdog. Prepare completed at 35ms, initialization
 at 43ms, connect returned at 44ms, existing ticks at 1045/5046/8045ms, and logical
 disposal completed at 8045ms. Native callback counts: connecting 6, disconnected 5,

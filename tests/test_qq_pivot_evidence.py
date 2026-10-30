@@ -5,7 +5,7 @@ from pathlib import Path
 
 def test_detached_root_control_success_does_not_imply_qq_success():
     """Control availability, GUI failure and cutover permission remain separate facts."""
-    path = Path(__file__).resolve().parents[1] / 'docs/qq-pivot-root-evidence.json'
+    path = Path(__file__).resolve().parents[1] / 'docs/evidence/qq-pivot-root-evidence.json'
     evidence = json.loads(path.read_text(encoding='utf-8'))
     control = evidence['trusted_control']
     assert control['control_exit_code'] == 0

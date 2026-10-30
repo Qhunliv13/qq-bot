@@ -41,7 +41,7 @@ Executed once through WSL Ubuntu-TSC as the outer root supervisor against
 python3 tools/qq_private_window_roles.py --qq-root /tmp/qq-native-lab-20261027-pristine/opt/QQ --execute
 ```
 
-Recorded evidence: `qq-private-window-roles-evidence.json`.
+Recorded evidence: `evidence/qq-private-window-roles-evidence.json`.
 
 - One 30.03-second experiment; 30 identity-verified monotonic samples, no retries.
 - First sample at 0.172 seconds had no windows. Samples at 1.011 through 29.011

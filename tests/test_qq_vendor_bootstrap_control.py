@@ -135,7 +135,7 @@ def test_fixed_fatal_categories():
 
 def test_actual_saved_evidence():
     """Verify the single actual run without running native software during tests."""
-    path = Path(__file__).parents[1] / "docs" / "qq-vendor-bootstrap-evidence.json"
+    path = Path(__file__).parents[1] / "docs" / "evidence" / "qq-vendor-bootstrap-evidence.json"
     if not path.exists():
         pytest.skip("single actual run not yet saved")
     evidence = json.loads(path.read_text(encoding="utf-8"))

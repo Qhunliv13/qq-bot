@@ -1,4 +1,24 @@
-# Windows full local runtime (WSL2 + Docker Desktop)
+# Windows 双击部署 / full local runtime
+
+## 推荐：双击 install.cmd
+
+完整解压仓库 ZIP 后，双击根目录 `install.cmd`。Windows Python、手动 PowerShell 命令都不需要。
+
+1. 自动检测 WSL2；仅一个可用发行版时直接选用，多个时按编号选择，不接管 Docker Desktop 内部发行版。
+2. 检查 Linux Python 3.10+、Docker 和 Compose v2。经你确认后，可从所选发行版已配置的签名 apt 软件源安装缺少的包并启动 Docker；已有 Docker 不替换、不升级。
+3. 调用同一 `tools/bootstrap.py`。首次输入模型 URL、模型名、隐藏 API key 和可选 QQ 所有者；再次启动保留原设置。构建与健康检查成功后打开面板。
+
+没有 WSL 时可授权向导调用微软 `wsl --install --distribution Ubuntu --no-launch`。硬件虚拟化、Windows 功能安装、重启、Ubuntu 首次初始化可能仍需你按系统提示完成；**不会强制重启、转换现有 WSL1 或停掉其它发行版**。完成后再次双击继续。
+
+向导只在所选 WSL 中用 root 准备依赖和启动已有统一安装器，不改变默认 Linux 用户；数据仍使用该默认用户原有的 `~/.local/share/qhunliv-bot`，不会因切到 root 新建第二份默认配置。管理时可继续双击，也可使用下方高级命令；向导创建的 root-owned 状态应加 `-User root -DataDir '/home/你的用户/.local/share/qhunliv-bot'`（按向导打印的实际路径）。面板账号 `astrbot`，随机密码位于此目录的私有 `settings.json`；不要上传或分享。
+
+自动依赖安装适用于提供 `docker.io` 和 `docker-compose-v2` 包的 apt 发行版；不存在这些包、已有 Docker 缺匹配 Compose 插件或 Desktop 未开启 WSL Integration 时明确停止，不自动切换软件源或替换 Docker。已有 Docker Desktop 请开启 **Resources → WSL Integration** 后重试。首次构建还需要官方镜像/依赖源网络、磁盘与内存；不会关闭 TLS、改 DNS 或默认代理来掩盖下载失败。
+
+只读环境检查：`powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\windows-setup.ps1 -CheckOnly`。这不安装包、不启动服务、不配置模型。完整构建、模型真实请求与 QQ 登录的验收是不同阶段，见 [验证记录](QUICK_DEPLOY_VERIFICATION.md)。
+
+官方 WSL 安装与重启说明：[Microsoft WSL commands](https://learn.microsoft.com/en-us/windows/wsl/basic-commands)。
+
+## 高级命令行入口（WSL2 + Docker Desktop / Linux Engine）
 
 This is the **full local** bot, including its image build and bundled dependencies; it is not a light-client or remote-service mode. The Windows script is only a launcher: all installation, Docker Compose, state safety, health and chat operations are implemented by the existing `tools/bootstrap.py` in Linux. No QQ/NapCat installation, login, or production migration is performed.
 

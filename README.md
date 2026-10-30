@@ -2,7 +2,19 @@
 
 内嵌固定版本 AstrBot 的 bot 发行包，包含群聊、共享群记忆、原生工具调用、排队执行、主动观察、后台任务及本地独立入口。原始 AstrBot 许可证与声明完整保留；NapCat／QQ 客户端、登录会话和凭据不在仓库中，QQ 通过外部 OneBot 可选接入。
 
-## 一条命令启动全新实例
+## Windows 双击部署
+
+下载并完整解压仓库 ZIP，**双击根目录的 [`install.cmd`](install.cmd)**，不需要先打开 PowerShell、安装 Windows Python 或输入部署命令。
+
+向导会检测 WSL2、自动使用唯一可用发行版（有多个时让你选择），并检查 Python / Docker / Compose；缺少依赖时先征求同意，再通过配置好的 Linux 软件源安装和启动 Docker。首次只需按提示填写模型地址、模型名和隐藏的 API key，随后自动构建、等待健康检查并打开网页面板。再次双击继续使用原配置，不重置密钥。
+
+- 未安装 WSL 时，向导可请求管理员授权调用微软安装程序；若 Windows 要求重启或 Ubuntu 首次初始化，完成后再次双击即可，**不会自动重启系统**。
+- 已有 Docker Desktop 时复用其 WSL Integration，不替换已有 Docker；自动依赖安装目前支持提供 `docker.io` / `docker-compose-v2` 的 apt 发行版。网络不可达、硬件虚拟化未启用或依赖源不提供包时会明确停止，不报成功。
+- 使用完整运行时，默认不削减功能；QQ 登录与不依赖 NapCat 的原生 QQ 仍未完成，不接管生产实例。面板账号为 `astrbot`，随机密码在向导所示 Linux 数据目录的 `settings.json` 中。
+
+[Windows 详细说明](docs/WINDOWS.md) · [全部文档导航](docs/README.md) · [验证证据](docs/evidence/README.md)
+
+## Linux 一条命令启动
 
 Linux（仓库根目录）：
 
@@ -16,7 +28,7 @@ Windows PowerShell（仓库根目录，使用 WSL2 中的完整运行时）：
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-首次交互配置模型，自动创建仓库之外的私有数据目录，构建内嵌 AstrBot 镜像并等待运行时健康检查。两入口复用 `tools/bootstrap.py`，不另建安装核心；已有配置与密钥不会被重复初始化覆盖。完整版本需要 Docker Engine/Compose v2（Windows 可使用 Docker Desktop WSL2 集成）及首次构建网络，安装脚本不静默安装系统依赖。PowerShell 的 Bypass 仅用于本次进程，不修改系统执行策略。
+首次交互配置模型，自动创建仓库之外的私有数据目录，构建内嵌 AstrBot 镜像并等待运行时健康检查。两入口复用 `tools/bootstrap.py`，不另建安装核心；已有配置与密钥不会被重复初始化覆盖。完整版本需要 Docker Engine/Compose v2 及首次构建网络；Windows 双击向导可经确认准备依赖，命令行入口不静默安装系统依赖。PowerShell 的 Bypass 仅用于本次进程，不修改系统执行策略。
 
 详见 [Linux 快捷部署](docs/LINUX.md)、[Windows 快捷部署](docs/WINDOWS.md)、[开箱部署](docs/QUICKSTART.md)和[第三方声明](THIRD_PARTY_NOTICES.md)。健康检查不等于模型请求或 QQ 登录成功；不会迁移或替换现有生产，也不会自动安装 NapCat。整镜像构建及启动实测状态以部署验证记录为准，不以入口测试代替。
 
@@ -25,7 +37,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
 | 版本 | 平台与启动 | 包含内容 | 不包含 |
 |---|---|---|---|
 | 完整 Linux | Linux + Docker Compose，`python3 tools/bootstrap.py up` | 内嵌 AstrBot、本地入口、插件能力与独立状态 | 默认不安装或登录 QQ |
-| 完整 Windows | Windows + WSL2 + Docker Desktop，`./tools/windows.ps1 up` | **复用同一** Linux 安装器和完整容器，不另起一套核心 | 不是原生 Windows QQ；需要 WSL 与 Docker |
+| 完整 Windows | Windows + WSL2，双击 `install.cmd`（复用 Desktop 或 Linux Engine） | **复用同一** Linux 安装器和完整容器，不另起一套核心 | 不是原生 Windows QQ；需要 WSL 与 Docker |
 | Lite 文字版 | Windows / Linux，`python tools/lite.py --system-file persona.txt --interactive` | 仅 Python 标准库和已有模型 HTTP 适配器，进程内最多保留可配置轮数 | 不提供 QQ、AstrBot、工具、持久记忆、后台任务或网页面板 |
 
 分别参见[Windows 操作说明](docs/WINDOWS.md)与[Lite 操作说明](docs/LITE.md)。这三个入口均不接管现有生产实例；Lite 不是删减生产配置，也不承诺处理无标记的模型内部规划。首次安装需用户自己的模型地址、模型名与凭据；真实 QQ 登录与独立原生 QQ 接入仍未完成。

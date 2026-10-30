@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 
 
-DOCS = Path(__file__).resolve().parents[1] / 'docs'
+DOCS = Path(__file__).resolve().parents[1] / 'docs' / 'evidence'
 
 
 def read_document(name):

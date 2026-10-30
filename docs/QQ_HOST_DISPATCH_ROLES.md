@@ -12,8 +12,8 @@ preimports and copies the original four helpers plus that reader before pivot.
 No native entry, native modules, or old-mode behavior was changed.
 
 The [new fixed CLI](<../tools/qq_host_dispatch_roles_control.py>) reserves
-[separate evidence](<qq-host-dispatch-roles-evidence.json>) with exclusive creation
-before execution. It cannot overwrite [prior evidence](<qq-host-dispatch-evidence.json>).
+[separate evidence](<evidence/qq-host-dispatch-roles-evidence.json>) with exclusive creation
+before execution. It cannot overwrite [prior evidence](<evidence/qq-host-dispatch-evidence.json>).
 There are no configurable source, mode, PID, display or executable switches.
 
 The sampler remains UID65534 on authenticated private X, with actual main

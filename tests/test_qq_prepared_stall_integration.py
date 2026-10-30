@@ -243,7 +243,7 @@ def test_fixed_prepared_sources_and_timeouts_unchanged():
 
 def test_frozen_prepared_stall_evidence():
     """Validate recorded facts without rerunning QQ or pinning future working sources."""
-    docs = Path(__file__).resolve().parents[1] / "docs"
+    docs = Path(__file__).resolve().parents[1] / "docs" / "evidence"
     report = json.loads((docs / "qq-prepared-stall-evidence.json").read_text(encoding="utf-8"))
     previous = json.loads((docs / "qq-prepared-connect-evidence.json").read_text(encoding="utf-8"))
     progress = report["connect_progress"]

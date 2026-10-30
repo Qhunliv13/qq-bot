@@ -111,7 +111,7 @@ startup, obtains the explicitly named session, then initializes engine/login.
 This is a pinned consumer ordering observation, **not a Tencent ABI guarantee**.
 The consumer's literal session name is not this module's default.
 
-Existing local `docs/qq-native-factory-evidence.json` records an actual QQ
+Existing local `docs/evidence/qq-native-factory-evidence.json` records an actual QQ
 3.2.34-53644 host experiment: the factory prerequisite order followed by
 engine/login initialization succeeded. That artifact already exists; this task
 neither reruns nor rewrites it. It does not prove account authentication, session

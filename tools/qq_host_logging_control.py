@@ -11,7 +11,7 @@ except ModuleNotFoundError as exc:
     import qq_ephemeral_host_entry as control
 
 # Only metadata is public; the explicitly supplied private destination stays external.
-ARTIFACT = Path(__file__).resolve().parents[1] / "docs" / "qq-host-logging-evidence.json"
+ARTIFACT = Path(__file__).resolve().parents[1] / "docs" / "evidence" / "qq-host-logging-evidence.json"
 
 
 def observe(qq_root, *, execute=False, private_capture_path=None):

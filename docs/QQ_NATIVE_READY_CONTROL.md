@@ -27,7 +27,7 @@ Exactly one ready diagnostic was run; no fallback or second native experiment wa
 - The actual private-network gate proved only DOWN loopback, no IPv4 routes, and no IPv6 forwarding routes. Network/mount/PID/IPC/pivot-root/detached-oldroot/unprivileged/no-new-privileges/zero-effective-capability gates remained true.
 - The QQ executable, package manifest, wrapper, application archive, and original launcher all have identical before/after SHA-256 values (five software files).
 
-The safe raw projection is in `qq-native-ready-evidence.json`. It contains the actual authored-main hash and staged module hashes. The saved authored main hash is `2749a469a8059c8276c0f3129accf7c65eea6e384db5eeab2a5ea48579033b71`.
+The safe raw projection is in `evidence/qq-native-ready-evidence.json`. It contains the actual authored-main hash and staged module hashes. The saved authored main hash is `2749a469a8059c8276c0f3129accf7c65eea6e384db5eeab2a5ea48579033b71`.
 
 ## Grounded comparison, not an ABI theory
 

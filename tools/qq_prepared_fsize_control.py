@@ -11,7 +11,7 @@ except ModuleNotFoundError as exc:
     import qq_ephemeral_host_entry as control
 
 # Exclusive public metadata only; native output must remain outside the repository.
-ARTIFACT = Path(__file__).resolve().parents[1] / "docs" / "qq-prepared-fsize-evidence.json"
+ARTIFACT = Path(__file__).resolve().parents[1] / "docs" / "evidence" / "qq-prepared-fsize-evidence.json"
 
 
 def observe(qq_root, *, execute=False, private_capture_path=None):

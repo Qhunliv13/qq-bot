@@ -13,7 +13,7 @@ except ModuleNotFoundError as exc:
 
 # Fixed names are not caller-configurable paths, modes or injected source.
 PROGRESS_PATH = "/tmp/qq-host-dispatch-progress.json"
-ARTIFACT = Path(__file__).resolve().parents[1] / "docs" / "qq-host-dispatch-evidence.json"
+ARTIFACT = Path(__file__).resolve().parents[1] / "docs" / "evidence" / "qq-host-dispatch-evidence.json"
 EVENTS = ("bootstrapEntered", "synchronousEnd", "nextTick", "promiseThen", "queueMicrotask",
           "setImmediate", "setTimeout0", "setTimeout1000", "whenReady", "onReady")
 CALLBACKS = EVENTS[2:]

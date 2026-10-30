@@ -12,7 +12,7 @@ import tempfile
 # Independent disposable Python children, not QQ or its supervisor, receive these limits.
 LIMITS = (16384, 65536)
 TARGET_BYTES = 32768
-ARTIFACT = Path(__file__).resolve().parents[1] / "docs" / "qq-fsize-mechanism-evidence.json"
+ARTIFACT = Path(__file__).resolve().parents[1] / "docs" / "evidence" / "qq-fsize-mechanism-evidence.json"
 
 
 def resize(fd):

@@ -121,8 +121,8 @@ def test_exact_records_and_no_overwrite(tmp_path, monkeypatch):
 def test_frozen_actual_comparison():
     """Pin combined-record causality while explicitly denying QQ/readiness conclusions."""
     root = Path(__file__).resolve().parents[1]
-    baseline = json.loads((root / "docs/qq-bus-capture-evidence.json").read_text(encoding="utf-8"))
-    current = json.loads((root / "docs/qq-bus-identity-evidence.json").read_text(encoding="utf-8"))
+    baseline = json.loads((root / "docs/evidence/qq-bus-capture-evidence.json").read_text(encoding="utf-8"))
+    current = json.loads((root / "docs/evidence/qq-bus-identity-evidence.json").read_text(encoding="utf-8"))
     assert current["mode"] == "isolated_bus_identity_control"
     assert current["status"] == "observed" and current["experiment_completed"]
     assert current["bounds_seconds"] == baseline["bounds_seconds"]
@@ -143,10 +143,17 @@ def test_frozen_actual_comparison():
                 "runtime_versions_verified", "same_connection_stage_proof", "safe_to_login",
                 "independent_backend_ready", "production_cutover", "production_cutover_authorized"):
         assert current[key] is False
-    for name, expected in (
-            ("qq_bus_admission_control.py", "2703501c713bcba9836bb0d074083ad4fda6557fbfd57350ceab66bf44d75f17"),
-            ("qq_bus_capture_control.py", "c4dbd6a9aedc5544f0d975c8d7696801ecf390907242d56bc55be4a56442620b")):
-        assert hashlib.sha256((root / "tools" / name).read_bytes()).hexdigest() == expected
+    for name, artifact, expected in (
+            ("qq_bus_admission_control.py", "qq-bus-admission-evidence.json", "2703501c713bcba9836bb0d074083ad4fda6557fbfd57350ceab66bf44d75f17"),
+            ("qq_bus_capture_control.py", "qq-bus-capture-evidence.json", "c4dbd6a9aedc5544f0d975c8d7696801ecf390907242d56bc55be4a56442620b")):
+        raw = (root / "tools" / name).read_bytes()
+        # Only the reviewed artifact-directory relocation may differ from the frozen source.
+        # Reconstruct that one historical literal; keep the original pinned digest so any
+        # unrelated source change still fails and no historical byte-identity is claimed.
+        relocated = f' / "docs" / "evidence" / "{artifact}"'.encode("utf-8")
+        historical = f' / "docs" / "{artifact}"'.encode("utf-8")
+        assert raw.count(relocated) == 1
+        assert hashlib.sha256(raw.replace(relocated, historical, 1)).hexdigest() == expected
     assert identity.capture.bus.CALLBACK_LIMIT == 16 * 1024
 
 

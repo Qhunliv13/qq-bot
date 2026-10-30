@@ -46,7 +46,7 @@ python -m pytest tests/test_qq_native_connect_control.py tests/test_qq_native_in
 
 ## Evidence interpretation
 
-The machine-readable `docs/qq-native-connect-evidence.json` is authoritative for the
+The machine-readable `docs/evidence/qq-native-connect-evidence.json` is authoritative for the
 actual isolated outcome. `native_connect_observation_verified` means only a valid
 completed bounded observation and process exit, not that connect was accepted or
 that transport is ready. Check `connection.snapshot.connect_result_type`,

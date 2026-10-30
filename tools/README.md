@@ -14,7 +14,7 @@ python tools/validate_release.py
 
 - [validate_release.py](validate_release.py)：检查插件和工具文件的语法及凭据模式。
 - [tool_contract_audit.py](tool_contract_audit.py)：工具契约与真实分发代码的离线审计；外部接口模拟结果不是线上操作成功证明。
-- [qq_transport_parity_audit.py](qq_transport_parity_audit.py)：只比对候选声明与现有 QQ 契约；加 `--installed-inventory docs/qq-installed-action-inventory.json` 检查 180 个基础动作及 360 个别名。完整声明不代表运行验证，不授权切换生产。
+- [qq_transport_parity_audit.py](qq_transport_parity_audit.py)：只比对候选声明与现有 QQ 契约；加 `--installed-inventory docs/evidence/qq-installed-action-inventory.json` 检查 180 个基础动作及 360 个别名。完整声明不代表运行验证，不授权切换生产。
 - [qq_native_preflight.py](qq_native_preflight.py)：仅对显式 `--qq-root` 软件目录做有界静态检查，不执行 QQ／原生库、不读取账号目录。架构识别不代表 ABI 兼容；始终返回未就绪（退出码 1）。
 
 - [qq_asar_inventory.py](qq_asar_inventory.py)：对显式 `--archive` 路径仅读取有界 ASAR header，校验条目元数据与偏移；不读取条目负载、不解包、不执行代码，不能据此恢复 QQ 原始入口或证明接口可用。

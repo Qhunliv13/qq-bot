@@ -250,7 +250,7 @@ class ActionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_full_inventory_names_can_be_explicitly_registered(self):
         """Grammar covers inventoried names without claiming their native implementation."""
-        inventory = json.loads((Path(__file__).resolve().parents[1] / "docs" /
+        inventory = json.loads((Path(__file__).resolve().parents[1] / "docs" / "evidence" /
                                 "qq-installed-action-inventory.json").read_text(encoding="utf-8"))
         names = {item["name"] for item in inventory["actions"]}
         names.update(inventory["generated_aliases"]["names"])

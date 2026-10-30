@@ -11,7 +11,7 @@ except ModuleNotFoundError as exc:
     import qq_ephemeral_host_entry as control
 
 # Exclusive creation prevents replacing the one authorized actual observation.
-ARTIFACT = Path(__file__).resolve().parents[1] / "docs" / "qq-host-exit-evidence.json"
+ARTIFACT = Path(__file__).resolve().parents[1] / "docs" / "evidence" / "qq-host-exit-evidence.json"
 
 
 def observe(qq_root, *, execute=False):

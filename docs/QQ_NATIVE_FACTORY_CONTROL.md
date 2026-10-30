@@ -83,7 +83,7 @@ factory results all had type **object**:
   package manifest, native wrapper, application ASAR and outer launcher).
 - Every required isolation and explicit offline-network boolean passed.
 
-The complete safe observation is in `docs/qq-native-factory-evidence.json`.
+The complete safe observation is in `docs/evidence/qq-native-factory-evidence.json`.
 The actual executed JS SHA-256 is
 `b0005d017732ecece8f7a19894991094035176d0bb466326eb6d9792bdd37261`.
 Staged controller/metadata/pristine-package source hashes are retained in the

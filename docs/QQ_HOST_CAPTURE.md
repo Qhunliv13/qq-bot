@@ -6,7 +6,7 @@ This is the smallest next observation specified by
 [diagnostic limits](QQ_HOST_DIAGNOSTIC_LIMITS.md), not another alternate probe.
 The fixed [capture control](../tools/qq_host_dispatch_capture_control.py) selects
 `host_dispatch_capture_offline` and exclusively creates
-[its evidence](qq-host-dispatch-capture-evidence.json) before executing. Existing
+[its evidence](evidence/qq-host-dispatch-capture-evidence.json) before executing. Existing
 artifacts cannot be overwritten. CLI accepts only `--qq-root` and `--execute`.
 
 The [shared host runner](../tools/qq_ephemeral_host_entry.py) reuses the exact
@@ -71,7 +71,7 @@ Exactly one execution followed the focused pass and explicit parent GO:
 wsl -d Ubuntu-TSC -u root -- python3 /mnt/c/qhunliv13_web/_public_qqbot/tools/qq_host_dispatch_capture_control.py --qq-root /tmp/qq-native-lab-20261027-pristine/opt/QQ --execute
 ```
 
-The [exclusive evidence](qq-host-dispatch-capture-evidence.json) distinguishes:
+The [exclusive evidence](evidence/qq-host-dispatch-capture-evidence.json) distinguishes:
 
 | Observation | Result |
 | --- | --- |

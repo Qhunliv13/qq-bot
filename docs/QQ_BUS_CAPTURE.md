@@ -37,8 +37,8 @@ After focused regression tests and parent source review, execute exactly once:
 wsl -d Ubuntu-TSC -u root -- python3 /mnt/c/qhunliv13_web/_public_qqbot/tools/qq_bus_capture_control.py --qq-root /tmp/qq-native-lab-20261027-pristine/opt/QQ --execute
 ```
 
-The new exclusive artifact is [capture evidence](qq-bus-capture-evidence.json).
-The [prior admission evidence](qq-bus-admission-evidence.json) is never overwritten.
+The new exclusive artifact is [capture evidence](evidence/qq-bus-capture-evidence.json).
+The [prior admission evidence](evidence/qq-bus-admission-evidence.json) is never overwritten.
 The capture artifact records measured results. Runtime source and the design above
 were frozen before the actual run. No second execution is authorized. No commit
 is made. The measured addendum and regression test below were added afterwards;

@@ -12,7 +12,7 @@ children, not QQ or Electron. Each resized one anonymous file to 32768 bytes:
 | memfd | 16384 bytes | EFBIG | 0 |
 | memfd | 65536 bytes | resized | 32768 |
 
-[Evidence](qq-fsize-mechanism-evidence.json) is exclusively created and never
+[Evidence](evidence/qq-fsize-mechanism-evidence.json) is exclusively created and never
 replaced. The [fixed control](../tools/qq_fsize_mechanism.py) uses fixed children,
 five-second process timeouts, empty stdin, discarded stderr and small fixed JSON
 receipts. Children close their anonymous files; no named cache or shared-memory

@@ -108,7 +108,7 @@ def test_child_no_qq(monkeypatch, tmp_path):
 
 def test_frozen_actual_capture_evidence():
     """Pin completed observation, not method success or a wall-clock timeout."""
-    artifact = Path(__file__).resolve().parents[1] / "docs" / "qq-bus-capture-evidence.json"
+    artifact = Path(__file__).resolve().parents[1] / "docs" / "evidence" / "qq-bus-capture-evidence.json"
     report = json.loads(artifact.read_text(encoding="utf-8"))
     sample = report["bus_admission"]
     assert report["status"] == "observed" and sample["completed"]

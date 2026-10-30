@@ -49,7 +49,7 @@ python3 tools/qq_bus_admission_control.py --qq-root /explicit/pristine/QQ --exec
 ```
 
 Without `--execute`, only the existing validation path runs. Execution exclusively
-creates `docs/qq-bus-admission-evidence.json` and refuses to overwrite existing
+creates `docs/evidence/qq-bus-admission-evidence.json` and refuses to overwrite existing
 evidence. The existing runner records five software hashes before/after execution.
 No command, bus address, callback, identity data or QQ flags can be supplied by CLI.
 
@@ -60,7 +60,7 @@ separate review; do not relax the jail to force a positive result.
 
 ## Actual baseline (2026-10-30, one approved execution)
 
-The [exclusive evidence](qq-bus-admission-evidence.json) records:
+The [exclusive evidence](evidence/qq-bus-admission-evidence.json) records:
 
 - Numeric EXTERNAL AUTH: `auth_ok` (the fixed valid OK response was observed).
 - Independent explicit Hello: public client exit **1**, `returned_zero=false`.

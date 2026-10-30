@@ -209,7 +209,7 @@ def test_exact_auxiliary_whitelist_before_writes(monkeypatch, mode, extra, missi
 
 def test_recorded_actual_attempt_remains_incomplete():
     """Validate frozen native evidence without re-running QQ or assuming new-source parity."""
-    artifact = ROOT / 'docs' / 'qq-prepared-connect-evidence.json'
+    artifact = ROOT / 'docs' / 'evidence' / 'qq-prepared-connect-evidence.json'
     report = json.loads(artifact.read_text(encoding='utf-8'), object_pairs_hook=shared.unique_object)
     progress = report['connect_progress']
     parsed = control.parse_progress((json.dumps(progress) + '\n').encode(), progress['nonce'])

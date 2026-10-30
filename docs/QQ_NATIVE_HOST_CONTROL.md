@@ -46,7 +46,7 @@ private display/services, pivot-root and privilege hooks. No shared files are ed
 ## Recorded actual execution
 
 On 2026-10-29 (Asia/Shanghai), the root WSL run completed the 30-second QQ window.
-See `docs/qq-native-host-control-evidence.json` for the machine-readable record.
+See `docs/evidence/qq-native-host-control-evidence.json` for the machine-readable record.
 The private display and private DBus became ready. Loopback was activated only in
 its verified isolated namespace. QQ executable/window PID correlation was observed.
 The inspector returned fixed `discovery_timeout`, exit 1: **no inspector endpoint

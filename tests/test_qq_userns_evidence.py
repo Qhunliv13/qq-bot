@@ -5,7 +5,7 @@ from pathlib import Path
 
 def test_controls_separate_probe_limitations_from_qq_feature_claims():
     """A denied trusted namespace inside chroot must not become an impossible-QQ claim."""
-    path = Path(__file__).resolve().parents[1] / 'docs/qq-userns-control-evidence.json'
+    path = Path(__file__).resolve().parents[1] / 'docs/evidence/qq-userns-control-evidence.json'
     data = json.loads(path.read_text(encoding='utf-8'))
     outside = data['without_chroot_control']
     inside = data['inside_existing_chroot_control']

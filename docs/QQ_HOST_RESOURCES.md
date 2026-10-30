@@ -35,7 +35,7 @@ Old modes retain their schemas and exact waiter keyword sets.
 ## Execution
 
 The only CLI options are `--qq-root` and `--execute`. The latter exclusively
-creates [resource evidence](qq-host-resources-evidence.json) before execution;
+creates [resource evidence](evidence/qq-host-resources-evidence.json) before execution;
 an existing artifact prevents another run or overwrite. Actual execution requires
 parent review/GO. No evidence is manufactured from tests.
 

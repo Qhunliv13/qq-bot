@@ -138,7 +138,7 @@ def test_fixed_checkpoints(stage):
 
 def test_checked_in_evidence_when_present():
     """Apply live strict parsers to saved actual outcomes without rerunning native."""
-    path = Path(__file__).parents[1] / "docs" / "qq-native-connect-evidence.json"
+    path = Path(__file__).parents[1] / "docs" / "evidence" / "qq-native-connect-evidence.json"
     if not path.exists():
         pytest.skip("one authorized actual observation not yet performed")
     evidence = json.loads(path.read_text(encoding="utf-8"))

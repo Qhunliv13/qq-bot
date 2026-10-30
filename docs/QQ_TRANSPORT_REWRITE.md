@@ -53,7 +53,7 @@ A subsequent read-only inspection of the installed 4.18.37 software bundle resol
 for **540 lookup keys**. Aliases use the same handlers; they are not 360 additional
 features. The 181 registration entries include one repeated `check_url_safely` entry.
 All 21 plugin action names are an exact subset of the 180 base names. The snapshot,
-bundle digest and registration provenance are in `qq-installed-action-inventory.json`.
+bundle digest and registration provenance are in `evidence/qq-installed-action-inventory.json`.
 This is constructor/decorator **static** coverage, not verified runtime registration,
 complete event coverage or successful QQ functionality.
 
@@ -127,7 +127,7 @@ network traffic or lossless migration has been implemented.
 For the broader installed action baseline, run:
 
 ```bash
-python tools/qq_transport_parity_audit.py --installed-inventory docs/qq-installed-action-inventory.json
+python tools/qq_transport_parity_audit.py --installed-inventory docs/evidence/qq-installed-action-inventory.json
 ```
 
 Add `--candidate /path/to/candidate.json` to check a candidate declaration. Merely covering
@@ -174,7 +174,7 @@ adapter or configuration has been changed.
 
 ## Static event and message baseline
 
-`qq-installed-event-inventory.json` is tied by byte size and SHA-256 to the same
+`evidence/qq-installed-event-inventory.json` is tied by byte size and SHA-256 to the same
 installed 4.18.37 bundle as the action inventory. It records **32 discriminant-bearing
 class candidates**, not 32 distinct event types: candidates include base classes and
 similarly named non-event fields. Inheritance, dynamic values and export namespace
@@ -191,13 +191,13 @@ still unknown; these facts must not be converted into automatically enabled hand
 
 The native software boundary was inspected without loading libraries or starting QQ:
 
-- `qq-native-abi-evidence.json` records complete remote `readelf` output provenance.
+- `evidence/qq-native-abi-evidence.json` records complete remote `readelf` output provenance.
   `wrapper.node` imports `qq_magic_napi_register`, and the shipped QQ executable
   exports it. The wrapper also imports 41 `napi_*` symbols. This is evidence of
   QQ host coupling, not an ordinary generic-Node addon implementation. No conventional
   Node/N-API registration entry was observed in that symbol table; this is not an
   absence claim about proprietary initialization or relocation mechanisms.
-- `qq-native-bootstrap-evidence.json` records that two official outer launchers
+- `evidence/qq-native-bootstrap-evidence.json` records that two official outer launchers
   reference `../major.node`. The existing package main is NapCat-modified. The
   archive has no root `package.json`, so an unmodified original main was not recovered.
   Sampled archive payloads were not readable UTF-8; no encryption or missing-API
@@ -218,7 +218,7 @@ NapCat's loader under a new name. Login and all 180 base actions remain unimplem
 
 ## Pristine package recovery (2026-10-27)
 
-`qq-pristine-package-evidence.json` records a complete **187,185,496-byte** download
+`evidence/qq-pristine-package-evidence.json` records a complete **187,185,496-byte** download
 from the exact public Tencent-hosted build URL explicitly present in the upstream
 publisher Dockerfile. An ordinary anonymous range request returned HTTP 206; the
 package was saved only outside the repository. No installation scripts, native library
@@ -268,7 +268,7 @@ The first real attempt passed these namespace and privilege checks but returned 
 nonzero exit, with no verified runtime version record. A second attempt added bounded
 redacted diagnostics without changing isolation and observed exit **-5 (SIGTRAP)**,
 classified `unclassified_nonzero_exit`; the cause is not established. See
-`qq-isolated-runtime-evidence.json`. Neither attempt established usable
+`evidence/qq-isolated-runtime-evidence.json`. Neither attempt established usable
 native bindings, login or a working transport. A failed run must not lead to disabling
 isolation or falling back to a production account or NapCat loader.
 
@@ -284,7 +284,7 @@ Static binary inspection found one V1 fuse wire with RunAsNode enabled. Thus a d
 fuse is not supported as the explanation; why this build still enters the Chromium
 SUID-sandbox path remains unknown. The experiment deliberately preserves nosuid mounts
 and NO_NEW_PRIVS. No setuid installation, sandbox-disabling flag, binary patch or login
-was attempted. See `qq-runtime-sandbox-diagnostic.json`. The safe independent host
+was attempted. See `evidence/qq-runtime-sandbox-diagnostic.json`. The safe independent host
 initialization path remains an open validation gate, not a completed QQ backend.
 
 ## User-namespace controls: investigate the harness, not only QQ
@@ -296,7 +296,7 @@ namespace, while a non-chroot control with private outer namespaces, UID/GID 655
 and no-new-privileges succeeded. No QQ process ran in either control. This contrast
 is consistent with the kernel's documented chroot limitation, not proof that all
 other settings were matched or that the entire original QQ failure is explained.
-See `qq-userns-control-evidence.json`.
+See `evidence/qq-userns-control-evidence.json`.
 
 The next filesystem experiment should investigate a reviewed root-replacement and
 old-root-detachment boundary rather than removing account/file isolation, enabling
@@ -311,7 +311,7 @@ control succeeded under this boundary. The actual QQ follow-up reached GUI platf
 initialization rather than yielding process.versions, reported missing X/DISPLAY and
 system DBus, and timed out. No login, native API or full runtime initialization was
 verified. No host graphical/session socket was exposed and no protection was disabled.
-See `qq-pivot-root-evidence.json`.
+See `evidence/qq-pivot-root-evidence.json`.
 
 Separately, `BOT_CORE_DECOUPLING.md` designs a bot core that owns identity, memory,
 goals/tasks, model/tool orchestration and output evidence while QQ becomes one connector.

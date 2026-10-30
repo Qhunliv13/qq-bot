@@ -88,7 +88,7 @@ def test_malformed_cli_safe(tmp_path, capsys):
 @pytest.fixture
 def installed():
     """Read the sanitized installed static inventory, never software implementation."""
-    return json.loads((ROOT / "docs" / "qq-installed-action-inventory.json").read_text(encoding="utf-8"))
+    return json.loads((ROOT / "docs" / "evidence" / "qq-installed-action-inventory.json").read_text(encoding="utf-8"))
 
 
 def test_installed_inventory_counts_and_pending(required, installed):
@@ -156,7 +156,7 @@ def test_installed_cli_and_prefix_names(required, tmp_path, capsys):
             AUDIT._names([name])
     candidate = tmp_path / "candidate.json"
     candidate.write_text(json.dumps(complete_candidate(required)), encoding="utf-8")
-    inventory_path = ROOT / "docs" / "qq-installed-action-inventory.json"
+    inventory_path = ROOT / "docs" / "evidence" / "qq-installed-action-inventory.json"
     assert AUDIT.main(["--candidate", str(candidate), "--installed-inventory", str(inventory_path)]) == 1
     assert json.loads(capsys.readouterr().out)["installed_inventory_supplied"]
 

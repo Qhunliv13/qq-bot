@@ -133,7 +133,7 @@ def test_fixed_entry_has_no_login_or_session_calls():
 
 def test_checked_in_actual_evidence_is_strict_and_nonready():
     """The actual isolated failure record must meet the same parser as live output."""
-    evidence_path = Path(__file__).parents[1] / "docs" / "qq-native-init-evidence.json"
+    evidence_path = Path(__file__).parents[1] / "docs" / "evidence" / "qq-native-init-evidence.json"
     evidence = json.loads(evidence_path.read_text(encoding="utf-8-sig"))
     actual = evidence["host_record"]
     raw = ("QQ_NATIVE_INIT_" + actual["nonce"] + ":" + json.dumps(actual) + "\n").encode()

@@ -16,7 +16,7 @@ Nonce-bound private JSON records are synchronous and strictly schema-validated. 
 
 ## One authorized actual run — 2026-10-29
 
-Environment: default WSL `Ubuntu-TSC`, `/usr/bin/python3`, pristine QQ root `/tmp/qq-native-lab-20261027-pristine/opt/QQ`. Exactly one native execution was performed. See `qq-vendor-bootstrap-evidence.json`.
+Environment: default WSL `Ubuntu-TSC`, `/usr/bin/python3`, pristine QQ root `/tmp/qq-native-lab-20261027-pristine/opt/QQ`. Exactly one native execution was performed. See `evidence/qq-vendor-bootstrap-evidence.json`.
 
 - Original vendor expression was read and confirmed byte-for-byte, 56 bytes, before execution.
 - Vendor bootstrap **returned**, the zero-delay pure timer fired, and the registered **ready callback fired** with actual `app.isReady() === true`.

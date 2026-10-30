@@ -10,7 +10,7 @@ except ModuleNotFoundError as exc:
         raise
     import qq_ephemeral_host_entry as control
 
-ARTIFACT = Path(__file__).resolve().parents[1] / "docs" / "qq-host-dispatch-capture-evidence.json"
+ARTIFACT = Path(__file__).resolve().parents[1] / "docs" / "evidence" / "qq-host-dispatch-capture-evidence.json"
 
 
 def observe(qq_root, *, execute=False):

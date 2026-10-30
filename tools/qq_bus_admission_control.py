@@ -196,7 +196,7 @@ def main(argv=None):
     parser.add_argument("--execute", action="store_true")
     args = parser.parse_args(argv)
     # Exclusive evidence creation is intentional: reruns cannot overwrite history.
-    artifact = Path(__file__).resolve().parents[1] / "docs" / "qq-bus-admission-evidence.json"
+    artifact = Path(__file__).resolve().parents[1] / "docs" / "evidence" / "qq-bus-admission-evidence.json"
     if args.execute:
         with artifact.open("x", encoding="utf-8") as stream:
             report = observe(args.qq_root, execute=True)

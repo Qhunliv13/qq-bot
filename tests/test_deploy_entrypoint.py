@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -78,6 +79,79 @@ class EntrypointTests(unittest.TestCase):
         self.prepare()
         self.assertEqual(config.read_text(encoding="utf-8"), '{"operator_change": true}')
         self.assertEqual((other / "user.txt").read_text(encoding="utf-8"), "retain")
+
+    def test_fresh_linux_root_owns_only_higan_mount_root(self):
+        """Repair a normal-user bind mount without recursively taking its files."""
+        self.higan.mkdir()
+        sentinel = self.higan / "retained.txt"
+        sentinel.write_text("do-not-touch", encoding="utf-8")
+        with mock.patch.object(ENTRYPOINT.sys, "platform", "linux"), mock.patch.object(
+            ENTRYPOINT.os, "geteuid", return_value=0, create=True
+        ), mock.patch.object(ENTRYPOINT.os, "chown", create=True) as chown, mock.patch.object(
+            Path, "symlink_to"
+        ):
+            # Link creation is unrelated to ownership and needs Windows privileges.
+            self.prepare()
+        chown.assert_called_once_with(self.higan, 0, 0)
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), "do-not-touch")
+
+    def test_initialized_linux_root_does_not_change_ownership(self):
+        """Keep ownership repair exclusive to marker-absent first initialization."""
+        with mock.patch.object(Path, "symlink_to"):
+            self.prepare()
+        original_resolve = Path.resolve
+        plugin_link = self.data / "plugins" / ENTRYPOINT.PLUGIN_NAME
+
+        def resolve_test_link(path, *args, **kwargs):
+            """Emulate only the omitted plugin symlink, leaving real paths intact."""
+            if path == plugin_link:
+                return self.plugin
+            return original_resolve(path, *args, **kwargs)
+
+        with mock.patch.object(ENTRYPOINT.sys, "platform", "linux"), mock.patch.object(
+            ENTRYPOINT.os, "geteuid", return_value=0, create=True
+        ), mock.patch.object(ENTRYPOINT.os, "chown", create=True) as chown, mock.patch.object(
+            Path, "is_symlink", return_value=True
+        ), mock.patch.object(Path, "resolve", resolve_test_link):
+            self.prepare()
+        chown.assert_not_called()
+
+    def test_non_linux_does_not_attempt_chown(self):
+        """Leave cross-platform offline callers free of privileged system calls."""
+        with mock.patch.object(ENTRYPOINT.sys, "platform", "win32"), mock.patch.object(
+            ENTRYPOINT.os, "geteuid", return_value=0, create=True
+        ) as geteuid, mock.patch.object(ENTRYPOINT.os, "chown", create=True) as chown, mock.patch.object(
+            Path, "symlink_to"
+        ):
+            self.prepare()
+        geteuid.assert_not_called()
+        chown.assert_not_called()
+
+    def test_non_root_linux_does_not_attempt_chown(self):
+        """Do not make unprivileged offline initialization require host root."""
+        with mock.patch.object(ENTRYPOINT.sys, "platform", "linux"), mock.patch.object(
+            ENTRYPOINT.os, "geteuid", return_value=1000, create=True
+        ), mock.patch.object(ENTRYPOINT.os, "chown", create=True) as chown, mock.patch.object(
+            Path, "symlink_to"
+        ):
+            self.prepare()
+        chown.assert_not_called()
+
+    def test_fresh_higan_symlink_is_rejected_before_writes(self):
+        """Do not chmod or chown a foreign directory through a supplied symlink."""
+        target = self.root / "foreign-higan"
+        target.mkdir()
+        sentinel = target / "retained.txt"
+        sentinel.write_text("do-not-touch", encoding="utf-8")
+        # The safety branch must be exercised even without Windows symlink rights.
+        with mock.patch.object(Path, "is_symlink", return_value=True), mock.patch.object(
+            ENTRYPOINT.os, "chown", create=True
+        ) as chown:
+            with self.assertRaisesRegex(ValueError, "must not be a symlink"):
+                self.prepare()
+        chown.assert_not_called()
+        self.assertFalse(self.data.exists())
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), "do-not-touch")
 
     def test_image_plugin_change_is_rejected(self):
         """Never silently update plugin code bound to a persisted installation."""

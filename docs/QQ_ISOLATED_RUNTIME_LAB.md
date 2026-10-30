@@ -8,37 +8,37 @@ failure records remain historical evidence, not the latest capability assessment
 - `tools/qq_application_observation.py` genuinely launches the default pristine app.
   Private X window PID properties correlate with the actual QQ executable/process;
   this is not authentication or login readiness. See
-  `qq-application-observation-evidence.json`.
+  `evidence/qq-application-observation-evidence.json`.
 - `tools/qq_ephemeral_host_entry.py` genuinely loads `wrapper.node` **inside the QQ
   executable**, with Electron 40.0.0, Node 24.11.1, module ABI 143 and N-API 10.
   Engine, LoginService, WrapperSession and StartupSession candidate exports exist.
   Its only modifications are read-only file overlays inside the detached private
   mount namespace; all five original software hashes match before and after.
-  See `qq-ephemeral-host-entry-evidence.json`.
+  See `evidence/qq-ephemeral-host-entry-evidence.json`.
 - `tools/qq_native_init_control.py` genuinely obtains engine/login services, initializes
   their explicit same-build configurations and calls listener registration. The actual
   registration return is **undefined**, contradicting the consumer number annotation.
   Explicit process-lifetime policy accepts this without inventing an unregister token,
   asserting callback registration proof or claiming native listener removal. Actual
-  process exit retires the owner. See `qq-native-init-evidence.json`.
+  process exit retires the owner. See `evidence/qq-native-init-evidence.json`.
 - Independently authored `qq_transport/native_login.js`, `native_session.js` and
   `native_messages.js` implement owner-driven lifecycles with offline test coverage.
   Native session configuration, real account authentication, session-ready callbacks,
   message send/receive, full feature parity and production cutover are **not verified**.
 
-- `qq-native-connect-evidence.json` records an actual **boolean return** from one
+- `evidence/qq-native-connect-evidence.json` records an actual **boolean return** from one
   offline connect request at its synchronous `after_connect` checkpoint. All seven
   observed callback counts are zero; the later eight-second timer did not finish before
   the 30-second watchdog. This does not prove callbacks were registered or explain why
   the timed wait did not finish.
-- `qq-native-ready-evidence.json` separately waits for standard Electron readiness
+- `evidence/qq-native-ready-evidence.json` separately waits for standard Electron readiness
   **before loading the wrapper**. A zero-delay JS timer fires, but `app.isReady()` stays
   false and `app.whenReady()` does not resolve during the measured window. No native
   load/init/connect is reached in that experiment. Therefore, do not label the prior
   timeout a demonstrated native-connect block or ABI error; the custom-main host
   lifecycle still needs evidence-based integration with Tencent's normal bootstrap.
 
-- `qq-vendor-bootstrap-evidence.json` then performs the exact 56-byte Tencent outer
+- `evidence/qq-vendor-bootstrap-evidence.json` then performs the exact 56-byte Tencent outer
   launcher expression in the original module context. The vendor call returns, the
   zero-delay timer fires and the actual Electron ready callback reports
   `app.isReady() === true`. The later five/eight-second timers remain unobserved and
@@ -46,7 +46,7 @@ failure records remain historical evidence, not the latest capability assessment
   confirms the vendor handoff matters to readiness in the measured host, without
   explaining the subsequent stall or proving login. Authored code does not initialize
   the engine again, inspect account state or call a login/session API.
-- `qq-vendor-stall-evidence.json` samples the unchanged vendor observer from an external
+- `evidence/qq-vendor-stall-evidence.json` samples the unchanged vendor observer from an external
   unprivileged helper: 30 identity-validated process samples, bounded thread states,
   aggregate process CPU counters, private X PID/window counts, resource limits and
   bounded output categories. The 30-second observation records about 3.37 aggregate
@@ -56,7 +56,7 @@ failure records remain historical evidence, not the latest capability assessment
   its bus or proving the later stall's cause. No memory, titles, screenshots, session
   state, host sockets or production process were inspected. This narrows observations,
   not the unresolved root cause or account-login readiness.
-- `qq-private-window-roles-evidence.json` adds bounded metadata-only window sampling
+- `evidence/qq-private-window-roles-evidence.json` adds bounded metadata-only window sampling
   in a separate unchanged isolated run. Two actual-main-PID/starttime-correlated
   windows are unmapped; one is NORMAL and the other has an unknown type. No DIALOG,
   UTILITY or transient-for relationship is observed in those windows. Class text is
@@ -133,7 +133,7 @@ exited with **-5 (SIGTRAP on Linux)** and no verified nonce-marked version recor
 The failure classification is `unclassified_nonzero_exit`, not a missing-library,
 fuse, sandbox or ABI diagnosis. Those causes are not established by a signal number.
 No isolation check was bypassed and no account/login test was performed. See
-`qq-isolated-runtime-evidence.json`. This experiment has **not** passed its runtime gate.
+`evidence/qq-isolated-runtime-evidence.json`. This experiment has **not** passed its runtime gate.
 
 ## Follow-up diagnostic (same protection boundary)
 
@@ -148,7 +148,7 @@ The binary's static RunAsNode fuse is enabled. That does not establish why this 
 still enters a Chromium sandbox path with the environment variable set. Changing only
 file mode is not a demonstrated solution, since nosuid and NO_NEW_PRIVS intentionally
 remain active. Do not disable them, patch fuses or use `--no-sandbox` to manufacture
-success. See `qq-runtime-sandbox-diagnostic.json`; native initialization and login
+success. See `evidence/qq-runtime-sandbox-diagnostic.json`; native initialization and login
 remain unverified.
 
 ## Trusted namespace control: a limitation in the experiment harness
@@ -171,7 +171,7 @@ principle. A future, separately reviewed pivot_root-style boundary may replace t
 mount namespace root and detach the old root without removing filesystem isolation.
 It is **not implemented or validated by this control**. Do not infer that chroot should
 simply be removed or that setuid/native/login testing is authorized.
-See `qq-userns-control-evidence.json` for the actual command outcomes and limitations.
+See `evidence/qq-userns-control-evidence.json` for the actual command outcomes and limitations.
 
 ## Detached-root control and actual runtime follow-up
 
@@ -190,7 +190,7 @@ socket, credentials, account state or network was exposed to repair that failure
 The intended script is Node-only, but the actual QQ build demonstrably reached a GUI
 path; do not claim the executable accepted generic Node-only mode. A next GUI/native
 experiment needs a separately planned private display, not a borrowed production session.
-See `qq-pivot-root-evidence.json` for outcomes, limits and unchanged cutover requirements.
+See `evidence/qq-pivot-root-evidence.json` for outcomes, limits and unchanged cutover requirements.
 
 ## System-Node native-load control (2026-10-28)
 
@@ -215,7 +215,7 @@ published or inferred; missing-library, module-version-mismatch and exact
 `qq_magic_napi_register` match flags were false. Static inventory separately shows
 that wrapper **imports**, rather than exports, `qq_magic_napi_register`.
 
-See `qq-native-load-control-evidence.json`. This proves a limited real native module
+See `evidence/qq-native-load-control-evidence.json`. This proves a limited real native module
 load in **system Node**, not Tencent Electron compatibility, QQ runtime bootstrap,
 session initialization, independent actions/events or replacement readiness. Thus
 `runtime_executed`, `runtime_versions_verified`, `native_binding_verified`,
@@ -266,7 +266,7 @@ The launcher source entry remains the pristine package's
 with invented native arguments. GUI/bootstrap behavior despite RUN_AS_NODE is observed,
 not successful Node-only execution or proof that an Electron fuse is disabled.
 
-See `qq-private-display-evidence.json`. Runtime versions, native binding, session/login,
+See `evidence/qq-private-display-evidence.json`. Runtime versions, native binding, session/login,
 independent-backend and cutover readiness remain **false**. This is real progress past
 the missing-display/shared-memory gates, not completion of the independent transport.
 The focused mock regressions (isolated runtime, native-load probe, private display)
@@ -305,7 +305,7 @@ that it can decode this package-specific payload or finish QQ initialization.
 The previous actual QQ run under detached pivot-root, private network, cap-zero UID,
 private Xvfb and bounded 10-second watchdog timed out without a nonce record; DBus/
 fontconfig diagnostics are observations, not proven causes. The offline step cannot
-resolve that gate. See `qq-bootstrap-readiness-evidence.json` and the earlier two
+resolve that gate. See `evidence/qq-bootstrap-readiness-evidence.json` and the earlier two
 probe evidence files. No login/session import, NapCat proxy, production mutation or
 readiness claim follows; further native/bootstrap execution needs a separate safe
 experiment retaining **all** existing boundaries and an independently validated
@@ -388,6 +388,6 @@ window. The intended `/probe.js` still emitted no nonce record. The packaged QQ
 launcher may ignore this Node-only script; absence of nonce **does not prove QQ failed
 to reach its own native/GUI bootstrap**. No verified QQ-owned window, Electron version,
 native session, login, independent transport or production cutover results.
-Evidence: `qq-private-runtime-services-evidence.json`. Readiness flags remain false.
+Evidence: `evidence/qq-private-runtime-services-evidence.json`. Readiness flags remain false.
 Focused regressions on Windows: 72 passed, 1 skipped; static pyflakes passed. Tests
 are mock-only, not proof of actual QQ capability.

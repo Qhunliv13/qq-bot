@@ -26,7 +26,7 @@ After parent GO and passing fake-only tests:
 wsl -d Ubuntu-TSC -u root -- python3 /mnt/c/qhunliv13_web/_public_qqbot/tools/qq_prepared_phase_control.py --qq-root /tmp/qq-native-lab-20261027-pristine/opt/QQ --execute
 ```
 
-Without `--execute`, software inspection only; no artifact is reserved. Execution exclusively creates [phase evidence](qq-prepared-phase-evidence.json) before native work, so an existing artifact refuses another invocation. It never overwrites evidence; even an empty artifact left by interruption is not permission to retry. The artifact includes the shared runner's authored-source SHA256, staged-module SHA256 values, five host software SHA256 values before/after, isolation checks and bounded progress. Preserve source after the approved run. No actual-run evidence is claimed until that command has completed and the artifact has been validated.
+Without `--execute`, software inspection only; no artifact is reserved. Execution exclusively creates [phase evidence](evidence/qq-prepared-phase-evidence.json) before native work, so an existing artifact refuses another invocation. It never overwrites evidence; even an empty artifact left by interruption is not permission to retry. The artifact includes the shared runner's authored-source SHA256, staged-module SHA256 values, five host software SHA256 values before/after, isolation checks and bounded progress. Preserve source after the approved run. No actual-run evidence is claimed until that command has completed and the artifact has been validated.
 
 ## Single approved actual result
 
@@ -34,7 +34,7 @@ The parent-approved invocation completed once with `watchdog_30s`, elapsed **30.
 
 All five host hashes match before/after, all offline-network checks pass, and namespace/privilege gates remain true. The bounded stderr category `file_size_limit` is false in this run (unlike a possible interpretation of earlier observations); `dbus_unavailable` is true but is only a category, not proof of causality. No retry was performed.
 
-Frozen authored entry SHA256: `aead917c13298a0d5ee187524416fd929006790add64f33a4a8db18081676257`. Exact five host hashes and staged hashes are preserved in [immutable evidence](qq-prepared-phase-evidence.json). Runtime source has not changed after this run.
+Frozen authored entry SHA256: `aead917c13298a0d5ee187524416fd929006790add64f33a4a8db18081676257`. Exact five host hashes and staged hashes are preserved in [immutable evidence](evidence/qq-prepared-phase-evidence.json). Runtime source has not changed after this run.
 
 ## Tests
 

@@ -108,7 +108,7 @@ it remains separate from the unavailable actual-native observation.
 
 A later goal round used the reviewed PS5-compatible capture script for one new
 bounded attempt against source commit `d159840`. The immutable sanitized
-[observation](qq-prepared-connect-evidence.json) records:
+[observation](evidence/qq-prepared-connect-evidence.json) records:
 
 - Actual QQ invoked in the shared private namespaces, UID 65534, zero capabilities,
   NoNewPrivs, detached oldroot, DOWN-only loopback and no forwarding routes.
@@ -134,7 +134,7 @@ No production account, session, configuration or transport was accessed or chang
 
 ## External bounded sampling of prepared connection (next observation)
 
-The [subsequent artifact](qq-prepared-stall-evidence.json) uses the existing
+The [subsequent artifact](evidence/qq-prepared-stall-evidence.json) uses the existing
 `qq_vendor_stall_observation.observe_wait` implementation for this fixed mode.
 Only the outer waiter, its preimports and copied dependencies change; no new
 native actions or JS probe are added. The previous artifact is retained unchanged.

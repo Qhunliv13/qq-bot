@@ -9,7 +9,7 @@ from tools import qq_ephemeral_host_entry as shared
 from tools import qq_native_factory_control as control
 
 
-EVIDENCE = Path(__file__).parents[1] / "docs" / "qq-native-factory-evidence.json"
+EVIDENCE = Path(__file__).parents[1] / "docs" / "evidence" / "qq-native-factory-evidence.json"
 
 
 def actual():

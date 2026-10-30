@@ -2,7 +2,7 @@
 
 ## Result: fatal SIGTRAP/core-dump path preceded the watchdog
 
-One authorized execution of [the fixed exit control](../tools/qq_host_exit_control.py), after tests and parent source-review GO, produced [the exclusive evidence artifact](qq-host-exit-evidence.json). Runtime sources were frozen before execution; only tests and this document changed afterward. No commit was made.
+One authorized execution of [the fixed exit control](../tools/qq_host_exit_control.py), after tests and parent source-review GO, produced [the exclusive evidence artifact](evidence/qq-host-exit-evidence.json). Runtime sources were frozen before execution; only tests and this document changed afterward. No commit was made.
 
 | Observation | First sample | Remaining 29 samples |
 |---|---:|---:|

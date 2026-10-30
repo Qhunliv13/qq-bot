@@ -28,7 +28,7 @@ chat **not yet accepted**. No production installation changed.
 - A dedicated Docker daemon used its own Unix socket, data/exec roots and PID file.
   It was launched with bridge disabled and iptables/ip6tables/IP-forward/IP-masq
   management disabled; no default Docker service or production daemon was adopted.
-- [Linux preflight evidence](quick-deploy-preflight-evidence.json): actual root Bash
+- [Linux preflight evidence](evidence/quick-deploy-preflight-evidence.json): actual root Bash
   launcher init/init-again/doctor/status all exited 0 against that daemon, private
   settings mode was 0600, and settings bytes were unchanged. Settings contained a
   deliberately fictitious example.invalid model and noncredential test key; no
@@ -58,7 +58,7 @@ from the fixed loopback dashboard, with proxies and redirects disabled. Compose
 uses root-only tmpfs for the socket directory, preserving fail-closed bind behavior
 without carrying stale sockets across container stops.
 
-[Isolated container evidence](quick-deploy-container-evidence.json) records the fixed
+[Isolated container evidence](evidence/quick-deploy-container-evidence.json) records the fixed
 image's actual composite health, Shiki artifact, root:0700 run directory, forced
 kill/start recovery, graceful stop/start recovery, unchanged settings/framework
 configuration and final stopped state. This was **docker run --network none**, not

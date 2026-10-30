@@ -52,7 +52,7 @@ retain their prior behavior.
 
 [qq_host_dispatch_control.py](../tools/qq_host_dispatch_control.py) accepts only
 `--qq-root` and explicit `--execute`. Before actual execution it exclusively reserves
-`docs/qq-host-dispatch-evidence.json`; an existing artifact refuses another invocation
+`docs/evidence/qq-host-dispatch-evidence.json`; an existing artifact refuses another invocation
 before any run. Do not delete or overwrite that evidence to retry. Parent review and
 GO are required; tests alone do not authorize an actual run.
 
@@ -69,7 +69,7 @@ Python compilation, pyflakes and JavaScript syntax checks passed.
 ## Single approved actual observation
 
 The parent approved exactly one run against the pristine lab root. The exclusive
-[evidence artifact](qq-host-dispatch-evidence.json) records:
+[evidence artifact](evidence/qq-host-dispatch-evidence.json) records:
 
 | Checkpoint | Elapsed milliseconds |
 | --- | ---: |

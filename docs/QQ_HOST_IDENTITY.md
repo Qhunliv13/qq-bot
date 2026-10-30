@@ -1,7 +1,7 @@
 # Native-free host dispatch: fixed synthetic identity contrast
 
-This control compares the [prior host capture](qq-host-dispatch-capture-evidence.json)
-with one exclusively created [identity evidence artifact](qq-host-identity-evidence.json).
+This control compares the [prior host capture](evidence/qq-host-dispatch-capture-evidence.json)
+with one exclusively created [identity evidence artifact](evidence/qq-host-identity-evidence.json).
 The earlier bus identity success establishes bus behavior only, not Electron readiness.
 
 ## Fixed design

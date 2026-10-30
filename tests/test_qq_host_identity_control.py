@@ -131,7 +131,7 @@ def test_same_preimports_and_copydeps(monkeypatch, tmp_path, imports):
 
 def test_actual_comparison_when_frozen():
     """Validate fair contrast without manufacturing future readiness or timer outcomes."""
-    docs = Path(__file__).resolve().parents[1] / "docs"
+    docs = Path(__file__).resolve().parents[1] / "docs" / "evidence"
     artifact = docs / "qq-host-identity-evidence.json"
     if not artifact.exists():
         pytest.skip("one actual run awaits parent review/GO")

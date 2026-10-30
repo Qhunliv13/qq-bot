@@ -4,7 +4,7 @@
 
 One authorized isolated execution was performed on 2026-10-29 using WSL root,
 `/tmp/qq-native-lab-20261027-pristine/opt/QQ`, from baseline `5bdc8a0`.
-The report is `docs/qq-vendor-stall-evidence.json`. No second actual execution was
+The report is `docs/evidence/qq-vendor-stall-evidence.json`. No second actual execution was
 performed. Subsequent validation uses fakes/pure projections only.
 
 ```text
