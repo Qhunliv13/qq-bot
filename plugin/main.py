@@ -4170,6 +4170,29 @@ class HiganPlugin(Star):
         #  回复里的 `[at:QQ]` ⇒ 真正的 @
         try:
             text, _ats = self._at_components(text)
+            # QQ renders an At component as ``@nickname``. Some model replies
+            # immediately repeat the same nickname as plain text, producing
+            # ``@nameName``. Remove only an exact, authoritative member-name
+            # prefix after the component; never infer or broadly strip prose.
+            _api = getattr(getattr(event, "bot", None), "api", None)
+            _call_action = getattr(_api, "call_action", None)
+            if _ats and callable(_call_action) and str(group).isascii() and str(group).isdigit():
+                for _at in _ats:
+                    _qq = str(getattr(_at, "qq", "") or "")
+                    if not _qq.isascii() or not _qq.isdigit() or int(_qq) <= 0:
+                        continue
+                    try:
+                        _member = await _call_action(
+                            "get_group_member_info", group_id=int(group),
+                            user_id=int(_qq), no_cache=False)
+                        if not isinstance(_member, dict):
+                            continue
+                        _name = str(_member.get("card") or _member.get("nickname") or "").strip()
+                        if _name and text.startswith(_name):
+                            text = text[len(_name):]
+                            break
+                    except Exception as _exc:  # noqa: BLE001
+                        logger.debug("[higan] @ 昵称去重查询失败：%s", type(_exc).__name__)
             for _a in _ats:
                 chain.chain.append(_a)
         except Exception:  # noqa: BLE001
