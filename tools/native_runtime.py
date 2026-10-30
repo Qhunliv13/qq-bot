@@ -161,43 +161,52 @@ def up(data, name, *, wait_timeout=300):
         # its dashboard is still starting or unavailable. A later retry can check it.
         dashboard_ready(data, name)
         return
-    check_engine(data, quiet=True)
-    from tools.native_assets import prepare_assets
-    assets = prepare_assets(data, REPO_ROOT)
-    prepare_host(data, settings, assets)
-    private_directory(data / "run")
-    environment = os.environ.copy()
-    environment.update(HIGAN_ROOT=str(data / "higan"), ASTRBOT_ROOT=str(assets["astrbot_root"]),
-        HIGAN_SETTINGS_FILE=str(data / "settings.json"), HIGAN_NATIVE_DATA=str(data),
-        PYTHONUNBUFFERED="1", PYTHONDONTWRITEBYTECODE="1", PYTHONIOENCODING="utf-8")
-    # Detach from the installer console; graceful stop uses the authenticated
-    # operator channel, never taskkill, process-name matching or console signals.
-    command = [str(assets["python"]), str(Path(__file__).resolve()), "_serve", "--data-dir", str(data),
-               "--runtime-name", name]
-    with open(data / "run" / "runtime.log", "ab") as log:
-        child = subprocess.Popen(command, cwd=assets["astrbot_root"], env=environment,
-            stdin=subprocess.DEVNULL, stdout=log, stderr=log, shell=False,
-            creationflags=(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-                           | getattr(subprocess, "DETACHED_PROCESS", 0)))
-    deadline = time.monotonic() + wait_timeout
-    while time.monotonic() < deadline:
-        if child.poll() is not None:
-            raise ValueError("native_host_exited_check_private_logs")
-        try:
-            health(data, name)
-            dashboard_ready(data, name)
-            return
-        except (OSError, ValueError, RuntimeError):
-            time.sleep(0.5)
-    raise ValueError("native_startup_not_confirmed_process_not_killed")
+    # Serialize the entire install/start/readiness operation, not just the child.
+    # Another wizard must fail before pip/config writes or a duplicate spawn.
+    with instance_lock(data, lock_name="setup.lock"):
+        check_engine(data, quiet=True)
+        from tools.native_assets import prepare_assets
+        # A live host may be stopping or temporarily unhealthy. Its OS lock, not
+        # a failed health request, determines whether mutable state is safe to edit.
+        with instance_lock(data):
+            assets = prepare_assets(data, REPO_ROOT)
+            prepare_host(data, settings, assets)
+        # Release the host lock before launch so the child can acquire it itself;
+        # retain setup ownership until readiness or failure has been established.
+        environment = os.environ.copy()
+        environment.update(HIGAN_ROOT=str(data / "higan"), ASTRBOT_ROOT=str(assets["astrbot_root"]),
+            HIGAN_SETTINGS_FILE=str(data / "settings.json"), HIGAN_NATIVE_DATA=str(data),
+            PYTHONUNBUFFERED="1", PYTHONDONTWRITEBYTECODE="1", PYTHONIOENCODING="utf-8")
+        # Detach from the installer console; graceful stop uses the authenticated
+        # operator channel, never taskkill, process-name matching or console signals.
+        command = [str(assets["python"]), str(Path(__file__).resolve()), "_serve", "--data-dir", str(data),
+                   "--runtime-name", name]
+        with open(data / "run" / "runtime.log", "ab") as log:
+            child = subprocess.Popen(command, cwd=assets["astrbot_root"], env=environment,
+                stdin=subprocess.DEVNULL, stdout=log, stderr=log, shell=False,
+                creationflags=(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                               | getattr(subprocess, "DETACHED_PROCESS", 0)))
+        deadline = time.monotonic() + wait_timeout
+        while time.monotonic() < deadline:
+            if child.poll() is not None:
+                raise ValueError("native_host_exited_check_private_logs")
+            try:
+                health(data, name)
+                dashboard_ready(data, name)
+                return
+            except (OSError, ValueError, RuntimeError):
+                time.sleep(0.5)
+        raise ValueError("native_startup_not_confirmed_process_not_killed")
 
 
 @contextmanager
-def instance_lock(data):
-    """Hold an OS-owned byte lock so two hosts can never share native mutable state."""
+def instance_lock(data, *, lock_name="instance.lock"):
+    """Hold one allowlisted OS byte lock for host state or serialized install/start."""
+    if lock_name not in {"instance.lock", "setup.lock"}:
+        raise ValueError("native_invalid_lock_name")
     import msvcrt
     private_directory(data / "run")
-    with open(data / "run" / "instance.lock", "a+b") as stream:
+    with open(data / "run" / lock_name, "a+b") as stream:
         stream.seek(0, os.SEEK_END)
         if stream.tell() == 0:
             stream.write(b"0")

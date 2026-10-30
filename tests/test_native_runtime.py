@@ -291,13 +291,33 @@ def fake_launch(install, monkeypatch):
     prepare = Mock(return_value=assets)
     host = Mock(return_value={})
     dashboard = Mock()
+    held = set()
+    lock_events = []
+
+    @contextmanager
+    def instance_lock(data, *, lock_name="instance.lock"):
+        """Model independent nonblocking lock names and expose their exact lifetimes."""
+        assert data == install
+        if lock_name in held:
+            raise ValueError("native_instance_already_running")
+        (data / "run").mkdir(parents=True, exist_ok=True)
+        held.add(lock_name)
+        lock_events.append(("acquire", lock_name))
+        try:
+            yield
+        finally:
+            held.remove(lock_name)
+            lock_events.append(("release", lock_name))
+
+    monkeypatch.setattr(native, "instance_lock", instance_lock)
     monkeypatch.setattr(native, "dashboard_ready", dashboard)
     monkeypatch.setattr(native_assets, "prepare_assets", prepare)
     monkeypatch.setattr(native, "prepare_host", host)
     monkeypatch.setattr(native, "check_engine", Mock())
     monkeypatch.setattr(native.subprocess, "Popen", popen)
     monkeypatch.setattr(native.time, "sleep", Mock())
-    return SimpleNamespace(assets=assets, child=child, popen=popen, prepare=prepare, host=host, dashboard=dashboard)
+    return SimpleNamespace(assets=assets, child=child, popen=popen, prepare=prepare, host=host,
+                           dashboard=dashboard, held=held, lock_events=lock_events)
 
 
 def test_up_launches_private_venv_full_serve_not_lite_or_container(install, fake_launch, monkeypatch):
@@ -327,6 +347,65 @@ def test_up_launches_private_venv_full_serve_not_lite_or_container(install, fake
     fake_launch.child.kill.assert_not_called()
     assert health.call_count == 2
     fake_launch.dashboard.assert_called_once_with(install, NAME)
+
+
+def test_up_holds_setup_and_host_locks_in_safe_order(install, fake_launch, monkeypatch):
+    """Protect all provisioning, release host lock for the child, and retain setup through readiness."""
+    def prepare_assets(data, repo):
+        """Pip and copied host preparation require both exclusive ownership locks."""
+        assert fake_launch.held == {"setup.lock", "instance.lock"}
+        return fake_launch.assets
+
+    def prepare_host(data, settings, assets):
+        """Config seeding is protected from a live or stopping host as well as other installers."""
+        assert fake_launch.held == {"setup.lock", "instance.lock"}
+
+    def launch(*args, **kwargs):
+        """The new child must be able to acquire its own host lock before becoming healthy."""
+        assert fake_launch.held == {"setup.lock"}
+        return fake_launch.child
+
+    def health(data, name):
+        """Readiness checks stay inside setup ownership, while the initial probe stays read-only."""
+        if not fake_launch.lock_events:
+            assert not fake_launch.held
+            raise OSError("not yet started")
+        assert fake_launch.held == {"setup.lock"}
+        return {"ok": True, "pid": 123456}
+
+    fake_launch.prepare.side_effect = prepare_assets
+    fake_launch.host.side_effect = prepare_host
+    fake_launch.popen.side_effect = launch
+    monkeypatch.setattr(native, "health", health)
+    native.up(install, NAME)
+    assert fake_launch.lock_events == [("acquire", "setup.lock"), ("acquire", "instance.lock"),
+                                     ("release", "instance.lock"), ("release", "setup.lock")]
+    assert not fake_launch.held
+
+
+@pytest.mark.parametrize("busy_lock", ["setup.lock", "instance.lock"])
+def test_up_refuses_busy_setup_or_live_unhealthy_host_before_mutating(install, fake_launch, monkeypatch, busy_lock):
+    """No dependency/config write or spawn may race another wizard or an unhealthy live host."""
+    monkeypatch.setattr(native, "health", Mock(side_effect=OSError("unconfirmed")))
+    fake_launch.held.add(busy_lock)
+    with pytest.raises(ValueError, match="native_instance_already_running"):
+        native.up(install, NAME)
+    fake_launch.prepare.assert_not_called()
+    fake_launch.host.assert_not_called()
+    fake_launch.popen.assert_not_called()
+    assert fake_launch.held == {busy_lock}
+    fake_launch.held.remove(busy_lock)
+
+
+def test_up_releases_both_locks_after_provisioning_failure(install, fake_launch, monkeypatch):
+    """An installation failure leaves neither ownership lock held and never spawns a child."""
+    monkeypatch.setattr(native, "health", Mock(side_effect=OSError("not started")))
+    fake_launch.prepare.side_effect = RuntimeError("offline provision failure")
+    with pytest.raises(RuntimeError, match="offline provision failure"):
+        native.up(install, NAME)
+    assert not fake_launch.held
+    assert fake_launch.lock_events[-2:] == [("release", "instance.lock"), ("release", "setup.lock")]
+    fake_launch.popen.assert_not_called()
 
 
 def test_up_reuses_authenticated_ready_instance_without_launch(install, fake_launch, monkeypatch):
@@ -423,6 +502,8 @@ def test_up_failure_does_not_kill_or_signal_unknown_process(install, fake_launch
     fake_launch.child.terminate.assert_not_called()
     fake_launch.child.kill.assert_not_called()
     kill.assert_not_called()
+    assert not fake_launch.held
+    assert fake_launch.lock_events[-1] == ("release", "setup.lock")
 
 
 def test_serve_executes_exact_full_host_main_with_dashboard_under_instance_lock(install, monkeypatch):
@@ -778,6 +859,29 @@ def test_real_windows_instance_lock_rejects_second_owner_then_releases(install):
         # Windows byte locks also deny reading the locked byte from another handle.
         assert (install / "run" / "instance.lock").is_file()
     assert (install / "run" / "instance.lock").read_bytes() == b"0"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Native byte-range setup locks require Windows")
+def test_real_windows_setup_lock_is_independent_and_rejects_duplicate_owner(install):
+    """Setup and host ownership are independent, nonblocking, and both release reliably."""
+    with native.instance_lock(install, lock_name="setup.lock"):
+        with native.instance_lock(install):
+            with pytest.raises(ValueError, match="native_instance_already_running"):
+                with native.instance_lock(install, lock_name="setup.lock"):
+                    pytest.fail("a duplicate installer acquired setup ownership")
+    with native.instance_lock(install, lock_name="setup.lock"):
+        pass
+    assert (install / "run" / "setup.lock").read_bytes() == b"0"
+
+
+@pytest.mark.parametrize("lock_name", ["foreign.lock", "../setup.lock", "", "instance.lock/child"])
+def test_instance_lock_refuses_nonallowlisted_names_before_writing(tmp_path, lock_name):
+    """The shared lock helper must not expose arbitrary file creation through its selector."""
+    data = tmp_path / "uncreated"
+    with pytest.raises(ValueError, match="native_invalid_lock_name"):
+        with native.instance_lock(data, lock_name=lock_name):
+            pytest.fail("an untrusted lock path was accepted")
+    assert not data.exists()
 
 
 def test_all_test_helpers_and_cases_have_docstrings():
