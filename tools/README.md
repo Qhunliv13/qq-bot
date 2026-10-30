@@ -4,7 +4,7 @@
 
 ## 完整版可视化部署
 
-- 根目录 [install.cmd](../install.cmd) 现以 `-STA` 默认进入 [windows-native.ps1](windows-native.ps1) 的 `wizard`，**Windows 原生完整版**，无需 WSL / Docker / Node；同一固定 AstrBot 4.28.1 与插件，不是 Lite。详细步骤见 [原生完整部署](../docs/WINDOWS_NATIVE_FULL.md)，Python 3.13 隔离实测已通过完整宿主、面板登录、本地合成模型与生命周期；首次默认下载曾停滞，测试恢复不算默认一键流程通过，真实模型 / QQ 仍未验收。
+- 根目录 [install.cmd](../install.cmd) 现以 `-STA` 默认进入 [windows-native.ps1](windows-native.ps1) 的 `wizard`，**Windows 原生完整版**，无需 WSL / Docker / Node；同一固定 AstrBot 4.28.1 与插件，不是 Lite。详细步骤见 [原生完整部署](../docs/WINDOWS_NATIVE_FULL.md)，Python 3.12 全新私有目录默认完整安装已通过，未预置缓存或修改下载；实际完整宿主、面板登录、本地合成模型、排空 / 重启及 PowerShell 5.1 启停也通过。全新电脑双击图形全流程、缺 Python 时安装、真实模型 / QQ 仍未验收。
 - [native_runtime.py](native_runtime.py) 复用共享设置 / 浏览器向导和完整上游宿主；命令为 `wizard/init/up/doctor/info/status/stop/logs/health/chat`。`logs` 只显示私有路径；`up` 不自动升级；`stop` 经认证端点请求排空，accepted 不证明退出。默认状态在 `%LOCALAPPDATA%\QhunlivBot\Full`，新目录当前用户 SID 私有 ACL、无提权。
 - [native_assets.py](native_assets.py) 将 vendored 核心复制到私有 `runtime/astrbot`，按同版 `pyproject.toml` 完整依赖安装到 `runtime/.venv`；官方 PyPI 同版本预构建 Dashboard 同时核对固定 SHA256 / HTTPS 元数据 / 下载字节，不需 Node，不用 wheel 替换核心，不是作者签名。没有全局 pip 安装；缺 Python 的当前用户 winget 安装必须先明确同意，测试不得执行宿主安装。
 - [native_setup_process.py](native_setup_process.py) 仅监督 Windows 10+ 的有限安装步骤：原子 Windows Job 归属和仅 NUL 句柄继承，超时收回专属后代树，清理未确认则保留重试保护。`BOT_NATIVE_SETUP_TIMEOUT` 默认每步 1800 秒，可设 1–86400；不限制已运行 Bot，不自动重复安装，也不修复网络下载速度。
