@@ -14,8 +14,8 @@ if ! command -v python3 >/dev/null 2>&1; then
     exit 127
 fi
 
-# Only an omitted command defaults to up; all supplied arguments stay unchanged.
+# No command opens novice UI; explicit CLI commands remain unchanged.
 if [ "$#" -eq 0 ]; then
-    set -- up
+    set -- wizard
 fi
 exec python3 "$repo_root/tools/bootstrap.py" "$@"

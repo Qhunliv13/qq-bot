@@ -8,7 +8,9 @@
 bash ./install.sh
 ```
 
-按提示填写**模型地址（Base URL）、模型名称（Model ID）、API Key**，Key 隐藏输入。当前安装路径使用 OpenAI 兼容 HTTP 接口，不是任意供应商的原生协议都支持；模型与工具调用能力仍取决于实际服务。可选 QQ 所有者 ID 可以留空，填了也不会自动登录 QQ。
+无参数默认打开本机浏览器部署向导：**准备好了吗 → 连接模型 → 创建 Bot → 启动与试聊 → 开始使用**。填写服务商给的 Base URL、Model ID 与 API Key（网页密码框）；角色和 QQ 管理员可跳过。启动需主动点击，试聊需明确同意一次费用与工具权限。具体见 [零基础指南](VISUAL_SETUP.md)。显式 `bash ./install.sh up` 保留原终端交互入口。
+
+使用 OpenAI 兼容 HTTP 接口，不是任意供应商原生协议都支持；模型与工具能力仍取决于服务。QQ 需另行连接，不会自动登录。无桌面服务器可用 `bash ./install.sh wizard --no-browser`，通过受信 SSH 隧道将终端显示的临时本机向导端口映射到自己的电脑，保持两端相同端口并打开完整授权链接；不要开放公网监听或分享链接。完整控制台是另一个本机端口，也需要独立隧道；不熟悉隧道时优先在本机桌面部署。
 
 首次构建会下载镜像和依赖、占用时间和磁盘；容器提供 Python 3.12，不需要给宿主执行 `pip install`。安装启动的是完整内嵌 AstrBot 与插件，不是最小替代服务。**不安装 NapCat、不配置 QQ 登录、不接管已有实例**。
 
@@ -139,7 +141,7 @@ bash ./install.sh info --data-dir "$BOT_STATE" --runtime-name "$BOT_NAME"
 
 ## 高级参数与入口约定
 
-根 [`install.sh`](../install.sh) 只是共享 [`bootstrap`](../tools/bootstrap.py) 的薄 Bash 入口：无参数默认 `up`，有参数原样传递，保留调用者工作目录、stdin 与 Python 退出码；包含空格的路径须加引号。使用 Bash 而非 `sh`，显式 `bash` 不依赖 Windows checkout 的 executable bit；脚本保持 UTF-8 与 LF。
+根 [`install.sh`](../install.sh) 只是共享 [`bootstrap`](../tools/bootstrap.py) 的薄 Bash 入口：无参数默认 `wizard` 图形向导，有参数原样传递，保留调用者工作目录、stdin 与 Python 退出码；包含空格的路径须加引号。使用 Bash 而非 `sh`，显式 `bash` 不依赖 Windows checkout 的 executable bit；脚本保持 UTF-8 与 LF。
 
 从其它目录可用绝对路径，如 `bash "/home/me/QQ Bot/install.sh" status --data-dir "$BOT_STATE" --runtime-name "$BOT_NAME"`。相对 `--persona-file ./persona.txt` 按**调用者当前目录**解析，不是仓库目录。带选项时须显式写命令：用 `bash ./install.sh up --data-dir ...`，而不是 `bash ./install.sh --data-dir ...`。
 

@@ -6,10 +6,10 @@ chat **not yet accepted**. No production installation changed.
 
 ## Single implementation
 
-- Linux: `bash ./install.sh` from the checkout; defaults to shared bootstrap `up`.
-- Windows: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1`;
-  defaults to `up` through the WSL launcher, not another installer implementation.
-- Explicit commands are init/doctor/up/info/stop/status/logs/health/chat. Existing private
+- Linux: `bash ./install.sh` from the checkout now defaults to shared bootstrap `wizard`; explicit `up` retains terminal setup.
+- Windows: double-click `install.cmd` shows native novice prompts then opens the same
+  browser wizard through WSL; advanced `install.ps1` still defaults to `up`.
+- Explicit commands are wizard/init/doctor/up/info/stop/status/logs/health/chat. Existing private
   state is validated, not overwritten. Unmanaged directories and project ownership
   conflicts fail closed. Default full tool exposure remains unchanged.
 - `up` waits for Compose health with a 300-second default (configurable 1–3600).
@@ -117,6 +117,47 @@ can still change between initialization and Docker binding. No foreign service i
 stopped or reconfigured. Full regression on the frozen implementation: **4720
 passed, 44 skipped, 348 subtests passed**. Raw plugin requests still use the globally
 configured model; the dashboard's per-conversation model override is not yet honored.
+
+## Zero-code visual onboarding (2026-10-30)
+
+The full installer now provides native Windows welcome/consent/distribution dialogs,
+then a five-step browser wizard. The frontend is a fixed local page, not a modified
+vendored dashboard or an alternate agent runtime. Initial configuration uses the
+same exclusive bootstrap writer; lifecycle actions invoke the same owned CLI;
+explicit consented chat uses the same full local socket path. Existing state is
+immutable to first-run saves, model/QQ checks are not implied by local readiness,
+and closing setup never stops an already-running Bot.
+
+- Real loopback HTTP tests cover exact Host/Origin/Bearer, duplicate headers/JSON,
+  invalid framing/bodies and fixed secret-free errors. Unauthorized small request
+  bodies are safely discarded with a short deadline before 403 to avoid Windows
+  connection resets; rejection never dispatches an action.
+- Real Chromium tests exercise welcome, environment check, model/role save,
+  start/health, one consented chat, failed-input correction, duplicate-submit
+  prevention, console links, explicit credential reveal/30-second hiding,
+  existing-install reopening and mobile no-overflow. Runtime commands/provider
+  responses are synthetic; all browser traffic is restricted to the test listener.
+- A fresh Python child starts the real `bootstrap.py wizard --no-browser` from an
+  unrelated working directory; authorized HTTP works and no state is created
+  before save. Only that owned child is terminated by the test.
+- Real Windows PowerShell 5.1 parsing and mocked WSL/browser boundary tests cover
+  the native UI script's UTF-8 Chinese, consent/cancellation and same-instance
+  forwarding. Actual WSL installation / desktop dialog click-through is not
+  accepted by those mocks. Prerequisite-install progress still uses the system
+  installer / terminal; it is not represented as a fake frozen progress window.
+- Actual WSL Python/Bash stdlib launcher suite: **6 tests passed** for default
+  wizard, explicit up compatibility, exact argv, stdin, cwd and exit codes. No
+  Docker daemon, model, QQ login, production state or installation was touched.
+
+Final frozen-source regression: **4910 passed, 45 skipped, 442 subtests passed**.
+Targeted wizard/bootstrap tests: **145 passed**; scoped Windows tests: **99 passed,
+13 subtests passed**. Static `pyflakes`, Python AST/expanded release validation
+and `git diff --check` passed. The extra Windows skip is the added Linux-only
+explicit-up compatibility case, separately run in the actual WSL suite above.
+
+The user guide is [visual setup](VISUAL_SETUP.md). This acceptance is UI and
+entrypoint coverage, not unmodified Compose networking, paid-model or QQ transport
+acceptance. Those outstanding boundaries remain below.
 
 ## Remaining acceptance
 

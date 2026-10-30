@@ -21,7 +21,7 @@ def main() -> int:
     # Tests intentionally contain fake credential fixtures, not deployable configuration.
     for directory in (ROOT / "plugin", ROOT / "tools"):
         for path in directory.rglob("*"):
-            if path.suffix not in {".py", ".json", ".yaml", ".md"}:
+            if path.suffix not in {".py", ".json", ".yaml", ".md", ".html", ".ps1", ".sh", ".cmd"}:
                 continue
             text = path.read_text(encoding="utf-8")
             if path.suffix == ".py":

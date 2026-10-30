@@ -1,10 +1,12 @@
 # Double-click setup orchestration; the only bot installer remains bootstrap.py.
 # ASCII source intentionally supports Windows PowerShell 5.1 without a UTF-8 BOM.
 [CmdletBinding()]
-param([switch] $CheckOnly)
+param([switch] $CheckOnly, [switch] $Graphical)
 $ErrorActionPreference = 'Stop'
 # Only fixed, stage-specific hints reach the user; raw exceptions may contain secrets.
 $script:SetupFailureHint = 'Check WSL availability with wsl.exe --list --verbose and retry install.cmd.'
+# This adapter defines presentation only; check-only never loads desktop assemblies or opens UI.
+if ($Graphical -and -not $CheckOnly) { . (Join-Path $PSScriptRoot 'windows-setup-ui.ps1') }
 
 function Confirm-SetupAction {
     <#
@@ -14,6 +16,8 @@ function Confirm-SetupAction {
     Boolean. Only y grants consent; empty input or EOF refuses safely.
     #>
     param([string] $Message)
+    # Graphical consent is still explicit; CLI and check-only retain their original semantics.
+    if ($Graphical -and -not $CheckOnly) { return (Confirm-SetupUiAction $Message) }
     # EOF is a refusal, not a null-method exception or implicit install approval.
     $answer = [string] (Read-Host ($Message + ' [y/N]'))
     return ($answer.Trim() -ieq 'y')
@@ -79,6 +83,10 @@ function Invoke-WindowsSetup {
     CheckOnly never installs or launches. Interactive changes require consent;
     a stopped WSL2 distribution is supported without assuming Docker is ready.
     #>
+    # Load WinForms only for an explicit GUI run, never for side-effect-free checks/tests.
+    if ($Graphical -and -not $CheckOnly) {
+        if (-not (Show-SetupUiWelcome)) { return 2 }
+    }
     Write-Host 'Qhunliv Bot - Windows one-click setup'
     Write-Host 'Full runtime; no production migration, QQ login or NapCat installation.'
     Write-Host 'Model API keys are requested privately by the shared installer.'
@@ -106,7 +114,8 @@ function Invoke-WindowsSetup {
         for ($i = 0; $i -lt $distros.Count; $i++) { Write-Host ('{0}. {1}' -f ($i + 1), $distros[$i]) }
         if ($CheckOnly) { Write-Host 'Multiple distributions: interactive selection required.'; return 2 }
         $script:SetupFailureHint = 'WSL selection was interrupted; no prerequisites were changed. Run install.cmd again and select a displayed number, or press Enter / q to cancel.'
-        $distroIndex = Get-SetupDistroIndex (Read-Host 'Select the WSL distribution to use (Enter / q cancels)') $distros.Count
+        if ($Graphical) { $distroIndex = Select-SetupUiDistribution $distros }
+        else { $distroIndex = Get-SetupDistroIndex (Read-Host 'Select the WSL distribution to use (Enter / q cancels)') $distros.Count }
         if ($distroIndex -lt 0) { Write-Host 'Setup cancelled. No prerequisites were changed or runtime started.'; return 2 }
         $distro = $distros[$distroIndex]
     }
@@ -154,11 +163,19 @@ function Invoke-WindowsSetup {
         if ($LASTEXITCODE -ne 0) { Write-Host 'Prerequisites are not ready. Resolve the reported prerequisite and double-click install.cmd again.'; return 2 }
     }
     $script:SetupFailureHint = 'The shared installer did not complete. Check its prerequisite diagnostics and retry install.cmd; no successful deployment is claimed.'
-    Write-Host 'Starting the shared installer. Existing settings are kept; first run asks for model URL, model ID and a hidden API key.'
     $dataDir = $linuxHome.TrimEnd('/') + '/.local/share/qhunliv-bot'
-    & (Join-Path $PSScriptRoot 'windows.ps1') up -Distro $distro -User root -DataDir $dataDir -OpenDashboard | Out-Host
+    if ($Graphical) {
+        # All configuration and full-runtime deployment stays in the shared Python browser wizard.
+        # This branch deliberately never invokes up or asks for a model/API key in the terminal.
+        Write-Host 'Opening the local browser setup wizard; no runtime is started until confirmed there.'
+        & (Join-Path $PSScriptRoot 'windows.ps1') wizard -Distro $distro -User root -DataDir $dataDir | Out-Host
+    } else {
+        # Preserve the existing advanced CLI flow, including -OpenDashboard compatibility.
+        Write-Host 'Starting the shared installer. Existing settings are kept; first run asks for model URL, model ID and a hidden API key.'
+        & (Join-Path $PSScriptRoot 'windows.ps1') up -Distro $distro -User root -DataDir $dataDir -OpenDashboard | Out-Host
+    }
     $launchCode = $LASTEXITCODE
-    if ($launchCode -eq 0) {
+    if ($launchCode -eq 0 -and -not $Graphical) {
         # Display exact same-instance commands; default distro/user may be different.
         # These contain paths only, not credentials, and are never executed here.
         Write-Host 'Manage this same installation from this checkout in PowerShell:'
@@ -171,10 +188,15 @@ function Invoke-WindowsSetup {
 
 # Dot-sourcing exposes pure functions for tests without installing or launching anything.
 if ($MyInvocation.InvocationName -ne '.') {
-    try { exit (Invoke-WindowsSetup) }
+    try {
+        $setupExitCode = Invoke-WindowsSetup
+        if ($Graphical -and -not $CheckOnly) { Show-SetupUiOutcome $setupExitCode }
+        exit $setupExitCode
+    }
     catch {
         # Fixed diagnostics never leak user-supplied key/arguments or raw exceptions.
         [Console]::Error.WriteLine('Setup did not complete. ' + $script:SetupFailureHint)
+        if ($Graphical -and -not $CheckOnly -and (Get-Command Show-SetupUiOutcome -ErrorAction SilentlyContinue)) { Show-SetupUiOutcome 2 }
         exit 2
     }
 }

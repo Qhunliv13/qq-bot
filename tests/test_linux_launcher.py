@@ -87,9 +87,14 @@ class LinuxLauncherTests(unittest.TestCase):
         self.assertEqual(record["cwd"], str(self.caller))
         return record
 
-    def test_default_up_from_other_cwd(self):
-        """Default only an empty argv, using a checkout whose path has spaces."""
+    def test_default_wizard_from_other_cwd(self):
+        """Open visual setup only for empty argv; explicit up still remains available."""
         record = self.run_launcher([])
+        self.assertEqual(record["argv"][1:], ["wizard"])
+
+    def test_explicit_up_is_unchanged(self):
+        """Keep unattended and expert startup compatible with the original verb."""
+        record = self.run_launcher(["up"])
         self.assertEqual(record["argv"][1:], ["up"])
 
     def test_exact_arguments_are_not_evaluated(self):

@@ -4,11 +4,13 @@
 
 ## 最简单：完整解压后双击 install.cmd
 
-1. 下载并**完整解压**仓库 ZIP，双击根目录 [`install.cmd`](../install.cmd)。不用先安装 Windows Python，也不用先打开 PowerShell。
-2. 向导检查 WSL2 和 Linux 发行版：只有一个可用发行版时自动使用，有多个时按编号选；不会把 Docker Desktop 的内部发行版当作安装目标。
-3. 检查 Linux Python 3.10+、Docker 和 Compose v2。缺依赖时先询问，经同意后才尝试从所选发行版配置好的签名 apt 软件源安装和启动 Docker；不替换或升级已有 Docker。
-4. 按提示填写**模型地址、模型名称、API Key**；Key 隐藏输入，可选 QQ 所有者可以留空。当前路径需要 OpenAI 兼容 HTTP 接口，不是任意供应商原生协议都可用。
-5. 等待构建和本地健康检查，成功后向导尝试打开面板。再次双击复用原设置，不重置密码或记忆。
+1. 下载并**完整解压**仓库 ZIP，双击根目录 [`install.cmd`](../install.cmd)。入口以 `-STA -Graphical` 启动 Windows 原生欢迎窗口；即使没有 WSL 或 Python，也会先看到中文环境解释。不用先打开 PowerShell。
+2. 确认开始检查 WSL2 和 Linux 发行版：只有一个可用发行版时自动使用，有多个时在图形下拉列表选择，不在终端输入编号；不会把 Docker Desktop 的内部发行版当作安装目标。
+3. 检查 Linux Python 3.10+、Docker 和 Compose v2。缺依赖时先弹出明确的安装确认，经同意后才复用现有助手，从所选发行版配置好的签名 apt 软件源安装和启动 Docker；不替换或升级已有 Docker。安装可能持续几分钟，此阶段详细进度仍在启动窗口中，请不要关闭。
+4. 环境就绪后自动打开 **Windows 默认浏览器中的本机安装网页**，而不是直接启动 Bot 或在终端询问模型。网页依次为 **准备好了吗 → 连接模型 → 创建 Bot → 启动与试聊 → 开始使用**：检查环境，填写模型地址/名称/Key，可选人格与 QQ 所有者，明确确认保存后，再单独确认启动、检查本地健康及可选试聊。API Key 只填在网页的密码框；可选 QQ 所有者可以留空。当前路径需要 OpenAI 兼容 HTTP 接口，不是任意供应商原生协议都可用。
+5. 只有在网页确认后才构建并启动完整 Bot；以网页实际健康结果为准。试聊需要另行确认，可能产生模型费用并使用已授权的完整工具能力。最后进入完整控制台与 QQ 手动接入指南；填写所有者不等于 QQ 已登录或消息已验收。再次双击会保留原设置，跳过不可覆盖的模型/角色表单进入启动与试聊，不重置密码或记忆。关闭安装向导不代表部署成功，也不会停止已启动的 Bot；停止所选实例需要在网页中另行明确确认。
+
+本机安装网页与 Bot 管理面板是两个不同入口。安装网页使用随机端口的回环地址和临时会话访问令牌；Windows 启动器只接受严格验证的 `127.0.0.1` 地址，并在内存中交给浏览器，不在控制台打印令牌。**不要分享安装网页链接、浏览器地址栏截图或密码。** 网页使用期间请保持启动窗口打开；关闭后该次网页可能不可再用，重新双击即可开启新会话。浏览器无法打开时，修复系统默认浏览器后关闭向导并重试。
 
 没有 WSL 时，可授权向导调用微软 `wsl --install --distribution Ubuntu --no-launch`。硬件虚拟化、Windows 功能安装、系统重启和 Ubuntu 首次初始化，仍可能需要按系统提示完成；**不会强制重启、转换现有 WSL1 或停掉其它发行版**。完成后再次双击继续。
 
@@ -34,7 +36,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 info -Show
 
 显式选项只显示初始面板密码，不显示模型 API Key；已在面板修改的账号/密码以修改后为准，`info` 不重置它们。不要分享密码输出、截图或整个 `settings.json`；该文件还含模型秘密。PowerShell 的 `Bypass` 仅作用于本次进程，不修改系统执行策略。
 
-**管理同一实例要用原参数。** 向导用所选 WSL 的 root 准备依赖和启动，但不改变默认 Linux 用户；默认数据路径仍取该默认用户的 `~/.local/share/qhunliv-bot`，不会自动新建第二套 root 默认配置。若向导打印了发行版、用户和路径，请逐项沿用，例如（替换为向导实际值）：
+**管理同一实例要用原参数。** 向导用所选 WSL 的 root 准备依赖和启动，但不改变默认 Linux 用户；默认数据路径仍取该默认用户的 `~/.local/share/qhunliv-bot`，不会自动新建第二套 root 默认配置。使用高级命令时沿用向导选择的发行版、`-User root` 和原 Linux 数据路径，例如（替换为实际值）：
 
 ```powershell
 .\install.ps1 info -Distro Ubuntu -User root -DataDir '/home/your-user/.local/share/qhunliv-bot'
@@ -97,6 +99,14 @@ Windows PowerShell 5.1 与 PowerShell 7 均支持；从其它目录可用带引�
 
 `-OwnerQQ` 可提供一个或多个自己的 QQ ID（例如 `-OwnerQQ @('123456789','987654321')`）；这只是配置所有者，不启用适配器或登录。`-DataDir` / `-PersonaFile` 只接受**所选 WSL 内可访问的绝对 Linux 路径**，例如 `/home/your-user/bot-state` 与 `/home/your-user/persona.txt`，不接受 Windows 盘符、相对路径、引号/注入字符或 shell 片段。仓库路径由 `wslpath` 转换。
 
+也可以手动打开同一本机浏览器向导，不自动准备依赖：
+
+```powershell
+.\install.ps1 wizard -Distro Ubuntu -User root -DataDir '/home/your-user/.local/share/qhunliv-bot'
+```
+
+该命令在前台保持运行，自动在 Windows 默认浏览器打开本机网页；不会立即启动 Bot。`wizard` 仍由同一个 Python 核心实现，Windows 只转交经过校验的地址。高级 CLI 的无参数 `up`、模型隐藏输入和其他原命令保持不变；只有双击入口默认改为图形向导。
+
 默认私有目录在所选 Linux 用户家目录，建议不要放 `/mnt/c` 等 Windows 挂载盘；初始化使用 Linux 私有目录/文件权限并拒绝陌生非空目录。新实例可显式选新目录和运行名：
 
 ```powershell
@@ -145,6 +155,6 @@ Windows PowerShell 原生管道编码可能不同于 UTF-8，尤其非 ASCII 文
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\windows-setup.ps1 -CheckOnly
 ```
 
-它不安装包、不启动服务、不设置模型。微软 WSL 操作说明可查 [Microsoft WSL commands](https://learn.microsoft.com/en-us/windows/wsl/basic-commands)。
+它不安装包、不启动服务、不设置模型；即使同时传入 `-Graphical`，也不加载桌面界面、不弹窗、不询问安装。微软 WSL 操作说明可查 [Microsoft WSL commands](https://learn.microsoft.com/en-us/windows/wsl/basic-commands)。
 
 离线测试用模拟 WSL 验证两个 PowerShell 入口的 argv 与管道 stdin；已有真实 WSL 只读检查验证过 `wslpath`、`--cd` 和无害 Python stdin 读取，不把这些结果当作镜像构建或模型请求验收。完整构建、本地健康、真实模型与 QQ 登录分别验收，见 [部署验证记录](QUICK_DEPLOY_VERIFICATION.md)。

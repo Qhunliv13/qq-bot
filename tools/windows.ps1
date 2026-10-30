@@ -2,7 +2,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('init', 'doctor', 'up', 'info', 'stop', 'status', 'logs', 'health', 'chat')]
+    [ValidateSet('init', 'doctor', 'up', 'wizard', 'info', 'stop', 'status', 'logs', 'health', 'chat')]
     [string] $Command = 'up',
     [string] $Distro,
     # The double-click wizard uses root for Docker without changing WSL's default user.
@@ -40,6 +40,17 @@ function Assert-SafeArgument {
     if ([string]::IsNullOrWhiteSpace($Value) -or $Value -match '[\x00-\x1f\x7f"''`$;&|<>]') {
         throw "Invalid ${Label}: empty, quoted or shell-special values are not supported."
     }
+}
+
+function Get-SetupBrowserUrl {
+    <# Accept only the exact bootstrap marker and a loopback HTTP URL; never echo its capability token. #>
+    param([string] $Line)
+    # Anchors reject whitespace, extra paths/query parameters, remote hosts and injected commands.
+    $match = [regex]::Match($Line, '\ABOT_SETUP_URL=(http://127\.0\.0\.1:([0-9]{1,5})/#token=[A-Za-z0-9_-]{32,})\z')
+    if (-not $match.Success) { return $null }
+    $port = [int] $match.Groups[2].Value
+    if ($port -lt 1 -or $port -gt 65535) { return $null }
+    return $match.Groups[1].Value
 }
 
 # Keep failure hints fixed: never echo credentials or arbitrary exception text.
@@ -108,6 +119,8 @@ try {
     if ($PSBoundParameters.ContainsKey('WaitTimeout')) {
         $bootstrapArgs += @('--wait-timeout', [string] $WaitTimeout)
     }
+    # The Linux browser cannot reliably open the Windows desktop; consume its marker here.
+    if ($Command -eq 'wizard') { $bootstrapArgs += '--no-browser' }
     if ($NonInteractive) { $bootstrapArgs += '--non-interactive' }
     if ($ShowPassword) { $bootstrapArgs += '--show-password' }
     foreach ($owner in $OwnerQQ) {
@@ -127,7 +140,31 @@ try {
     $launchArgs = @($distroArgs) + @('--cd', $linuxRepo, '--exec', 'python3', 'tools/bootstrap.py') + $bootstrapArgs
     # Script pipeline input is not automatically inherited by a child native command.
     # Forward it explicitly, but preserve the console for hidden interactive key input.
-    if ($hasPipelineInput) { $pipelineInput | & $wsl @launchArgs }
+    if ($Command -eq 'wizard') {
+        # Stream instead of collecting stdout: wizard remains foreground until the user closes it.
+        # Never forward capability markers (including malformed ones) to the console or logs.
+        $browserOpened = $false
+        & $wsl @launchArgs | ForEach-Object {
+            $line = [string] $_
+            if ($line.Contains('BOT_SETUP_URL=')) {
+                $setupUrl = Get-SetupBrowserUrl $line
+                if (-not $setupUrl) {
+                    [Console]::Error.WriteLine('Setup returned an invalid local browser address; no browser was opened.')
+                } elseif (-not $browserOpened) {
+                    try {
+                        Start-Process -FilePath $setupUrl -ErrorAction Stop | Out-Null
+                        $browserOpened = $true
+                        Write-Host 'The local setup page is open in your Windows browser. Keep this window open while using it.'
+                    } catch {
+                        # The exception may contain the capability URL; use only a fixed safe hint.
+                        [Console]::Error.WriteLine('The setup browser could not open. Check your default Windows browser, close setup and retry install.cmd.')
+                    }
+                }
+            } else {
+                Write-Output $line
+            }
+        }
+    } elseif ($hasPipelineInput) { $pipelineInput | & $wsl @launchArgs }
     else { & $wsl @launchArgs }
     if ($null -eq $LASTEXITCODE) { throw 'WSL did not return an exit code.' }
     $launchExitCode = $LASTEXITCODE

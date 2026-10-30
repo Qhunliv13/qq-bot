@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Fresh-install helper: stdlib only, external state, no production migration.
 
-Run ``python tools/bootstrap.py up`` for a first-run model setup and startup.
+Run ``python tools/bootstrap.py wizard`` for visual first-run setup and startup.
+Explicit ``up`` retains the existing terminal-based setup for advanced users.
 ``init`` prepares state without Docker. Docker Desktop (Windows, WSL2/Linux
 containers) or Docker Engine (Linux), with Compose v2 supporting --wait and
 --wait-timeout, is required. ``up`` waits for local runtime health, not model
@@ -137,15 +138,35 @@ def initialize(args, data, name):
     # Interactive mistakes retry only that field; automation never receives a prompt.
     base, key, model, owners = collect_model_inputs(args)
     persona = Path(args.persona_file).read_text(encoding="utf-8") if args.persona_file else ""
+    initialize_settings(data, name, {"base_url": base, "model": model, "api_key": key}, owners, persona)
+
+
+def initialize_settings(data, name, model, owners, persona):
+    """Use one exclusive state writer for CLI and the local visual first-run wizard.
+
+    Validated existing installs are never reconfigured by this first-run path.
+    Browser credentials stay in memory until this same private-file writer runs.
+    """
+    if (data / MARKER).exists():
+        load_install(data, name)
+        return
+    if data.exists() and any(data.iterdir()):
+        raise ValueError("refusing unmanaged nonempty data directory")
     ports = docker_environment(data, {})
     settings = validate_settings({
         "schema_version": 1,
-        "model": {"base_url": base, "model": model, "api_key": key},
+        "model": model,
         "owner_qqs": list(dict.fromkeys(owners)),
         "persona": persona,
         "dashboard_password": secrets.token_urlsafe(24),
         "deployment": {"web_port": int(ports["BOT_WEB_PORT"]), "onebot_port": int(ports["BOT_ONEBOT_PORT"])},
     })
+    # Reject malformed Unicode before creating any directories or partial secret files.
+    # JSON can contain escaped lone surrogates even though the HTTP body is UTF-8.
+    try:
+        json.dumps(settings, ensure_ascii=False).encode("utf-8")
+    except UnicodeError:
+        raise ValueError("settings must contain valid UTF-8 text") from None
     # Check and hold ports before any state is written. Only fresh defaults may
     # move; existing settings and explicit operator choices are never rewritten.
     with first_install_ports(int(ports["BOT_WEB_PORT"]), int(ports["BOT_ONEBOT_PORT"]),
@@ -200,9 +221,10 @@ def docker_environment(data, settings=None):
     return environment
 
 
-def run_docker(command, data):
-    """Run bounded control commands, with inherited logs and no captured secrets."""
-    return subprocess.run(command, check=True, cwd=REPO_ROOT, env=docker_environment(data), shell=False)
+def run_docker(command, data, *, quiet=False):
+    """Run native argv; visual probes discard untrusted tool output, never log it."""
+    options = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL, "timeout": 30} if quiet else {}
+    return subprocess.run(command, check=True, cwd=REPO_ROOT, env=docker_environment(data), shell=False, **options)
 
 
 def check_project_ownership(data, name):
@@ -224,6 +246,13 @@ def doctor(data, name):
         if not (REPO_ROOT / relative).is_file():
             raise ValueError("missing bundled runtime file: " + relative)
     docker_environment(data)  # Fail on invalid ports before probing Docker.
+    check_engine(data)
+    run_docker(compose_command(data, name, "config", "--quiet"), data)
+    print("Prerequisites OK. This is not proof of model connectivity or QQ login.")
+
+
+def check_engine(data, *, quiet=False):
+    """Probe Docker/Compose read-only through the same path for CLI and visual setup."""
     if not shutil.which("docker"):
         raise ValueError(
             "Docker CLI not found. Windows: install/start Docker Desktop with the WSL2 "
@@ -232,10 +261,9 @@ def doctor(data, name):
             "(https://docs.docker.com/engine/install/ and https://docs.docker.com/compose/install/linux/). "
             "Use Compose v2 supporting up --wait --wait-timeout, reopen your terminal, then rerun doctor."
         )
-    run_docker(["docker", "compose", "version"], data)
-    run_docker(["docker", "info", "--format", "{{.ServerVersion}}"], data)
-    run_docker(compose_command(data, name, "config", "--quiet"), data)
-    print("Prerequisites OK. This is not proof of model connectivity or QQ login.")
+    options = {"quiet": True} if quiet else {}
+    run_docker(["docker", "compose", "version"], data, **options)
+    run_docker(["docker", "info", "--format", "{{.ServerVersion}}"], data, **options)
 
 
 def wait_timeout(value):
@@ -248,7 +276,8 @@ def wait_timeout(value):
 def parse_args(argv):
     """Expose setup and same-instance client commands with shared simple flags."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("init", "doctor", "up", "info", "stop", "logs", "status", "health", "chat"))
+    parser.add_argument("command", choices=("wizard", "init", "doctor", "up", "info", "stop", "logs", "status", "health", "chat"))
+    parser.add_argument("--no-browser", action="store_true", help="wizard only: let the Windows launcher open its local UI")
     parser.add_argument("--data-dir", default=str(DEFAULT_DATA_DIR))
     parser.add_argument("--runtime-name", "--name")
     parser.add_argument("--non-interactive", action="store_true")
@@ -263,6 +292,8 @@ def parse_args(argv):
     parser.add_argument("--wait-timeout", type=wait_timeout, default=300, metavar="SECONDS",
                         help="up: wait for local runtime health, 1-3600 seconds (default: 300); not QQ/model verification")
     args = parser.parse_args(argv)
+    if args.no_browser and args.command != "wizard":
+        parser.error("--no-browser is only supported by wizard")
     if args.json and (args.command != "info" or args.show_password):
         parser.error("--json is only supported by info and cannot be combined with --show-password")
     if args.show_password and args.command != "info":
@@ -278,7 +309,13 @@ def main(argv=None):
     try:
         data = data_path(args.data_dir)
         name = runtime_name(args.runtime_name, data)
-        if args.command == "init":
+        if args.command == "wizard":
+            if __package__:
+                from .setup_wizard import serve
+            else:
+                from setup_wizard import serve
+            serve(sys.modules[__name__], data, name, open_browser=not args.no_browser)
+        elif args.command == "init":
             initialize(args, data, name)
         elif args.command == "info":
             install_info(data, name, show_password=args.show_password, as_json=args.json)

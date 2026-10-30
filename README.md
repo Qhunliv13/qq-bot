@@ -2,15 +2,11 @@
 
 开源、可自托管的聊天与工具助手，内嵌固定版本 AstrBot。用自己的模型 API，在本地面板或命令行使用；也可另外连接 QQ。包含持久记忆、工具调用、排队执行与后台任务，无需使用作者的账号、模型供应商或服务器。
 
-## Windows 原生极轻量版（新增）
+## 零基础开始（完整版，启动即有界面）
 
-**不需要 WSL / Docker / pip**：安装 Windows Python 3.10+ 后，解压并双击根目录 [`lite.cmd`](lite.cmd)，填自己的模型地址、模型 ID 与隐藏输入的 Key，即可打开本机网页聊天；运行 `lite.ps1 chat` 可切换命令行。Windows Key 使用当前用户 DPAPI 加密，设置在仓库外；无需管理员权限。
+**Windows：**下载并完整解压仓库 ZIP，双击根目录 [`install.cmd`](install.cmd)。先出现中文图形欢迎与环境确认，环境就绪后自动打开浏览器部署向导。**不需要写代码，不需要理解 Agent，也不需要先安装 Windows Python。**缺少 WSL2 / Docker 时先征求同意；Windows 提示重启或初始化 Ubuntu 时按提示完成，再次双击继续，不会强制重启。
 
-此模式只有文字多轮对话，**不含 QQ、工具、持久记忆与后台任务**，不替代下面的完整版。[原生轻量版说明与小包打包方法](docs/WINDOWS_LITE.md)
-
-## 开始使用（完整版，保留原入口）
-
-**Windows：**下载并完整解压仓库 ZIP，双击根目录 [`install.cmd`](install.cmd)。不用先装 Windows Python；向导检查 WSL2 与 Docker，缺依赖时先征求同意。Windows 提示重启或首次初始化 Ubuntu 时，完成后再次双击继续，不会强制重启。
+浏览器按 **准备好了吗 → 连接模型 → 创建 Bot → 启动与试聊 → 开始使用** 引导。模型填三项；角色和 QQ 管理员可跳过。点击启动后可直接试聊，再选择网页使用或按指南连接 QQ。完整工具、记忆和任务保留，不是 Lite。重复打开进入同一 Bot 管理页，不覆盖原配置。[图文式零基础操作说明](docs/VISUAL_SETUP.md)
 
 **Linux：**准备 Python 3.10+、Docker Engine 与 Compose v2，在仓库根目录运行：
 
@@ -20,17 +16,21 @@ bash ./install.sh
 
 首次构建需网络、时间和磁盘；Linux 入口不自动安装系统依赖。已有 Docker 不替换；Windows Docker Desktop 需开启所选 WSL 发行版的 Integration。[Windows 说明](docs/WINDOWS.md) · [Linux 说明](docs/LINUX.md)
 
+## 可选：Windows 原生极轻量版
+
+只想文字聊天、不需要工具或 QQ 时，可选择 **不需要 WSL / Docker / pip** 的 [原生轻量版](docs/WINDOWS_LITE.md)：安装 Windows Python 3.10+ 后，双击 [lite.cmd](lite.cmd)。密钥由当前用户 DPAPI 加密；**不含 QQ、工具、持久记忆与后台任务**，不替代完整版，也不会被完整向导偷偷选中。
+
 ## 模型设置：只需三项
 
 | 提示项 | 填写内容 |
 |---|---|
 | 模型地址 / Base URL | 你的服务提供的 HTTP(S) API 地址，是否带 `/v1` 按服务说明 |
 | 模型名称 / Model ID | 服务实际支持的模型 ID，不是任意显示名 |
-| API Key | 自己的有效凭据；安装时隐藏输入，不写进命令行或 Git |
+| API Key | 自己的有效凭据；网页密码框输入，不写进命令行、网址或 Git |
 
 当前接入使用 **OpenAI 兼容 HTTP 接口**，不宣称支持所有供应商原生协议。可选 QQ 所有者可以留空；默认没有预置个人身份或强制人设。
 
-初始面板用户名为 **`astrbot`**。启动后使用安装器打印的本机地址（默认 **http://127.0.0.1:6185**；首次端口占用时自动选空闲端口并保存）。用下面的 `info` 查看地址和数据目录；需要初始密码时，Linux 加 `--show-password`、Windows 加 `-ShowPassword`。已在面板改过的登录信息不会被重置；不要分享密码输出、截图或整个 `settings.json`。
+启动后，在向导第五步点击“打开网页聊天”或“打开完整控制台”。初始用户名为 **`astrbot`**；点击“查看初始登录信息”并确认后可临时显示密码，30 秒后自动隐藏。也可用下方高级 `info` 命令查看地址；默认面板端口 6185，首次冲突时选用空闲端口。已在面板改过的密码不会重置；不要分享密码、授权链接、截图或私有配置。
 
 ## 常用操作
 

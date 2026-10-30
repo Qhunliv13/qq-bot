@@ -2,6 +2,12 @@
 
 这些脚本依赖各自指定的环境、源码位置和权限。文件名不证明只读、幂等或适用于任意部署；执行前阅读源码和 `--help`。历史一次性补丁位于 [归档](../trash/20261027-repository-cleanup/tools/ops/)，不作为当前操作入口。
 
+## 完整版可视化部署
+
+- 根目录 [install.cmd](../install.cmd) 使用原生 [Windows 图形提示层](windows-setup-ui.ps1)，环境准备仍复用 [windows-setup.ps1](windows-setup.ps1)，不是第二套安装器。
+- [bootstrap.py](bootstrap.py) 的 `wizard` 命令通过 [setup_wizard.py](setup_wizard.py) 与 [本地固定页面](setup_wizard.html) 提供五步部署 UI；Linux 无参数入口也进入向导。只绑定 loopback，授权片段仅留在标签页内存，修改请求要求精确 Host / Origin / Bearer，状态不导出密钥。
+- 初始化、启停和试聊复用原完整部署核心；试聊需明确确认并可能计费或调用工具，不是只读检查。关闭向导不停止 Bot；重复打开不覆盖配置。见 [零基础指南](../docs/VISUAL_SETUP.md)。
+
 ## Windows 原生轻量入口
 
 - 根目录 [`lite.cmd`](../lite.cmd) / [`lite.ps1`](../lite.ps1) → [`windows-lite.ps1`](windows-lite.ps1) → [`lite_native.py`](lite_native.py)：原生 Python 3.10+ 标准库，无 WSL / Docker / pip；网页与命令行文字对话。首次写仓库外独立设置，Windows Key 用当前用户 DPAPI 加密；实际聊天才请求模型。不接 QQ、不执行工具、不保留磁盘聊天记录。
