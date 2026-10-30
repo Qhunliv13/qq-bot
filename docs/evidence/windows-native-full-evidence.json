@@ -331,6 +331,28 @@
     "full_first_install_accepted": false,
     "default_large_download_stall_resolved": false
   },
+  "equal_prefix_http_comparison": {
+    "job": "pwsh-c7303649a3f84f8d",
+    "artifact": "faiss_cpu-1.15.1-cp313-cp313-win_amd64.whl",
+    "bytes_read_per_mode": 1048576,
+    "ordinary_get_prefix_seconds": 8.812,
+    "single_range_seconds": 2.627,
+    "sequential_64k_ranges_seconds": 16.552,
+    "prefix_sha256_all_modes": "d542af1d8f02b4eaffe01af76b56841bfc755aa482e7aa1892cea5631d1da7be",
+    "single_concurrent_bounded_comparison": true,
+    "permanent_network_root_cause_established": false,
+    "pip_or_proxy_tls_configuration_changed": false,
+    "full_default_download_accepted": false
+  },
+  "fresh_312_default_assets_attempt": {
+    "job": "pwsh-2fdf06574b974ed1",
+    "status": "running_not_accepted",
+    "fresh_private_root": true,
+    "cache_preseeded": false,
+    "transport_patched": false,
+    "model_or_qq_settings_written": false,
+    "full_default_assets_accepted": false
+  },
   "actual_installer_deadline_followup": {
     "job": "pwsh-783b4e4356594f91",
     "scope": "real local installer process tree and private-venv pip check; no network install",
