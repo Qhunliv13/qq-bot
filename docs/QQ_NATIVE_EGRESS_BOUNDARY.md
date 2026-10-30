@@ -259,3 +259,38 @@ This proves the installed WSL kernel can enforce the tested all-drop rules in an
 isolated namespace. It does **not** verify selective public egress, slirp gateway
 aliases, host/LAN exclusion under NAT, controlled DNS or a connected QQ client.
 Those integrated boundaries and real independent-account login remain pending.
+
+## Real slirp lifecycle under nested offline containment
+
+The [explicit slirp fixture](../tests/egress_slirp_posix_check.py) starts inside a
+fresh outer network namespace accepted by the existing only-DOWN-loopback/no-route
+guard. Its inner helper creates a second private namespace and installs the same
+four-rule default-DROP output chain before sending READY. The shared nft validator
+now supports an explicit strictly boolean `require_positive=False` for nonnegative
+counts; its default still requires positive counts. The readiness gate additionally
+requires every packet and byte count to be zero, so this mode is not mistaken for
+observed packet blocking.
+
+Before attaching slirp, the parent verifies its owned helper PID is alive and in
+a namespace distinct from outer, launcher and visible init. The actual fixed
+slirp command enables configure, disable-host-loopback, disable-dns, sandbox and
+seccomp; only ready/exit descriptors are inherited. Both children stay in the
+outer driver's process group. The parent waits for the real readiness byte and
+requires slirp to remain alive. The helper verifies only lo/tap0, the expected
+private IPv4 interface and gateway, no routable IPv6, and unchanged DROP rules.
+A single UDP attempt is then denied with EPERM and increments the IPv4 UDP counter.
+No packet can reach an external network: the slirp process itself is also inside
+the offline outer namespace. This does not test internet forwarding or upstream DNS.
+
+[Actual evidence](qq-slirp-offline-evidence.json): exit 0, bridge started/ready,
+DROP verified before and after attach, IPv4 UDP counter 1 with the other three
+counters 0, and both slirp/helper cleanly retired. The exit pipe EOF terminates
+slirp; each owned child is waited/reaped. A forced kill would not count as clean
+retirement. The [parent ruleset hashes](qq-slirp-host-comparison.json) matched before
+and after. The test neither starts QQ nor supplies account data.
+
+This establishes real bridge lifecycle and deny-all containment, not selective
+public egress or complete native QQ readiness. Host-loopback/DNS-disable flags
+were passed but their protection is not independently proven by this offline
+setup; host/LAN bypass testing under forwarding remains necessary. Exact network
+values are fixed fixture expectations, not runtime QQ endpoint configuration.

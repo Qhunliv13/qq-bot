@@ -57,8 +57,10 @@ def nft_command(executable, *, apply):
     return None if apply else json.loads(result.stdout)
 
 
-def counter_counts(document):
-    """Require the exact table, output hook, four identities and positive counters."""
+def counter_counts(document, *, require_positive=True):
+    """Validate exact DROP identities; nonnegative mode is explicit and strictly bool."""
+    baseline.require(type(require_positive) is bool, "nft_counter_mode")
+    minimum = 1 if require_positive else 0
     baseline.require(type(document) is dict and type(document.get("nftables")) is list,
                      "nft_json")
     tables, chains, rules = [], [], []
@@ -97,8 +99,8 @@ def counter_counts(document):
                          and expressions[3] == {"drop": None}, "nft_rule")
         counter = expressions[2]["counter"]
         baseline.require(type(counter) is dict and set(counter) == {"packets", "bytes"}
-                         and type(counter["packets"]) is int and counter["packets"] >= 1
-                         and type(counter["bytes"]) is int and counter["bytes"] >= 1, "nft_counter")
+                         and type(counter["packets"]) is int and counter["packets"] >= minimum
+                         and type(counter["bytes"]) is int and counter["bytes"] >= minimum, "nft_counter")
         counts[label] = counter["packets"]
     return counts
 

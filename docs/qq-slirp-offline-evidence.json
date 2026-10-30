@@ -1,0 +1,28 @@
+{
+  "exit_code": 0,
+  "fixture_sha256": "ab64d4f064bb1a243e8bbe1012152f5cc005d1daf909ab8481f77bb8912654e2",
+  "observation": {
+    "bridge_ready": true,
+    "bridge_started": true,
+    "helper_retired": true,
+    "kernel_drop_after_bridge": true,
+    "kernel_drop_before_bridge": true,
+    "offline_only": true,
+    "offline_outer": true,
+    "rule_packets": {
+      "dsh_ipv4_tcp": 0,
+      "dsh_ipv4_udp": 1,
+      "dsh_ipv6_tcp": 0,
+      "dsh_ipv6_udp": 0
+    },
+    "schema": 1,
+    "slirp_retired": true,
+    "stage": "complete",
+    "status": "passed",
+    "udp_eperm": true
+  },
+  "offline_only": true,
+  "schema": 1,
+  "status": "passed",
+  "stderr_bytes": 0
+}
