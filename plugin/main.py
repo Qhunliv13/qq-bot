@@ -201,6 +201,13 @@ class HiganPlugin(Star):
         空描述和通用占位描述均需补充，以便按关键词匹配表情包。
         """
         await self._drain_previous_instances()
+        # An uncertain started turn may already have sent or mutated external
+        # state. Recover only never-started queue rows, never auto-replay it.
+        try:
+            from .inbox_runtime import store as inbox_store
+            inbox_store(self, HIGAN_ROOT, recover_started=True)
+        except Exception as exc:
+            logger.error("[higan] pending_inbox_unavailable type=%s", type(exc).__name__)
         missing = [s for s in self.manifest
                    if (s.get("desc") or "").strip() in ("", "表情包")]
         if missing:
@@ -899,9 +906,13 @@ class HiganPlugin(Star):
                 turn.setdefault("_deliveries", []).append(deepcopy(record))
         try:
             if record is None:
-                self._hist().append(group, line)
+                saved = self._hist().append(group, line)
             else:
-                self._hist().append(group, line, record=record)
+                saved = self._hist().append(group, line, record=record)
+            if not isinstance(saved, dict) or not saved.get("persisted"):
+                # Sending already happened. A failed archive write must not retry
+                # the visible send or erase its actual delivery evidence.
+                logger.error("[higan] sent_history_write_unconfirmed retry_send=False")
         except Exception as exc:
             logger.warning("[higan] 已发送回复落盘失败：%s", type(exc).__name__)
         self._last_reply_text = getattr(self, "_last_reply_text", {})
@@ -1303,9 +1314,14 @@ class HiganPlugin(Star):
                 pass
             try:
                 from .message_batch import message_record
-                self._hist().append(group, line, record=message_record(event, text))  # 原生来源落盘
-            except Exception:  # noqa: BLE001
-                pass
+                history_receipt = self._hist().append(group, line, record=message_record(event, text))
+                if not isinstance(history_receipt, dict) or not history_receipt.get("persisted"):
+                    logger.error("[higan] history_write_unconfirmed uncertain=%s",
+                                 bool((history_receipt or {}).get("uncertain", True)))
+            except Exception as exc:
+                # Input can still be journaled below, but no caller may mistake
+                # a failed archive write for confirmed durable history.
+                logger.error("[higan] history_write_failed type=%s", type(exc).__name__)
 
             if source_notice:
                 # Upload metadata is an observation, not a second utterance. The
@@ -1390,8 +1406,24 @@ class HiganPlugin(Star):
             # 停止管线后 RespondStage 不执行，回复需通过 event.send 直接发送。
 
             event.stop_event()
-            self._pending.setdefault(group, []).append(
-                (event, text, bool(images or self._image_refs(event)), bool(_woken_e or _at_me_now), history_snapshot))
+            from .inbox_runtime import admit as inbox_admit, recover as inbox_recover
+            restored_scopes = inbox_recover(self, HIGAN_ROOT, event)
+            receipt = inbox_admit(self, HIGAN_ROOT, str(group), event, text,
+                                  bool(images or self._image_refs(event)),
+                                  bool(_woken_e or _at_me_now), history_snapshot)
+            if receipt.get("status") == "unsupported":
+                logger.warning("[higan] intake_durability_unavailable reason=%s", receipt.get("reason"))
+            if not receipt.get("duplicate"):
+                self._pending.setdefault(group, []).append(
+                    (event, text, bool(images or self._image_refs(event)), bool(_woken_e or _at_me_now), history_snapshot))
+            for destination in restored_scopes:
+                if destination == group or self._busy.get(destination):
+                    continue
+                self._busy[destination] = True
+                self._scope_workers = getattr(self, "_scope_workers", {})
+                self._scope_workers[destination] = self._start_background(self._drain_pending(destination))
+            if receipt.get("duplicate") and not self._pending.get(group):
+                return
             if not hasattr(self, "_scope_workers"):
                 self._scope_workers = {}
             if self._busy.get(group):
@@ -1435,15 +1467,37 @@ class HiganPlugin(Star):
                     # No await separates the snapshot from detaching its source list:
                     # arrivals during execution therefore belong to the next turn.
                     entries = list(self._pending.get(group, []))
-                    # Each WebChat request owns a distinct response queue. Never
-                    # merge its reply into another request's batch anchor.
-                    if entries and getattr(entries[0][0], "get_platform_name", lambda: "")() == "webchat":
-                        self._pending[group] = entries[1:]
-                        entries = entries[:1]
-                    else:
-                        self._pending[group] = []
+                    from .inbox_runtime import ids as inbox_ids, finish as inbox_finish, release as inbox_release
+                    queue = getattr(self, "_durable_inbox", None)
+                    rejected = [entry for entry in entries if not self._policy_allows(entry[0], group)]
+                    if queue is not None and rejected:
+                        try:
+                            if not queue.discard(inbox_ids(self, rejected), reason="policy_rejected"):
+                                raise RuntimeError("intake_discard_unconfirmed")
+                        finally:
+                            inbox_release(self, rejected)
+                    # Filter policy before measuring; never discard allowed later
+                    # inputs merely because the current batch exceeds context size.
                     entries = [entry for entry in entries if self._policy_allows(entry[0], group)]
                     if not entries:
+                        self._pending[group] = []
+                        continue
+                    # Each WebChat request owns a distinct live response queue.
+                    webchat = getattr(entries[0][0], "get_platform_name", lambda: "")() == "webchat"
+                    from .intake_batch import split_pending
+                    partition = split_pending(self, group, entries[:1] if webchat else entries)
+                    selected = partition["selected"]
+                    self._pending[group] = entries[len(selected):]
+                    entries = selected
+                    if partition["oversized"]:
+                        if queue is not None:
+                            try:
+                                if not queue.discard(inbox_ids(self, entries), reason="input_oversized"):
+                                    raise RuntimeError("intake_discard_unconfirmed")
+                            finally:
+                                inbox_release(self, entries)
+                        logger.warning("[higan] intake_archive_only reason=current_input_exceeds_budget chars=%d max=%d",
+                                       partition["fixed_chars"], partition["max_chars"])
                         continue
                     from .message_batch import collect_batch
                     batch = collect_batch(entries)
@@ -1462,10 +1516,26 @@ class HiganPlugin(Star):
                     logger.info("[higan] reply_phase phase=lock_wait seconds=%.3f batch_size=%d",
                                 lock_wait, len(entries))
                     try:
+                        identifiers = inbox_ids(self, entries)
+                        if queue is not None and identifiers and not queue.claim(identifiers):
+                            inbox_release(self, entries)
+                            logger.error("[higan] intake_claim_failed no_model_started=True")
+                            continue
                         await self._handle_one(ev, group, txt, batch["has_image"], batch["woken"])
+                        inbox_finish(self, entries, "completed")
                     except Exception as exc:
+                        # Running work may already have external effects: mark
+                        # failure but never move it back to pending for auto-retry.
+                        try:
+                            inbox_finish(self, entries, "failed")
+                        except Exception as storage_exc:
+                            logger.error("[higan] intake_finish_unconfirmed type=%s", type(storage_exc).__name__)
                         logger.error("[higan] 群 %s 合批处理失败：%s", group, type(exc).__name__)
                     finally:
+                        # A claim can fail before any side effect. Release only
+                        # the local mapping; the next authentic account input
+                        # can recover DB-confirmed pending rows, never running.
+                        inbox_release(self, entries)
                         logger.info("[higan] reply_phase phase=turn seconds=%.3f batch_size=%d",
                                     time.monotonic() - turn_started, len(entries))
                         self._turn_context.pop(group, None)
@@ -2052,17 +2122,10 @@ class HiganPlugin(Star):
         return ""
 
     def _hist(self):
-        """懒加载历史记录器（按路径 ）。"""
-        if getattr(self, "_hist_obj", None) is not None:
-            return self._hist_obj
-        import importlib.util as _ilu
-        from pathlib import Path as _Path
-
-        path = _Path(__file__).resolve().parent / "history.py"
-        spec = _ilu.spec_from_file_location(__package__ + ".history", str(path))
-        mod = _ilu.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        self._hist_obj = mod.Recorder(str(Path(HIGAN_ROOT) / "history"))
+        """Reuse one module and its process lock across recorder/plugin instances."""
+        if getattr(self, "_hist_obj", None) is None:
+            from .history import Recorder
+            self._hist_obj = Recorder(str(Path(HIGAN_ROOT) / "history"))
         return self._hist_obj
 
     async def _forward_to_text(self, event) -> str:

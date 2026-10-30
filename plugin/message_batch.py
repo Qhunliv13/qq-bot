@@ -206,6 +206,13 @@ def message_record(event, text: str, who: str = "") -> dict:
     authorizes at most one exact ``@display_name(id)`` token; quoted Ats do not.
     ``who`` is only a fallback display label, never a source of IDs or privileges.
     """
+    # Only the validated native queue adapter may supply an immutable persisted
+    # record. A random attribute on user/framework objects grants no provenance.
+    if getattr(event, "restored_input", False):
+        from .pending_inbox import RestoredEvent
+        if isinstance(event, RestoredEvent):
+            from copy import deepcopy
+            return deepcopy(event.stored_message_record)
     obj = _field(event, "message_obj")
     sender_id, sender_name = _call(event, "get_sender_id"), _call(event, "get_sender_name")
     sender = _identity(_field(obj, "sender"), sender_id, sender_name or who)

@@ -8,6 +8,7 @@
 |---|---|
 | 一次看清整个系统的架构、模块职责与当前状态 | [系统总览](SYSTEM_ARCHITECTURE_STATUS_20261030.md) |
 | 查看未完成能力、积压丢失边界与60/40实测 | [完整性与保留检查](RETENTION_AND_COMPLETENESS_20261030.md) |
+| 查看待处理恢复、超长批次拆分与历史写盘确认 | [可靠消息入口](RELIABLE_INTAKE.md) |
 | 完全不懂代码，按图形界面一步一步创建 Bot | [零基础可视化部署](VISUAL_SETUP.md) |
 | 安装、找面板密码、排查常见错误 | [快速开始](QUICKSTART.md) |
 | 不用 WSL / Docker 的 Windows 原生网页和命令行 | [原生极轻量版](WINDOWS_LITE.md)，双击 `lite.cmd` |

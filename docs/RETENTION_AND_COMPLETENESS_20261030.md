@@ -54,11 +54,11 @@ A = max(0, 最大上下文字符 - 实际固定内容字符 - 2048)
 
 **没有因为“慢了”自动按数量丢消息或按消息年龄过期的代码**；但这不等于无限可靠消息系统：
 
-- 待处理queue仅在内存，进程崩溃/强杀会丢待处理机会；此前成功写入的原始history应仍在盘，但没有持久队列自动重放保证。
-- 一批当前输入本身超过最大长度时，现有fail-closed停止该轮模型请求，不暗删输入以伪称处理过；缺少按长度拆分巨大当前批次和重新入队机制。这是未完成边界，不冒充60/40已修复。
+- 后续可靠性优化已为可验证的原生QQ输入加入SQLite持久待处理箱：未开始项在下一条相同平台/账号的真实输入到达时恢复，保持顺序；已开始但结果未知项启动时隔离为uncertain，**不自动重试模型/工具/发消息**。WebChat/local的瞬时回复能力不伪造重建，不承诺崩溃恢复；无有效原生ID/路由、敏感URL正文或超过2MiB载荷会明确报告unsupported并仅保留当前活处理路径。首次落盘前崩溃仍可能丢处理机会。
+- 取得执行锁后按真实system/schema/当前消息序列化长度拆出最大有序完整前缀，其余仍排队。不按条数、不截消息。单条本身仍超长时明确archive-only并blocked，继续处理后面的正常消息；不假称该单条已执行或无损摘要。
 - 出队时策略复核会排除已不允许回复的消息；这是拒绝回复，不是删除归档。
 - 图片每次实际送模型最多3张像素；更多图片的来源记录不等于所有原像素均已看到。大量图片不能只用文字预算推断无损。
-- 原始Recorder写入为best-effort；IO失败会被吞，现阶段无法给出“任意故障下实际丢失严格为0”的承诺。没有生产磁盘与真实记录核验授权，本次不扫描账号目录。
+- 原始Recorder现提供append_checked与flush/fsync成功回执，兼容append也返回persisted/duplicate/uncertain；入口和发送后会明确记录未确认落盘，不因发送历史写失败重复发送。损坏/半行归档拒绝追加且保留原字节；无原生ID不按正文去重。仍无法给出“任意故障下实际丢失严格为0”的承诺；多进程JSONL写入尚不承诺事务化。没有生产磁盘与真实记录核验授权，本次不扫描账号目录。
 
 回归：[batch_flow](../tests/test_batch_flow.py)、[真实比例与积压测试](../tests/test_context_memory_flow.py)、[长度保留测试](../tests/test_context_retention_policy.py)。
 
@@ -68,8 +68,8 @@ A = max(0, 最大上下文字符 - 实际固定内容字符 - 2048)
 |---|---|---|---|
 | 高 | 原生独立QQ后端尚未完成 | [native_backend.js](../qq_transport/native_backend.js)的 `getSnapshot`仍 `independent_backend_ready:false`；动作声明/离线机制不等于真实native handler、完整登录/收发 | 如实保留未完成，不登录/替换现有OneBot |
 | 高 | 全程上下文长度治理未完成 | 首次历史装配有长度预算；后续native工具transcript、图片data URL、动态schema仍可增长 | 不破坏tool-call配对强截；不宣称精确token或全程预算已完成 |
-| 高 | 持久队列与超大当前批次拆分未实现 | queue在内存；超长固定当前输入可能使本轮直接停止模型 | 标为待完善，不假称归档等于重新排队 |
-| 高 | 通用历史归档写失败缺少可靠回执 | [history.py](../plugin/history.py)的 `Recorder.append`吞IO异常，旧显示line最多2000字符，typed record独立保全文 | 说明不能保证故障零丢失；未改旧归档语义/未扫描私有数据 |
+| 高，已改善 | 原生持久队列与批次长度拆分 | [pending_inbox.py](../plugin/pending_inbox.py)/[inbox_runtime.py](../plugin/inbox_runtime.py)持久pending、claim-before-work与uncertain隔离；[intake_batch.py](../plugin/intake_batch.py)有序完整前缀拆分 | 可恢复未开始的有效原生输入；瞬时WebChat、unsupported与单条超大仍有边界，不承诺exactly-once外部效果 |
+| 高，已改善 | 通用历史归档写失败回执 | [history.py](../plugin/history.py)提供checked/fsync/幂等原生ID、兼容失败receipt，入口明确日志；旧line仍最多2000字符，typed record独立保全文 | 不吞成成功；损坏文件原样保留并拒写；多进程JSONL事务/磁盘耗尽自动恢复仍未解决 |
 | 高 | 工具授权不是统一管理员门禁 | [main.py](../plugin/main.py)普通group_policy、任务按ID管理、VM/workspace与owner-only申请是不同分支 | 审计报告，不擅自更改用户权限政策 |
 | 中 | VM/浏览器/邮箱依赖外部桥 | [_vm_tool](../plugin/main.py)请求独立VM HTTP bridge；[compose](../deploy/compose.yaml)不部署该服务 | 工具目录存在不等于外部服务已就绪 |
 | 中 | 可视拖拽/轨迹执行后端默认未安装 | [main.py](../plugin/main.py) `_vm_pointer_executor=None`；[vm_pointer_runtime.py](../plugin/vm_pointer_runtime.py)依赖显式executor | 保留安全拒绝，不用错误fallback绕过验证 |
@@ -93,10 +93,10 @@ A = max(0, 最大上下文字符 - 实际固定内容字符 - 2048)
 
 本轮不把这些既有安全/容量边界统统改成无限保留；需要分别确定用途、磁盘政策和外部依赖后再做后续改造。
 
-## 七、本轮验证与顺带修复
+## 七、60/40首轮验证与顺带修复（08c9067）
 
 - [保留比例测试](../tests/test_context_retention_policy.py)、[native接线与积压](../tests/test_context_memory_flow.py)、[摘要边界](../tests/test_context_summary.py)、[共享群链路](../tests/test_unified_group_flow.py)收尾定向 **90 passed**；现有合批/主动/本地/任务/主动@链路另 **66 passed**。
-- 成功的80条当前输入积压测试保留全部80个原生ID/正文，历史摘要后160条原始磁盘记录不变；超出60k总预算的80条大输入则不请求模型、原始记录仍在，但没有自动拆分继续处理，诚实标为缺口。
+- 60/40原始预算测试保留80条当前输入与160条原始档案；直接调用模型时不可约的超长当前批次仍安全拒绝。后续[长度拆分链路](../tests/test_intake_split_flow.py)覆盖真实入口80条×900字符在60k预算下拆多个有序批次，以及单条超大明确归档后继续正常消息；[恢复接线](../tests/test_inbox_runtime_flow.py)覆盖未开始重启恢复、已开始隔离、重复投递、账号隔离、策略复核和落盘失败。
 - 全仓过程中真实暴露[轻量网页](../tools/lite_web.py)拒绝401/403/413/415等请求时未读body即关连接，在Windows可能产生连接中断而不是稳定错误响应。本轮以唯一入口有界丢弃拒绝请求body修复；只读唯一明确的ASCII Content-Length、拒绝TE/重复/巨大长度、最多262144字节和0.5秒绝对期限，不解析JSON、不执行模型、不放宽有效JSON131072字节门槛。
 - 该HTTP修复的[轻量网页测试](../tests/test_lite_web.py)与原生进程回归 **28 passed、99 subtests passed**，覆盖未提交body不挂起、无权/格式错误不调用模型、巨大/歧义长度不读取、超时恢复。Lite仍是与完整Bot分离的无持久记忆文字入口，60/40策略不冒充已应用到Lite。
 - 静态检查pyflakes无错误；发布扫描149文件failures为空；文档目标与Python语法额外校验。最终冻结代码全仓回归为 **5056 passed、45 skipped、460 subtests passed**（321.11秒）；pyflakes、发布149文件扫描与差异检查均通过。发布提交以交付消息为准，不将离线合成测试写成真实QQ/模型/VM或生产通过。

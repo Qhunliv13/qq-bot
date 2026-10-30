@@ -84,7 +84,10 @@ Linux install.sh ─────────────────────
 | [runtime_paths.py](../plugin/runtime_paths.py#L7-L22) | 唯一 `data_root()`；明确绝对 `HIGAN_ROOT`，否则当前账号 home/higan；不自动创建、迁移或接管别人目录。 |
 | [runtime_settings.py](../plugin/runtime_settings.py#L8-L132) | 外部 schema_version=1 设置、owners、persona、成员观察、OneBot、VM bridge、tool_profile。缺失与错误配置分开处理。 |
 | [local_runtime.py](../plugin/local_runtime.py#L118-L243) | 同插件 root-only Linux Unix socket；内核 `SO_PEERCRED` 验 UID0 才读字节，固定本地 route；仅 health/history/run，不允许 RPC 自选身份、scope或QQ目标。 |
-| [message_batch.py](../plugin/message_batch.py#L15-L33) | `PendingMessage`、真实 sender/message/mentions/quote/native evidence 记录与 `collect_batch`；scope 等锁时合批，到执行时冻结本轮输入。 |
+| [message_batch.py](../plugin/message_batch.py#L15-L33) | `PendingMessage`、真实 sender/message/mentions/quote/native evidence 记录与 `collect_batch`；scope 等锁时合批，到执行时冻结本轮输入。恢复记录仅接受经过校验的RestoredEvent类型，保留原生来源而非信任任意属性。 |
+| [intake_batch.py](../plugin/intake_batch.py) | 按实际system/schema/当前消息上下文长度二分最大完整有序前缀，未选输入仍排队；单条超大明确archive-only，不截正文。 |
+| [pending_inbox.py](../plugin/pending_inbox.py) | SQLite持久原生输入、exact scope/platform/account/native ID幂等、原子claim与状态终结、启动running→uncertain；只有pending可恢复，不自动重放未知外部效果。 |
+| [inbox_runtime.py](../plugin/inbox_runtime.py) | main的唯一持久队列装配：真实账号输入触发恢复、当前策略复核前保留来源、执行前claim、完成/拒绝清理映射；瞬时WebChat/local不伪造恢复能力。 |
 | [group_policy.py](../plugin/group_policy.py#L83-L178) | `groups.json` 规范化读写：muted/mention_only/probability/poll；坏文件 fail closed，原子私有临时文件+fsync；线程内共享锁，不是跨进程全局锁。 |
 | [task_event.py](../plugin/task_event.py#L5-L118) | 持久任务适配成非人类事件；严格保留已保存 origin/scope，复用 AstrBot OneBot serializer，不能冒充 owner；`_TaskAPI` 只拆已确认 envelope。 |
 | [autonomous_turn.py](../plugin/autonomous_turn.py#L15-L49) | `AutonomyEvent` + `run_turn`；内部机会不是用户命令，不伪造 sender/@，复查策略与已观察 origin，使用同一执行锁和发布边界。 |
@@ -99,7 +102,7 @@ Linux install.sh ─────────────────────
 | [image_transcript.py](../plugin/image_transcript.py#L1-L11) | 冻结初始图片，工具结果之后追加图片观察，不打断 assistant/tool_call_id 配对。 |
 | [conversation_context.py](../plugin/conversation_context.py#L1-L16) | 结构化 context builder + system protocol；人格与不可信历史/观察分层。通过 `memory.context_summary` 独立字段注入摘要，仍是非权威数据。 |
 | [conversation_state.py](../plugin/conversation_state.py#L1-L62) | 从已供给证据生成无正文的时序/来源状态；不靠语义猜测权限或“必须回复”。 |
-| [history.py](../plugin/history.py#L1-L10) | `Recorder` 按 scope JSONL 追加显示行及完整 record；档案、快照、来源和关键词检索。主循环读取完整档案后按长度裁选；原始档案不按条数清理。 |
+| [history.py](../plugin/history.py#L1-L10) | `Recorder`按scope JSONL追加预览与完整record；checked+flush/fsync明确回执，原生ID按scope/kind/source幂等、坏档案拒写且不覆盖，进程内锁/缓存。主循环读完整档案按长度选；不按条数清理，不声称多进程JSONL事务。 |
 | [history_window.py](../plugin/history_window.py) | 内存历史 append/snapshot 默认按序列化长度，不按消息数；显式旧 capacity/minimum 参数仅兼容非主链路调用，实际聊天传 max_chars。 |
 | [cross_scope_memory.py](../plugin/cross_scope_memory.py) | 公共群历史的只读共享视图、显式可见性、跨群检索、来源去重/排序；私聊不能并入公共群池。实际群聊走 max_chars 路径，完整取合格归档再按长度选择；旧 limit/count API 仅兼容显式检索/探针，不再驱动聊天窗口。 |
 | [memory.py](../plugin/memory.py#L69-L100) | schema v1 JSON 的 `Memory`，全局事实/按scope摘要、精确ID、source/categories/images/structure和checked持久化；兼容导出唯一 WakePersonFacts；摘要使用 checked=True 保存且失败回滚内存，正式调用由 context_summary.prepare 负责。 |
@@ -182,7 +185,7 @@ Linux install.sh ─────────────────────
 3. scope：群为实际群号；私聊为 `private:<sender>`；WebChat用真实origin的SHA256构造独立private scope，避免不同聊天窗口混线。本地用固定 `local:operator`，不是伪造QQ号。
 4. 结构化非文本/合并转发/引用/附件来源进入本轮证据。可收集接收图片到sticker库；这也意味着启用QQ后，图片收集是实际持久化行为，需要运营者明确数据保留范围。
 5. slash输入停止框架默认链，不进入默认模型/问候；常规消息写档案，策略不准入也可保留历史。群策略控制的是处理/发送，不应误认为自动删除或隐私隔离。
-6. 每scope单worker；先取全实例FIFO execution_lock，再detach当前队列形成冻结batch。等锁期间新到的QQ消息可合批；执行中消息进入下一轮。WebChat每request有自己queue，只逐请求处理，防把响应发到别的请求。
+6. 可验证的原生QQ先进入SQLite持久pending，同scope/platform/self/native ID幂等；每scope单worker，取得全实例FIFO execution_lock后按实际长度选完整有序前缀、claim成功才进入执行，其余保留待处理。下条真实同账号事件可恢复未开始项；启动running转uncertain而不自动重放。WebChat/local为活请求能力，不承诺崩溃恢复；WebChat逐请求避免错投回复。
 7. `_handle_one` 复查策略/概率/interval，进 `_decide_tools_first`。模型是否静默由协议决定，不保证每条消息都回答。
 8. 每个工具通过 `_execute_tool`/`_dispatch_tool` 对接原有模块。返回观察写archive并配对进入transcript；截图通常只供模型看，不自动发布。
 9. final envelope 经 `decode_reply` / `final_publication`，合法body/引用才进 `_send`。真正产生公开回执后才写assistant_delivery记录。中途 `reply_now` 使用同一sender，不建立第二种发送语义。
@@ -278,7 +281,7 @@ Linux install.sh ─────────────────────
 - `task_add`要求真实origin并强制destination=current scope；但task_update/status操作按全局task ID/title走tasks API，没有与plan同样统一scope检查；task_list还能显式传scope。模型不应因看到任意ID就视为有授权，代码现状也需在后续权限审计明确处理。
 - workspace和一般VM工具没有普遍owner-only前置门禁。它们受调用入口和VM账号权限约束，**不是沙箱**；`vm_exec`/browser eval具广泛能力。不能把视觉点击ticket描述为整体代码执行权限系统。
 - 转发源group callback主要验证事件存在和正数字group，native读取还要核验来源；这是实现策略，不是“所有跨群转发只有owner”。公共群历史是设计为共享的，不适用于私密群默认隔离承诺。
-- 部分legacy读取/写入是best-effort，错误可能只log或返回空；例如Recorder.append和Memory.load。原子文件替换防半写，不等于多实例并发事务；GroupPolicyStore/AutonomousController为进程内锁。不要声称多个完整Bot可无条件共享同一状态目录。
+- 部分legacy读取仍best-effort，例如Memory.load与history读取可返回空；Recorder.append现返回明确persisted/duplicate/uncertain回执，append_checked损坏/IO错误会抛受控异常，入口和发送后检查结果。历史写入只承诺进程内锁，不等于跨进程事务；GroupPolicyStore/AutonomousController也是进程内锁。持久pending的SQLite事务只保护自身，不使多个完整Bot可无条件共享全部状态目录。
 
 以上是源代码状态说明，不对生产真实权限或外部服务ACL作保证；本轮未修改这些边界。
 
@@ -303,7 +306,8 @@ Linux install.sh ─────────────────────
 | `groups.json` | 已知：mention_only/muted列表、poll_minutes/reply_pct map，兼容wake相关extras；群ID正ASCII数值。 | GroupPolicyStore保留extras，私有temp+replace+fsync，进程锁；wake_persons 为按group/scope到QQ列表的配置映射，wake_person_conf 保存按人的回复设置；磁盘观察独立见第13节，不把成员配置与观察库混合。 |
 | `memory/memory.json` | version=1、global={summary,facts,next_fact_id等}、scopes={scope:{summary,updated_at,turns…}}；fact有id/text/at/source_scope/source/categories/images/structure。 | checked写原子且fsync；事实保留来源与旧未知标签兼容。摘要 scope 块增加 context_compaction 的 covered_rows/covered_sha256/partial_chars/partial_sha256；仅长度溢出触发，计数仅作精确续写游标不是保留上限。 |
 | `memory/wake_persons.json` | 每人事实/观察的独立持久库，脱离global facts。 | version=2，persons[QQ] 为记录数组；新增 kind/source/稳定 w-ID。真实消息摄取在回复概率前；原子保存/损坏拒写/同进程锁，旧未知来源不伪造 scope。 |
-| `history/<sanitized-scope>.jsonl` | 每行ts、line、可选完整record；数字group文件用于群发现，private scope被sanitize为filename。 | append档案与模型context不是同一保留政策；line为最多2000字符的兼容显示预览，独立record保留完整原始元数据；上下文选择按第13节长度预算并摘要，不按line条数淘汰档案。sanitized key截断可能碰撞，不能推广成通用账户隔离协议。 |
+| `history/<sanitized-scope>.jsonl` | 每行ts、line、scope、可选完整record；旧行无scope保留；数字group文件用于群发现，private scope被sanitize为filename。 | flush/fsync确认后返回成功，原生ID按精确scope/kind/source幂等，坏档案拒写不覆盖；line预览最多2000字符、record完整，不按条数删。sanitized key截断仍可能碰撞，不能推广通用账户隔离。 |
+| `pending_inbox.sqlite3` | 原生QQ输入、平台/账号/原生ID、投影附件与pending/running/uncertain/completed/failed/blocked状态。 | SQLite EXTRA同步/原子claim，未开始可恢复，启动未知执行隔离不重放；校验scope/account后用现有TaskEvent发送器。不存角色/凭据/raw payload；2MiB整项拒绝，无自动清理，终态保留防重。checksum只防损坏不防有本地写权限的攻击者。 |
 | `tool_observations/<sha256-scope>.jsonl` | id/timestamp/status/question/tool_name/arguments/result，有界JSON及redact。 | 默认每scope100记录；结果4000、prompt16000、record12000字符；线程锁+原子compact，非事实库。 |
 | `tasks/tasks.json`、`.lock` | JSON任务数组：id/title/goal/brief/resume_prompt/scope/origin/status/interval/repeat/cadence/deadline/execution_state/claim/plan/outcome。 | POSIX跨进程flock；Windows仅线程锁；terminal可在总量压力回收，但running claim不回收重试。 |
 | `autonomy.json` | enabled/interval_seconds/scopes/origins/last_run/poll_last/wake_slots/next_checks/pending_events/notifications_seen。 | replace+fsync，进程内锁；seen通知持久去重，不自动把旧机会当新命令。 |
