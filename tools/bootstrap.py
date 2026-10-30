@@ -13,7 +13,6 @@ later explicit environment overrides are temporary.
 """
 
 import argparse
-import getpass
 import hashlib
 import json
 import os
@@ -23,7 +22,17 @@ import secrets
 import shutil
 import subprocess
 import sys
-from urllib.parse import urlsplit
+# Direct script execution and source-package imports share the same setup helpers.
+if __package__:
+    from .setup_inputs import collect_model_inputs, validate_model_field, validate_owner_ids
+    from .setup_ports import first_install_ports
+else:
+    try:
+        from setup_inputs import collect_model_inputs, validate_model_field, validate_owner_ids
+        from setup_ports import first_install_ports
+    except ModuleNotFoundError:
+        from tools.setup_inputs import collect_model_inputs, validate_model_field, validate_owner_ids
+        from tools.setup_ports import first_install_ports
 
 # Never infer state from a production checkout or legacy /root/higan directory.
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -57,24 +66,8 @@ def validate_settings(settings):
     if not isinstance(model, dict):
         raise ValueError("settings.model must be an object")
     for field in ("base_url", "model", "api_key"):
-        value = model.get(field)
-        if not isinstance(value, str) or not value.strip() or any(ord(c) < 32 for c in value):
-            raise ValueError("model " + field + " must be nonempty and contain no control characters")
-    try:
-        url = urlsplit(model["base_url"])
-        valid = url.scheme in ("https", "http") and bool(url.hostname) and not (
-            url.username or url.password or url.query or url.fragment
-        )
-        url.port  # Reject malformed ports before a runtime is built.
-    except ValueError:
-        valid = False
-    if not valid:
-        raise ValueError("model base URL must be http(s), without credentials, query or fragment")
-    owners = settings.get("owner_qqs")
-    if not isinstance(owners, list) or any(
-        not isinstance(owner, str) or not re.fullmatch(r"[0-9]{5,20}", owner) for owner in owners
-    ):
-        raise ValueError("owner QQs must be 5-20 ASCII digits")
+        validate_model_field(field, model.get(field))
+    validate_owner_ids(settings.get("owner_qqs"))
     if not isinstance(settings.get("persona"), str):
         raise ValueError("persona must be text")
     if not isinstance(settings.get("dashboard_password"), str) or len(settings["dashboard_password"]) < 16:
@@ -141,18 +134,8 @@ def initialize(args, data, name):
         return
     if data.exists() and any(data.iterdir()):
         raise ValueError("refusing unmanaged nonempty data directory; choose a NEW empty directory; no migration is performed")
-    key = os.environ.get(args.api_key_env, "") if args.api_key_env else ""
-    base = args.model_base or ""
-    model = args.model or ""
-    owners = args.owner_qq or []
-    if not args.non_interactive:
-        # EOF is handled by main, so piped input cannot silently create placeholders.
-        base = base or input("OpenAI-compatible model base URL (include /v1 if required): ").strip()
-        model = model or input("Model ID: ").strip()
-        key = key or getpass.getpass("Model API key (hidden): ")
-        if not owners:
-            owners = input("Owner QQ IDs, comma-separated (empty disables QQ owner access): ").strip().split(",")
-            owners = [owner.strip() for owner in owners if owner.strip()]
+    # Interactive mistakes retry only that field; automation never receives a prompt.
+    base, key, model, owners = collect_model_inputs(args)
     persona = Path(args.persona_file).read_text(encoding="utf-8") if args.persona_file else ""
     ports = docker_environment(data, {})
     settings = validate_settings({
@@ -163,16 +146,23 @@ def initialize(args, data, name):
         "dashboard_password": secrets.token_urlsafe(24),
         "deployment": {"web_port": int(ports["BOT_WEB_PORT"]), "onebot_port": int(ports["BOT_ONEBOT_PORT"])},
     })
-    # Validation precedes all writes. Exclusive creates also fail closed on races.
-    data.mkdir(parents=True, exist_ok=True, mode=0o700)
-    if os.name != "nt":
-        data.chmod(0o700)
-    for directory in ("astrbot", "higan", "config"):
-        (data / directory).mkdir(mode=0o700)
-    private_write(data / "settings.json", json.dumps(settings, ensure_ascii=False, indent=2) + "\n")
-    private_write(data / "compose.env", "BOT_DATA_DIR='" + data.as_posix() + "'\n")
-    # The marker is last: partial initialization is never mistaken for completion.
-    private_write(data / MARKER, json.dumps({"schema_version": 1, "runtime_name": name}) + "\n")
+    # Check and hold ports before any state is written. Only fresh defaults may
+    # move; existing settings and explicit operator choices are never rewritten.
+    with first_install_ports(int(ports["BOT_WEB_PORT"]), int(ports["BOT_ONEBOT_PORT"]),
+                             web_explicit="BOT_WEB_PORT" in os.environ,
+                             onebot_explicit="BOT_ONEBOT_PORT" in os.environ) as selected:
+        settings["deployment"] = selected
+        data.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if os.name != "nt":
+            data.chmod(0o700)
+        for directory in ("astrbot", "higan", "config"):
+            (data / directory).mkdir(mode=0o700)
+        private_write(data / "settings.json", json.dumps(settings, ensure_ascii=False, indent=2) + "\n")
+        private_write(data / "compose.env", "BOT_DATA_DIR='" + data.as_posix() + "'\n")
+        # The marker is last: partial initialization is never mistaken for completion.
+        private_write(data / MARKER, json.dumps({"schema_version": 1, "runtime_name": name}) + "\n")
+    if selected != {"web_port": int(ports["BOT_WEB_PORT"]), "onebot_port": int(ports["BOT_ONEBOT_PORT"])}:
+        print("A default port was busy; free local ports were selected and saved. No existing service was stopped.")
     print("Initialized private external runtime: " + str(data))
     print("Dashboard credentials are in settings.json; never commit or share that file.")
     print("Next: doctor, then up. QQ login/NapCat is separate and is not configured automatically.")

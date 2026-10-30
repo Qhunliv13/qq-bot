@@ -24,7 +24,7 @@ bash ./install.sh
 
 当前接入使用 **OpenAI 兼容 HTTP 接口**，不宣称支持所有供应商原生协议。可选 QQ 所有者可以留空；默认没有预置个人身份或强制人设。
 
-启动后打开 **http://127.0.0.1:6185**，面板用户名 **`astrbot`**。用下面的 `info` 查看配置地址和私有数据目录；需要密码时，Linux 加 `--show-password`、Windows 加 `-ShowPassword`。不要分享密码输出、截图或整个 `settings.json`。
+初始面板用户名为 **`astrbot`**。启动后使用安装器打印的本机地址（默认 **http://127.0.0.1:6185**；首次端口占用时自动选空闲端口并保存）。用下面的 `info` 查看地址和数据目录；需要初始密码时，Linux 加 `--show-password`、Windows 加 `-ShowPassword`。已在面板改过的登录信息不会被重置；不要分享密码输出、截图或整个 `settings.json`。
 
 ## 常用操作
 

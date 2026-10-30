@@ -80,6 +80,44 @@ freeze: **4485 passed, 44 skipped, 348 subtests passed**.
 - User-facing README, quick start and platform guides now lead with installation, three model inputs, access recovery and common operations. Existing detailed capabilities remain in [feature details](FEATURES.md); advanced evidence is not presented as onboarding.
 - Full regression for this onboarding pass: **4624 passed, 44 skipped, 348 subtests passed**; final targeted launcher/configuration follow-up: **147 passed**. Follow-up account-change regression and output wording explicitly distinguish initial credentials from later dashboard changes; `info` does not read, reset or claim to recover the current dashboard password. This remains offline/interface coverage, not complete first-install/model/QQ acceptance.
 
+## First usable dashboard turn (2026-10-30)
+
+The out-of-box follow-up fixes a real request-lifecycle bug: plugin intake returned
+before its background worker sent a WebChat reply; the pinned scheduler then ended
+the HTTP response queue and late replies were discarded. WebChat now waits for its
+owned worker without cancelling active tools on client cancellation. QQ intake
+remains nonblocking. Independent dashboard conversations use isolated short hashed
+private scopes, and concurrent WebChat request IDs are not coalesced into one
+reply destination. Model loading honors the canonical runner selection retained by
+the pinned upstream configuration migration, rather than only the removed legacy key.
+
+[Actual isolated HTTP acceptance](evidence/webchat-first-turn-offline-20261030.json)
+used the cached full runtime image, frozen current plugin source mounted read-only,
+fresh tmpfs state, `docker run --network none`, and a deterministic loopback
+synthetic OpenAI-compatible provider. No real model credentials, QQ sessions or
+production data were used. Actual entrypoint startup, dashboard HTML 200, login,
+session creation, chat SSE and persisted dashboard histories all ran without
+framework mocks. A1/B1/A2 requests each received their structured reply before
+terminal `end`; both conversation histories were isolated and A retained its prior
+turn. The final frozen-source repeat passed with three provider requests and zero
+provider failures. The runtime process group and test daemon were retired afterward.
+
+This is **synthetic-model full-runtime HTTP integration**, not real-model acceptance,
+JavaScript/browser rendering, unmodified Compose networking, public port access or
+QQ transport coverage. The first attempt refused intentionally nonempty state from
+a nested socket tmpfs; rerunning with empty whole-state tmpfs preserved the strict
+fresh-state guard instead of weakening it.
+
+First-run input validation now retries only a mistyped interactive field, including
+full `/chat/completions` URLs, without re-entering correct values. API key input
+fails rather than echoing on an insecure terminal. For fresh installs only, occupied
+implicit default loopback ports can select and save free ports; explicit choices
+fail before data writes, and existing installs never reallocate. Port availability
+can still change between initialization and Docker binding. No foreign service is
+stopped or reconfigured. Full regression on the frozen implementation: **4720
+passed, 44 skipped, 348 subtests passed**. Raw plugin requests still use the globally
+configured model; the dashboard's per-conversation model override is not yet honored.
+
 ## Remaining acceptance
 
 Still verify both quick-launch entrypoints through unmodified Compose networking,

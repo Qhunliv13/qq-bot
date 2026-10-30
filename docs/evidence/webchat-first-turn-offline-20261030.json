@@ -1,0 +1,55 @@
+{
+  "acceptance": "offline_webchat_runtime_plugin_synthetic_model",
+  "browser_rendering_tested": false,
+  "dashboard_html_http_200": true,
+  "dashboard_login": true,
+  "distinct_webchat_sessions": 2,
+  "elapsed_s": 5.632,
+  "full_compose_e2e": false,
+  "login_protocol": "plaintext",
+  "persisted_history": {
+    "isolated": true,
+    "record_counts": [
+      4,
+      2
+    ]
+  },
+  "plugin_context": {
+    "cross_session_history_isolated": true,
+    "distinct_message_ids": 3,
+    "distinct_scopes": 2,
+    "observed_requests": 3,
+    "same_session_history_retained": true,
+    "structured_actual_reply_to_ids": true
+  },
+  "provider_failures": [],
+  "provider_requests": 3,
+  "qq_transport_tested": false,
+  "real_model_accepted": false,
+  "runtime_exit_before_cleanup": null,
+  "status": "passed",
+  "streams": [
+    {
+      "elapsed_s": 0.265,
+      "message_id_digest": "8fb682fecda09b2b",
+      "reply_before_end": true,
+      "sse_events": 5,
+      "terminal_end": true
+    },
+    {
+      "elapsed_s": 0.027,
+      "message_id_digest": "9d8146ad5d4b4dc4",
+      "reply_before_end": true,
+      "sse_events": 5,
+      "terminal_end": true
+    },
+    {
+      "elapsed_s": 0.025,
+      "message_id_digest": "4cf7da4e9345c844",
+      "reply_before_end": true,
+      "sse_events": 5,
+      "terminal_end": true
+    }
+  ],
+  "synthetic_model": true
+}

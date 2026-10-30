@@ -6,6 +6,7 @@
 | 类别 | 阅读说明 | 代表记录 |
 |---|---|---|
 | 安装与发布 | [部署验证](../QUICK_DEPLOY_VERIFICATION.md)、[本地核心](../LOCAL_FULL_CORE.md) | [预检](quick-deploy-preflight-evidence.json)、[容器](quick-deploy-container-evidence.json)、[本地核心发布](local-full-core-release-20261028.json) |
+| 首次网页对话 | [部署验证](../QUICK_DEPLOY_VERIFICATION.md#first-usable-dashboard-turn-2026-10-30) | [离线合成模型的实际 HTTP/流/历史验收](webchat-first-turn-offline-20261030.json)，不是实际模型或 QQ 登录验收 |
 | 行为修复 | [跨群召回](../CROSS_GROUP_RECALL_FIX.md)、[QQ 延迟](../QQ_LATENCY_FIX_20261028.md)、[回复延迟](../REPLY_LATENCY_FIX_20261028.md) | [召回部署](cross-group-recall-deployment-20261028.json)、[QQ 延迟部署](qq-latency-deployment-20261028.json)、[回复延迟部署](reply-latency-deployment-20261028.json) |
 | 静态软件与接口清单 | [传输层研究](../QQ_TRANSPORT_REWRITE.md)、[元数据](../QQ_NATIVE_METADATA.md) | [动作清单](qq-installed-action-inventory.json)、[事件清单](qq-installed-event-inventory.json)、[ABI](qq-native-abi-evidence.json)、[原始软件包](qq-pristine-package-evidence.json) |
 | 隔离与原生初始化 | [隔离实验](../QQ_ISOLATED_RUNTIME_LAB.md)、[原生准备](../QQ_NATIVE_READY_CONTROL.md) | [隔离运行](qq-isolated-runtime-evidence.json)、[就绪观察](qq-native-ready-evidence.json)、[准备阶段](qq-prepared-phase-evidence.json) |

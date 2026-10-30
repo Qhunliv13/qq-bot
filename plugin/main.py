@@ -1176,6 +1176,9 @@ class HiganPlugin(Star):
                 # chat, a model prompt, or authorization to approve it.
                 event.stop_event()
                 return
+            # WebChat owns a request-scoped response queue: its pipeline must
+            # remain open until this same plugin worker finishes delivery.
+            is_webchat = getattr(event, "get_platform_name", lambda: "")() == "webchat"
             # 私聊按独立会话处理。
             group_raw = str(event.get_group_id() or "")
             if group_raw:
@@ -1186,6 +1189,11 @@ class HiganPlugin(Star):
                 # 私聊按 QQ 隔离历史、队列、执行状态和限流计数。
                 sender = str(event.get_sender_id() or "") or "unknown"
                 group = "private:" + sender
+                if is_webchat:
+                    from hashlib import sha256
+                    # Dashboard logins share many conversations. Hash the authentic
+                    # origin to stay below Recorder's 60-character filename limit.
+                    group = "private:webchat:" + sha256(str(event.unified_msg_origin).encode("utf-8")).hexdigest()[:40]
 
             raw_event = getattr(getattr(event, "message_obj", None), "raw_message", None)
             if isinstance(raw_event, str):
@@ -1366,7 +1374,11 @@ class HiganPlugin(Star):
             event.stop_event()
             self._pending.setdefault(group, []).append(
                 (event, text, bool(images or self._image_refs(event)), bool(_woken_e or _at_me_now), history_snapshot))
+            if not hasattr(self, "_scope_workers"):
+                self._scope_workers = {}
             if self._busy.get(group):
+                if is_webchat:
+                    await asyncio.shield(self._scope_workers[group])
                 return
             # Mark ownership before scheduling: consecutive platform deliveries must
             # enqueue immediately without creating another worker for this scope.
@@ -1374,11 +1386,17 @@ class HiganPlugin(Star):
             try:
                 if not hasattr(self, "_background_tasks"):
                     self._background_tasks = set()
-                self._start_background(self._drain_pending(group))
+                worker = self._start_background(self._drain_pending(group))
+                self._scope_workers[group] = worker
             except Exception:
                 # A scheduling failure must not strand the scope behind a busy flag.
                 self._busy[group] = False
                 raise
+            if is_webchat:
+                # The scheduler emits WebChat's terminal `end` on handler return.
+                # Keep QQ ingress nonblocking, but await WebChat's owned delivery;
+                # cancellation of a request must not cancel active tools/sends.
+                await asyncio.shield(worker)
         except Exception as exc:
             logger.error("[higan] 处理消息出错：%r", exc)
 
@@ -1399,7 +1417,13 @@ class HiganPlugin(Star):
                     # No await separates the snapshot from detaching its source list:
                     # arrivals during execution therefore belong to the next turn.
                     entries = list(self._pending.get(group, []))
-                    self._pending[group] = []
+                    # Each WebChat request owns a distinct response queue. Never
+                    # merge its reply into another request's batch anchor.
+                    if entries and getattr(entries[0][0], "get_platform_name", lambda: "")() == "webchat":
+                        self._pending[group] = entries[1:]
+                        entries = entries[:1]
+                    else:
+                        self._pending[group] = []
                     entries = [entry for entry in entries if self._policy_allows(entry[0], group)]
                     if not entries:
                         continue
@@ -1433,6 +1457,7 @@ class HiganPlugin(Star):
             # There is no await between observing an empty queue and releasing busy,
             # so the next admission either joins this worker or starts its successor.
             self._busy[group] = False
+            getattr(self, "_scope_workers", {}).pop(group, None)
 
     @staticmethod
     def _is_woken(event: AstrMessageEvent) -> bool:
@@ -1759,7 +1784,11 @@ class HiganPlugin(Star):
             with open(cfg_path, encoding="utf-8-sig") as fh:
                 cfg = json.load(fh)
             providers = cfg.get("provider") or []
-            selected_id = (cfg.get("provider_settings") or {}).get("default_provider_id")
+            runner_model = ((cfg.get("agent_runner") or {}).get("config") or {}).get("model") or {}
+            # Upstream v3 migrates away default_provider_id on startup. An
+            # explicit canonical binding wins, even if invalid or deliberately empty.
+            selected_id = (runner_model.get("provider_id") if "provider_id" in runner_model
+                           else (cfg.get("provider_settings") or {}).get("default_provider_id"))
             # Honor the explicit provider binding. A sole legacy provider/source
             # is unambiguous private configuration, not a branded public default.
             selected = next((item for item in providers if item.get("id") == selected_id), None) if selected_id else None

@@ -50,6 +50,30 @@ def test_missing_or_ambiguous_selection_fails_closed(tmp_path, monkeypatch, conf
     assert _provider_adapter()._her_llm_config() == ('', '', '')
 
 
+@pytest.mark.parametrize('canonical,legacy,expected_model', [
+    ('second', None, 'second-model'),
+    ('second', 'first', 'second-model'),
+    ('missing', 'first', None),
+    ('', 'first', None),
+])
+def test_canonical_runner_binding_survives_upstream_migration(tmp_path, monkeypatch,
+                                                             canonical, legacy, expected_model):
+    """Actual v3 runner selection wins; invalid explicit bindings never use legacy defaults."""
+    (tmp_path / 'data').mkdir()
+    config = {
+        'provider_sources': [{'id': 'source', 'api_base': 'https://offline.invalid/v1',
+                              'key': ['fixture']}],
+        'provider': [{'id': name, 'provider_source_id': 'source', 'model': name + '-model'}
+                     for name in ('first', 'second')],
+        'agent_runner': {'runner_type': 'local', 'config': {'model': {'provider_id': canonical}}},
+        'provider_settings': {'default_provider_id': legacy} if legacy else {},
+    }
+    (tmp_path / 'data/cmd_config.json').write_text(json.dumps(config), encoding='utf-8')
+    monkeypatch.setenv('ASTRBOT_ROOT', str(tmp_path))
+    expected = ('https://offline.invalid/v1', 'fixture', expected_model) if expected_model else ('', '', '')
+    assert _provider_adapter()._her_llm_config() == expected
+
+
 def test_unique_private_legacy_source_is_preserved_without_fixed_brand(tmp_path, monkeypatch):
     """A sole operator-defined provider/source is unambiguous existing private configuration."""
     (tmp_path / 'data').mkdir()
