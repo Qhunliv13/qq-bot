@@ -32,7 +32,7 @@
 - [核心解耦设计](BOT_CORE_DECOUPLING.md) / [核心测试宿主](BOT_HARNESS.md)：平台边界与离线验证。
 - [工具配置](TOOL_PROFILES.md) / [推理输出边界](REASONING_OUTPUT_BOUNDARY.md)：工具可用性与输出约束。
 - [事实与图片](FACT_IMAGES.md) / [事实记忆结构](FACT_MEMORY_STRUCTURE_20261028.md)：持久化与来源保留。
-- [聊天路由和历史](CHAT_ROUTING_AND_HISTORY_FIX.md) / [跨群召回](CROSS_GROUP_RECALL_FIX.md)：上下文与权限边界。
+- [主动引用](PROACTIVE_QUOTES.md) / [聊天路由和历史](CHAT_ROUTING_AND_HISTORY_FIX.md) / [跨群召回](CROSS_GROUP_RECALL_FIX.md)：原生引用、上下文与权限边界。
 - [缓存前缀](CACHE_PREFIX_OPTIMIZATION.md) / [QQ 延迟](QQ_LATENCY_FIX_20261028.md) / [回复延迟](REPLY_LATENCY_FIX_20261028.md)：修复说明与验证范围。
 - [指针运行时](VM_POINTER_RUNTIME.md) / [点击检查点](VM_CLICK_CHECKPOINT_20261028.md)：预览、确认与尚未完成的真实桌面验收。
 

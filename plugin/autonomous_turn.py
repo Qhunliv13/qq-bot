@@ -7,7 +7,7 @@ import asyncio
 from copy import deepcopy
 
 from .task_event import TaskEvent
-from .reply_selection import is_silence
+from .reply_selection import is_silence, quote_target_ids
 from .final_publication import select as select_publication
 from .history_window import history_snapshot
 
@@ -104,7 +104,11 @@ async def run_turn(plugin, scope, triggers, controller):
             contexts[scope]["trigger"]["events"] = deepcopy(started)
             event = AutonomyEvent(plugin, scope, origin, started)
             raw = await plugin._decide_tools_first(event, scope, "", False)
-            publication = select_publication(raw, [], explicit=True, allow_unattributed=True)
+            # The native loop refreshes typed shared history; authorize quotes
+            # from its exact-scope metadata, never the earlier display-only tail.
+            publication = select_publication(raw, [], explicit=True, allow_unattributed=True,
+                                             allowed_quote_ids=quote_target_ids([], contexts[scope].get('history'), scope=scope,
+                                                                                               quote_history=contexts[scope].get('quote_history')))
             selection = publication["selection"]
             contexts[scope]["_final_publication"] = publication
             if selection["error"]:
@@ -113,7 +117,11 @@ async def run_turn(plugin, scope, triggers, controller):
             if is_silence(text):
                 return {"status": "completed", "scope": scope, "delivered": False}
             # Normal delivery rechecks the current policy and records actual visibility.
-            delivered = await plugin._send(event, scope, text, decoded=True)
+            quote = selection.get('quote_id')
+            if quote is not None:
+                delivered = await plugin._send(event, scope, text, quote_id=quote, decoded=True)
+            else:
+                delivered = await plugin._send(event, scope, text, decoded=True)
             if delivered is None or delivered is False:
                 return {"status": "failed", "reason": "delivery_not_confirmed", "scope": scope}
             return {"status": "completed", "scope": scope, "delivered": True}

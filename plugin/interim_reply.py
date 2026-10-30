@@ -29,11 +29,14 @@ async def deliver(
     args: dict,
     records: list,
     send: Callable[[str, str | None], Awaitable[str | None]],
+    *, allowed_quote_ids=(),
 ) -> dict:
     """Validate once and send through the parent's existing decoded transport.
 
     Omitted attribution selects the last real current record, never an invented
     message. Explicit targets are string IDs belonging to the current batch.
+    A leading text quote uses current IDs or caller-authorized same-scope archive
+    IDs only; it never changes attribution or invents a current human input.
     The callback must preserve normal permission/cleaning policy and accept
     already-decoded text (``decoded=True`` in the parent). Its returned nonempty
     string is the actual delivered body; None or an exception confirms nothing.
@@ -56,7 +59,7 @@ async def deliver(
         targets = [last.get("id") if isinstance(last, dict) else None]
     decoded = decode_reply(
         json.dumps({"text": args["text"], "reply_to": targets}, ensure_ascii=False),
-        records, allow_unattributed=not records,
+        records, allow_unattributed=not records, allowed_quote_ids=allowed_quote_ids,
     )
     if decoded["error"]:
         return {"ok": False, "delivered": False, "error": decoded["error"]}

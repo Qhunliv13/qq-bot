@@ -19,14 +19,15 @@ def has_public_delivery(turn, scope):
         for item in turn.get("_deliveries", []))
 
 
-def select(raw, records, *, explicit=False, allow_unattributed=False):
+def select(raw, records, *, explicit=False, allow_unattributed=False, allowed_quote_ids=()):
     """Decode once and distinguish a public operation from an unmarked draft.
 
     This does not end tool work, compare messages, infer completion, invent a
     receipt or restrict the number of public actions. An explicit delivery=new
     remains available even for identical text or the same incoming message.
     """
-    selection = decode_reply(raw, records, allow_unattributed=allow_unattributed)
+    selection = decode_reply(raw, records, allow_unattributed=allow_unattributed,
+                             allowed_quote_ids=allowed_quote_ids)
     publish = (not selection["error"] and bool(selection["text"])
                and (not explicit or selection.get("delivery") == "new"))
     return {"publish": publish, "selection": selection,

@@ -130,7 +130,30 @@ def _message_id(value: Any) -> str | None:
     return result if result else None
 
 
-def decode_reply(raw: str | None, records: Any, *, allow_unattributed: bool = False) -> dict:
+def quote_target_ids(records, history=(), *, scope=None, quote_history=()) -> set[str]:
+    """Authorize native quotes from current records and exact-scope archived metadata.
+
+    Shared cross-group context may be readable but is not a transport destination.
+    Display prose, nested quoted text, task/memory IDs and archive filenames never
+    establish message identity. Historical rows must name this exact native scope
+    and retain the original record.id; never parse an ID out of a rendered line.
+    """
+    allowed = {_message_id(record.get('id')) for record in (records or ())
+               if isinstance(record, dict)}
+    if scope is not None:
+        for row in (*(history or ()), *(quote_history or ())):
+            if (not isinstance(row, dict) or row.get('scope') != str(scope)
+                    or (row.get('origin_scope') is not None and row['origin_scope'] != str(scope))):
+                continue
+            record = row.get('record')
+            if isinstance(record, dict):
+                allowed.add(_message_id(record.get('id')))
+    allowed.discard(None)
+    return allowed
+
+
+def decode_reply(raw: str | None, records: Any, *, allow_unattributed: bool = False,
+                 allowed_quote_ids=None) -> dict:
     """Return text, reply_to, quote_id, structured, and error for one final reply.
 
     Only a JSON object with explicit ``reply_to`` and ``text`` keys enters the
@@ -140,6 +163,10 @@ def decode_reply(raw: str | None, records: Any, *, allow_unattributed: bool = Fa
     require an empty target list and string text; they cannot fabricate quotes.
     Structured targets must all name actual current record IDs; invalid output
     fails closed rather than selecting a fabricated target or rerunning a model.
+    Explicit leading quote controls can select a current native decimal ID or one
+    of the caller's allowed_quote_ids from authoritative same-scope history. This
+    never expands attribution, and an unrequested quote is not added to the last
+    current target. Invalid controls are removed without inventing a replacement.
     Plain prose never implies a selection. Its leading legacy controls are
     removed, and a native decimal quote may still refer to historical messages.
     The transport remains responsible for conversation-scoped authorization.
@@ -213,14 +240,22 @@ def decode_reply(raw: str | None, records: Any, *, allow_unattributed: bool = Fa
             return result
         last_id = _message_id(records[-1].get("id")) if records and isinstance(records[-1], dict) else None
         quote_id = next((message_id for message_id in selected if message_id != last_id), None)
-        # Structured attribution is the single source of truth. An embedded legacy
-        # marker must not silently redirect this reply to an unrelated message.
-        reply_text, _ = extract_legacy_quote(reply_text, allowed_ids=())
+        # Attribution and native quoting are separate: an explicit leading marker
+        # may quote the current last record or observed same-scope history. It can
+        # never broaden reply_to, authorize another scope, or invent message IDs.
+        permitted = quote_target_ids(records) | {str(value) for value in (allowed_quote_ids or ())}
+        reply_text, explicit_quote = extract_legacy_quote(reply_text, allowed_ids=permitted)
+        quote_id = explicit_quote or quote_id
         result.update(text=reply_text if reply_text.strip() else "", reply_to=selected,
                       quote_id=quote_id)
         return result
 
-    # Historical IDs remain compatible; the transport can validate their scope.
-    # Do not rerun silence or JSON parsing after removing transport controls.
-    result["text"], result["quote_id"] = extract_legacy_quote(text)
+    # Historical IDs remain compatible, but an active caller can narrow legacy
+    # controls to the same-session native records it actually observed. With no
+    # caller scope supplied, preserve the established plain-text compatibility.
+    if allowed_quote_ids is None:
+        permitted = None
+    else:
+        permitted = quote_target_ids(records) | {str(value) for value in allowed_quote_ids}
+    result["text"], result["quote_id"] = extract_legacy_quote(text, allowed_ids=permitted)
     return result

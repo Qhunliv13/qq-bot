@@ -336,7 +336,7 @@ class HiganPlugin(Star):
             # Already admitted turns finish even if reload closes intake while queued.
             from .history_window import append_history, history_snapshot
             from .message_batch import message_record
-            from .reply_selection import decode_reply
+            from .reply_selection import decode_reply, quote_target_ids
             group = LOCAL_SCOPE
             self._history_origins = getattr(self, "_history_origins", {})
             history = self._recent.setdefault(group, [])
@@ -354,7 +354,9 @@ class HiganPlugin(Star):
                                          "messages": [record], "clock": self._clock_context()}
             # Same model/persona/tools/memory call as foreground QQ, not a new engine.
             reply = await self._decide_tools_first(event, group, prompt, False)
-            selection = decode_reply(reply, [record])
+            selection = decode_reply(reply, [record], allowed_quote_ids=quote_target_ids(
+                [record], self._turn_context[group].get('history'), scope=group,
+                 quote_history=self._turn_context[group].get('quote_history')))
             if not selection["error"] and selection["text"]:
                 await self._send(event, group, selection["text"],
                                  quote_id=selection.get("quote_id"), decoded=True)
@@ -1540,9 +1542,11 @@ class HiganPlugin(Star):
             return
         # 两条入口均尝试共享工具回路；回退路径只读取上下文，不再派发工具。
         reply = await self._decide_tools_first(event, group, text, has_image)
-        from .reply_selection import decode_reply
-        turn_records = ((getattr(self, "_turn_context", {}) or {}).get(group, {}).get("messages") or [])
-        selection = decode_reply(reply, turn_records)
+        from .reply_selection import decode_reply, quote_target_ids
+        turn = (getattr(self, "_turn_context", {}) or {}).get(group, {})
+        turn_records = turn.get("messages") or []
+        selection = decode_reply(reply, turn_records,
+                                 allowed_quote_ids=quote_target_ids(turn_records, turn.get("history"), scope=group, quote_history=turn.get("quote_history")))
         if selection["error"]:
             logger.warning("[higan] 模型回复目标无效，跳过发送")
             return
@@ -2461,12 +2465,14 @@ class HiganPlugin(Star):
             if event is None:
                 return {"ok": False, "delivered": False, "error": "current_event_required"}
             from .interim_reply import deliver
+            from .reply_selection import quote_target_ids
             turn = getattr(self, "_turn_context", {}).get(scope, {})
             delivery_count = len(turn.get("_deliveries") or [])
             async def send_interim(body, quote_id):
                 """Share the normal policy/history/media boundary without reparsing validated text."""
                 return await self._send(event, scope, body, quote_id, decoded=True)
-            result = await deliver(args, turn.get("messages") or [], send_interim)
+            result = await deliver(args, turn.get("messages") or [], send_interim,
+                                   allowed_quote_ids=quote_target_ids(turn.get("messages"), turn.get("history"), scope=scope, quote_history=turn.get("quote_history")))
             if result.get("delivered") is True:
                 turn.setdefault("_interim_replies", []).append(result["text"])
                 deliveries = turn.get("_deliveries") or []
@@ -3293,7 +3299,10 @@ class HiganPlugin(Star):
         """Reuse the foreground native transcript/media path for every durable continuation."""
         from .task_event import TaskEvent
         from .task_delivery import task_active
-        from .reply_selection import decode_reply
+        from .reply_selection import decode_reply, quote_target_ids
+        # Per-attempt quote metadata is not persisted task configuration or a
+        # delivery receipt. Never inherit a previous attempt's chosen target.
+        task.pop("_final_quote_id", None)
         if not task_active(task, self._tasks_mod().listing(only_active=False)):
             return ""
         scope = str(task.get("scope") or "")
@@ -3306,15 +3315,24 @@ class HiganPlugin(Star):
         had_previous = scope in turns
         # A scheduled continuation has no current human messages or attachments.
         # Keep shared historical memory, but never inherit a pending human turn.
-        turns[scope] = {"messages": [], "history": [], "image_refs": [],
-                        "image_sources": [], "clock": self._clock_context()}
+        turns[scope] = {"messages": [], "history": [], "quote_history": [],
+                        "image_refs": [], "image_sources": [], "clock": self._clock_context()}
+        try:
+            turns[scope]["quote_history"] = self._hist().load_record_snapshot(
+                scope, limit=200)["records"]
+        except Exception:
+            turns[scope]["quote_history"] = []
         try:
             raw = await self._decide_tools_first(event, scope, text, False, task_context=task)
             if not task_active(task, self._tasks_mod().listing(only_active=False)):
                 return ""
-            selection = decode_reply(raw, [], allow_unattributed=True)
+            selection = decode_reply(raw, [], allow_unattributed=True, allowed_quote_ids=quote_target_ids(
+                [], turns[scope].get("history"), scope=scope,
+                quote_history=turns[scope].get("quote_history")))
             if selection["error"]:
                 raise RuntimeError("task_reply_protocol_invalid")
+            if selection.get("quote_id") is not None:
+                task["_final_quote_id"] = selection["quote_id"]
             return selection["text"]
         finally:
             if had_previous:
@@ -3355,7 +3373,11 @@ class HiganPlugin(Star):
                             if text and scope:
                                 from .task_event import TaskEvent
                                 final_event = TaskEvent(self, task)
-                                delivered = await self._send(final_event, scope, text, decoded=True)
+                                quote = task.pop("_final_quote_id", None)
+                                if quote is not None:
+                                    delivered = await self._send(final_event, scope, text, quote_id=quote, decoded=True)
+                                else:
+                                    delivered = await self._send(final_event, scope, text, decoded=True)
                                 from .task_delivery import fresh, observe
                                 outcome = task.setdefault("_delivery_outcome", fresh())
                                 receipt = getattr(final_event, "last_delivery_receipt", None)
@@ -3601,9 +3623,16 @@ class HiganPlugin(Star):
                                            "error": type(exc).__name__}
                 logger.warning("[higan] 统一群记忆读取失败：%s", type(exc).__name__)
         else:
-            # Only group memory was unified; a private conversation keeps its own
-            # native context and never joins the public-group history pool.
+            # Preserve the frozen private display history. Only the additional
+            # same-scope native metadata authorizes quotes; it is never a group pool.
             turn.pop("history_context", None)
+            try:
+                turn["quote_history"] = self._hist().load_record_snapshot(
+                    str(group), limit=200, exclude_message_ids=[record.get('id') for record
+                    in (turn.get('messages') or []) if isinstance(record, dict)])["records"]
+            except Exception:
+                # Missing original metadata cannot authorize a guessed native quote.
+                turn["quote_history"] = []
         turn["task"] = task_context
         # Delivery receipts belong only to this native turn, never a later chat.
         turn["_interim_replies"] = []
@@ -3959,9 +3988,11 @@ class HiganPlugin(Star):
         from .final_publication import has_public_delivery
         if has_public_delivery(turn, group):
             from .final_publication import select as select_publication
+            from .reply_selection import quote_target_ids
             records = turn.get("messages") or []
             publication = select_publication(_out, records, explicit=True,
-                                             allow_unattributed=not records)
+                                             allow_unattributed=not records,
+                                             allowed_quote_ids=quote_target_ids(records, turn.get("history"), scope=group, quote_history=turn.get("quote_history")))
             turn["_final_publication"] = publication
             # A public action and a subsequent completion are separate channels.
             # No text comparison, forced loop completion, or inferred intent is used.
@@ -4078,13 +4109,19 @@ class HiganPlugin(Star):
         on_message 停止默认事件管线，因此这里使用 event.send 直接发送。
         引用由模型输出的有效消息号决定，不默认引用触发消息。
         """
-        from .reply_selection import decode_reply, is_silence
+        from .reply_selection import decode_reply, is_silence, quote_target_ids
         if not decoded:
             # Every raw send entry shares one protocol decoder. An empty current
             # batch may produce unattributed autonomous text, never fabricated IDs.
             # Already-decoded text is not parsed again: literal JSON examples stay literal.
-            records = ((getattr(self, "_turn_context", {}) or {}).get(group, {}).get("messages") or [])
-            selection = decode_reply(reply, records, allow_unattributed=not records)
+            turn = (getattr(self, "_turn_context", {}) or {}).get(group, {})
+            records = turn.get("messages") or []
+            authorized_quotes = (quote_target_ids(
+                records, turn.get("history"), scope=group,
+                quote_history=turn.get("quote_history"))
+                if (records or turn.get("history") or turn.get("quote_history")) else None)
+            selection = decode_reply(reply, records, allow_unattributed=not records,
+                                     allowed_quote_ids=authorized_quotes)
             if selection["error"]:
                 logger.warning("[higan] 发送出口拒绝无效回复协议")
                 return None

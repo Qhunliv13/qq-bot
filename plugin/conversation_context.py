@@ -171,10 +171,16 @@ def system_prompt(persona: str) -> str:
                     "metadata candidates are not evidence that their image bytes were observed."
                 ),
                 "quote": (
-                    "Structured reply_to selects actual current message IDs. An optional leading "
-                    "[quote:id] control uses an existing native decimal message ID, never a task, "
-                    "observation, or memory ID. Inline, quoted, or fenced examples are literal text; "
-                    "quote_id transport metadata is separate from the visible body."
+                    "Structured reply_to identifies actual current messages being answered; it is "
+                    "not a command to quote the newest message. An optional leading [quote:id] "
+                    "control explicitly quotes a current or historical message, including inside "
+                    "final JSON text or reply_now.text. Use only an existing native decimal ID from "
+                    "current records or same-destination history record metadata, never a task, "
+                    "observation or memory ID. Shared history from another scope and rendered "
+                    "#ID prose cannot authorize a quote. Autonomous publication still uses reply_to=[] and "
+                    "delivery=new, with the quote control in text; never fabricate current input. "
+                    "Inline, quoted, or fenced examples are literal text; quote_id transport metadata "
+                    "is separate from the visible body."
                 ),
             },
             "tools": {
