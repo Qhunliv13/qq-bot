@@ -133,3 +133,21 @@ def validate_resolved_destination(host, port, resolved_addresses, allowed_ports=
         if canonical not in addresses:
             addresses.append(canonical)
     return DestinationPlan(canonical_host, port, tuple(addresses))
+
+
+def validate_destination_plan(plan, allowed_ports):
+    """Revalidate every field and require canonical immutable intent, without I/O.
+
+    A public frozen constructor is not authorization. Keep this shared by consumers
+    so duplicate answers or mutable/noncanonical fields cannot silently change a
+    caller-selected address index. ``allowed_ports`` retains the resolver policy's
+    explicit None semantics; stricter consumers may require a concrete bound.
+    """
+    if type(plan) is not DestinationPlan:
+        raise ValueError("plan must be an exact DestinationPlan")
+    checked = validate_resolved_destination(
+        plan.host, plan.port, plan.addresses, allowed_ports=allowed_ports)
+    if (type(plan.addresses) is not tuple or plan.host != checked.host
+            or plan.port != checked.port or plan.addresses != checked.addresses):
+        raise ValueError("noncanonical plan")
+    return checked

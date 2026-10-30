@@ -11,7 +11,7 @@ import sys
 import threading
 import time
 
-from tools.qq_egress_policy import DestinationPlan, validate_resolved_destination
+from tools.qq_egress_policy import validate_destination_plan
 
 
 class ConnectorError(Exception):
@@ -24,19 +24,11 @@ class ConnectorError(Exception):
 
 def _validated_plan(plan, allowed_ports):
     """Revalidate every field: a frozen public constructor is not authorization."""
-    if type(plan) is not DestinationPlan:
-        raise ConnectorError("invalid_plan")
     try:
-        checked = validate_resolved_destination(
-            plan.host, plan.port, plan.addresses, allowed_ports=allowed_ports)
-        # Reject mutable containers, duplicate answers and noncanonical spellings,
-        # rather than silently changing the index a caller explicitly selected.
-        if (type(plan.addresses) is not tuple or plan.host != checked.host
-                or plan.port != checked.port or plan.addresses != checked.addresses):
-            raise ValueError("noncanonical plan")
+        return validate_destination_plan(plan, allowed_ports)
     except Exception:
+        # Preserve the connector's fixed public error contract across extraction.
         raise ConnectorError("invalid_plan") from None
-    return checked
 
 
 def _peer_matches(peer, address, port):

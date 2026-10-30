@@ -1,0 +1,28 @@
+{
+  "exit_code": 0,
+  "fixture_sha256": "0998390d6afca241164200859497150d1bd53b21da62a46f2f4ecb95f630ba53",
+  "observation": {
+    "counts": {
+      "compiler_rejections": 2,
+      "rule_packets": {
+        "qq_egress_drop": 4,
+        "qq_egress_v4_tcp_0": 0,
+        "qq_egress_v4_udp_0": 1,
+        "qq_egress_v6_tcp_1": 0,
+        "qq_egress_v6_udp_1": 1
+      },
+      "tcp_denied": 1,
+      "tcp_positive_proven": false,
+      "udp_allowed": 2,
+      "udp_denied": 3
+    },
+    "offline_only": true,
+    "schema": 1,
+    "stage": "complete",
+    "status": "passed"
+  },
+  "offline_only": true,
+  "schema": 1,
+  "status": "passed",
+  "stderr_bytes": 0
+}

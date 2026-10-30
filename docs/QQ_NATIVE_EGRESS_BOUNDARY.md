@@ -294,3 +294,45 @@ public egress or complete native QQ readiness. Host-loopback/DNS-disable flags
 were passed but their protection is not independently proven by this offline
 setup; host/LAN bypass testing under forwarding remains necessary. Exact network
 values are fixed fixture expectations, not runtime QQ endpoint configuration.
+
+## Pure exact-target rules compiler
+
+[Rules compiler](../tools/qq_egress_rules.py) generates fixed-table nft source from
+explicit validated plans, allowed ports, protocols and a trusted owner's blocked
+local-host address snapshot. It does not apply rules, discover interfaces or DNS,
+start processes, or activate QQ networking. Plan revalidation is shared with the
+numeric connector in the existing policy module, not duplicated.
+
+Inputs are bounded: 1–16 plans, at most 64 supplied addresses before deduplication,
+and at most 256 canonical blocked addresses. Protocols must explicitly name tcp,
+udp or both; allowed_ports must be a set (not None). Any blocked address in any
+candidate list rejects the entire input. Canonical numeric family/address/port
+endpoints are deterministically sorted and rendered as exact destination/port
+accept rules plus a counted final drop and default-drop OUTPUT chain. No arbitrary
+nft tokens, caller table names, blanket loopback permission, established/related
+exemption or reply bypass are accepted.
+
+The compiler trusts the owner to supply a complete and current local-host address
+snapshot. An explicit empty blocked set is not proof of discovery. Public-looking
+addresses routed back to a host/LAN service, NAT, stale ownership snapshots and
+forwarding bypasses still require integrated enforcement and testing. Generated
+rules are not automatically installed by any transport or model tool.
+
+[Selective kernel fixture](../tests/egress_selective_posix_check.py) reuses the
+existing fresh namespace setup and binds real IPv4/IPv6 UDP receivers to its local
+test addresses. It first proves UDP delivery without rules, then compiles exact
+allowed endpoints and applies them only inside that offline namespace. In the
+[actual observation](qq-egress-selective-evidence.json), both allowed UDP endpoints
+received their token, two wrong-port UDP targets and a private loopback target
+received none, and a wrong-port TCP connection was denied and closed. The two UDP
+accept rules each counted one packet; TCP accepts counted zero; final drop counted
+four. Forged private and explicitly host-blocked candidate plans were rejected
+before apply. Exit was 0 and stderr length 0. [Host ruleset hashes](qq-egress-selective-host-comparison.json)
+matched before and after.
+
+This is real selective UDP delivery and TCP denial evidence, not a positive TCP
+forwarding test. There was no slirp/public uplink in this fixture; all endpoints
+were local to a private namespace. Integrated forwarding, DNS, host/LAN exclusions,
+real QQ authentication and capability preservation are still incomplete. The
+[acceptance status](QQ_NATIVE_ACCEPTANCE_STATUS_20261030.md) records those gaps
+explicitly instead of treating component tests as overall completion.
