@@ -11,6 +11,8 @@ import math
 import re
 from typing import Mapping
 
+from .context_budget import suffix
+
 # The legacy snapshot API bounds each group's overview independently.
 # Unified timelines use DEFAULT_SHARED_LIMIT; keyword retrieval reads all rows.
 DEFAULT_LIMIT_PER_SCOPE = 20
@@ -133,7 +135,8 @@ class CrossScopeMemory:
 
     def unified_snapshot(self, *, exclude_messages=(), exclude_message_ids=(),
                          limit: int = DEFAULT_SHARED_LIMIT,
-                         cache_block_size: int = 0) -> dict:
+                         cache_block_size: int = 0,
+                         max_chars: int | None = None) -> dict:
         """Merge persisted public groups; unknown dates stay unknown, never inferred.
 
         Exclusions are native (scope, record.id) pairs or context dictionaries
@@ -142,12 +145,21 @@ class CrossScopeMemory:
         Optional alignment retains at least the latest ``limit`` eligible rows
         while adding fewer than ``cache_block_size`` older rows. Exact archive
         counts, not a mutable cache or invented timestamps, anchor each block.
+        With ``max_chars``, every eligible archive row participates in the shared
+        serialized-length suffix instead: legacy count limits/alignment do not
+        apply. ``omitted_records`` preserves all older eligible evidence for the
+        caller's summary input; callers must remove it before building a prompt.
         """
-        if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
-            raise ValueError("limit must be a positive integer")
-        if (isinstance(cache_block_size, bool) or not isinstance(cache_block_size, int)
-                or cache_block_size < 0):
-            raise ValueError("cache_block_size must be a nonnegative integer")
+        if max_chars is not None:
+            if type(max_chars) is not int or max_chars < 0:
+                raise ValueError("max_chars must be a nonnegative integer")
+        else:
+            # Count parameters remain solely for explicit legacy/tool callers.
+            if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+                raise ValueError("limit must be a positive integer")
+            if (isinstance(cache_block_size, bool) or not isinstance(cache_block_size, int)
+                    or cache_block_size < 0):
+                raise ValueError("cache_block_size must be a nonnegative integer")
         excluded = []
         for values in (exclude_messages, exclude_message_ids):
             for value in values:
@@ -166,7 +178,8 @@ class CrossScopeMemory:
         more_available = False
         total_count = 0
         snapshot_loader = getattr(self.recorder, "load_record_snapshot", None)
-        alignment_available = bool(cache_block_size and callable(snapshot_loader))
+        alignment_available = bool(max_chars is None and cache_block_size
+                                   and callable(snapshot_loader))
         scopes = {str(scope) for scope in self.recorder.group_scopes()
                   if _group(str(scope))}
         for scope in sorted(scopes, key=lambda value: (int(value), value)):
@@ -190,11 +203,13 @@ class CrossScopeMemory:
             else:
                 # Preserve the legacy exact-budget contract for existing callers
                 # and recorder adapters that cannot supply trustworthy counts.
-                stored = self.recorder.load_records(scope, limit=limit + 1)
+                stored = self.recorder.load_records(
+                    scope, limit=None if max_chars is not None else limit + 1)
             if not stored:
                 continue
             scope_count += 1
-            more_available = more_available or len(stored) > limit
+            if max_chars is None:
+                more_available = more_available or len(stored) > limit
             for source in stored:
                 record = source.get("record")
                 origin = source["scope"]
@@ -207,6 +222,19 @@ class CrossScopeMemory:
                 rows.append(row)
 
         rows.sort(key=_chronological_key)
+        if max_chars is not None:
+            # Select only after exclusions and the global chronology are known;
+            # no per-group cap may hide evidence from this length-based view.
+            selected, coverage = suffix(rows, max_chars)
+            archive_scopes = sorted(scopes, key=lambda value: (int(value), value))
+            returned_scopes = {str(row["scope"]) for row in selected}
+            coverage.update(limit=max_chars, scope_count=scope_count,
+                            archive_scopes=archive_scopes,
+                            returned_scopes=[scope for scope in archive_scopes
+                                             if scope in returned_scopes])
+            return {"source": deepcopy(UNIFIED_SOURCE), "mode": "one_shared_timeline",
+                    "records": selected, "coverage": coverage,
+                    "omitted_records": deepcopy(rows[:coverage["omitted"]])}
         width = limit
         if alignment_available and total_count >= limit:
             # Absolute eligible row count fixes the head until the next block;

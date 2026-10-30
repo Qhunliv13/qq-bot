@@ -13,8 +13,8 @@ from test_production_integration import (
 __all__ = ["production"]
 
 
-def test_capped_incoming_and_confirmed_replies_keep_serialized_prefix(production, monkeypatch):
-    """Three real entries and sends preserve prior source prefixes after live evictions."""
+def test_length_bounded_incoming_and_confirmed_replies_keep_serialized_prefix(production, monkeypatch):
+    """Three real sends retain all small source entries without a count-based live eviction."""
     plugin = production()
     plugin._recent = {"42": [f"old-{number}" for number in range(1000, 3000)]}
     plugin._history_origins = {"42": 1000}
@@ -46,10 +46,10 @@ def test_capped_incoming_and_confirmed_replies_keep_serialized_prefix(production
     prompts = [request["messages"][1]["content"] for request in requests]
     envelopes = [json.loads(prompt) for prompt in prompts]
     histories = [envelope["conversation"]["history"] for envelope in envelopes]
-    assert [len(history) for history in histories] == [120, 122, 124]
+    assert [len(history) for history in histories] == [2000, 2002, 2004]
     for index, history in enumerate(histories):
         assert tuple(history[-120:]) == expected_histories[index]
-        assert history[:120] == histories[0]
+        assert history[:2000] == [f"old-{number}" for number in range(1000, 3000)]
         assert envelopes[index]["conversation"]["messages"][0]["body"] == f"current-{index}"
         assert not any(f"current-{index}" in entry for entry in history)
         assert prompts[index].count(f"current-{index}") == 1
@@ -61,8 +61,8 @@ def test_capped_incoming_and_confirmed_replies_keep_serialized_prefix(production
               "conversation": {"history": histories[0]}}
     stable_prefix = json.dumps(stable, ensure_ascii=False, separators=(",", ":"))[:-3].encode("utf-8")
     assert all(prompt.encode("utf-8").startswith(stable_prefix) for prompt in prompts)
-    assert plugin._history_origins == {"42": 1006}
-    assert len(plugin._recent["42"]) == 2000
+    assert plugin._history_origins == {"42": 1000}
+    assert len(plugin._recent["42"]) == 2006
     assert plugin._recent["42"][-1] == "彼岸酱：reply-2"
 
 
@@ -111,10 +111,10 @@ def test_membership_changes_advance_same_history_origin(production):
 
     plugin._onebot = onebot
     asyncio.run(plugin._diff_members("42", "offline group"))
-    assert plugin._history_origins == {"42": 1002}
-    assert len(plugin._recent["42"]) == 2000
+    assert plugin._history_origins == {"42": 1000}
+    assert len(plugin._recent["42"]) == 2002
     assert plugin._recent["42"][-2:] == ["【群动态】joining（QQ 8）加入了群聊", "【群动态】leaving（QQ 7）退出了群聊"]
-    assert plugin._recent["42"][0] == "old-2"
+    assert plugin._recent["42"][0] == "old-0"
 
 
 def test_reload_copies_history_origin_with_live_buffer(production):

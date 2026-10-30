@@ -48,12 +48,14 @@ class History:
 
     def load(self, scope, limit):
         """Restore only this destination's actual prior lines."""
-        return [line for key, line, _ in self.rows if key == scope][-limit:]
+        rows = [line for key, line, _ in self.rows if key == scope]
+        return rows if limit is None else rows[-limit:]
 
     def load_records(self, scope, limit):
         """Return native source records for chronological local/public context merging."""
-        return [{"scope": key, "line": line, "record": record, "ts": index}
-                for index, (key, line, record) in enumerate(self.rows) if key == scope][-limit:]
+        rows = [{"scope": key, "line": line, "record": record, "ts": index}
+                for index, (key, line, record) in enumerate(self.rows) if key == scope]
+        return rows if limit is None else rows[-limit:]
 
     def append(self, scope, line, record=None):
         """Retain source metadata for exact-once assertions."""

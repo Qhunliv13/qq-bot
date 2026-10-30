@@ -5,9 +5,9 @@ Memory 读写按 scope 的摘要和全局事实，保留显式来源证据；可
 文字推导身份或权限，未知旧来源标签保持兼容。WakePersonFacts 独立保存
 按人的记录，不占用 global.facts 配额。
 
-compress_messages() 是可选摘要请求构造接口，不调用模型、不修改原消息；
-调用方自行决定是否调用、是否写回摘要，不意味着主流程自动压缩。
-Memory.save() 使用临时文件替换写盘，WakePersonFacts.save() 直接写 JSON。
+compress_messages() 保留为兼容的无副作用请求构造接口；实际主流程由
+context_summary.prepare 执行无工具压缩、确认原子落盘并在下一轮加载。
+Memory 与 WakePersonFacts 都使用同目录临时文件、fsync 和原子替换写盘。
 """
 
 from __future__ import annotations
@@ -26,6 +26,9 @@ if __package__:
 else:
     from fact_images import images_metadata, normalize_images
     from fact_structure import normalize_structure
+
+# Public compatibility exports are deliberate, including direct-script imports.
+__all__ = ["Memory", "WakePersonFacts", "MAX_SUMMARY_CHARS", "MAX_FACTS"]
 
 #: 每条摘要的长度上限（字符）：防止摘要膨胀成第二份全文
 MAX_SUMMARY_CHARS = 100000
@@ -125,29 +128,40 @@ class Memory:
         """取全局摘要（跨场景共享的"她"的连续性）。"""
         return str((self.data.get("global") or {}).get("summary") or "")
 
-    def set_summary(self, scope: str, summary: str, *, global_too: bool = False) -> None:
+    def set_summary(self, scope: str, summary: str, *, global_too: bool = False,
+                    checked: bool = False, context_compaction: dict | None = None) -> None:
         """写入摘要并更新计数与时间，按字符上限截断。
 
         Args:
             scope: 作用域（"group:123" / "private:456"）。
             summary: 模型产出的摘要文本。
             global_too: 是否同时合并到全局摘要。
+            checked: 摘要任务必须确认落盘；失败抛出，不能推进摘要游标。
+            context_compaction: 已覆盖原始档案的精确摘要游标，不依据消息条数触发。
         """
+        previous = copy.deepcopy(self.data) if checked else None
         text = (summary or "").strip()[:MAX_SUMMARY_CHARS]
         item = self._scope(scope)
         item["summary"] = text
         item["updated_at"] = int(time.time())
         item["turns"] = int(item.get("turns") or 0) + 1
+        if context_compaction is not None:
+            item["context_compaction"] = copy.deepcopy(context_compaction)
         if global_too:
-            # 合并全局摘要，保留最后 12 个非空行并应用字符上限。
+            # 全局摘要只按字符预算保留，不再按行数静默丢弃。
             g = self.data.setdefault("global", {})
             old = str(g.get("summary") or "").strip()
             merged = (old + "\n" + text).strip() if old and text not in old else (old or text)
-            lines = [ln for ln in merged.splitlines() if ln.strip()]
-            keep = lines[-12:]
-            g["summary"] = "\n".join(keep)[-100000:]
+            g["summary"] = merged[-MAX_SUMMARY_CHARS:]
             g["updated_at"] = int(time.time())
-        self.save()
+        if checked:
+            try:
+                self.save_checked()
+            except Exception:
+                self.data = previous
+                raise
+        else:
+            self.save()
 
     def bump_turns(self, scope: str) -> int:
         """累加该 scope 的消息计数（用于触发压缩）。"""
@@ -470,86 +484,14 @@ if __name__ == "__main__":
     mem.add_fact("小七是群友，做二手显卡", "private:9")
     mem.add_fact("小七是群友，做二手显卡", "private:9")   # 去重
     assert len(mem.search_facts("小七 显卡")) == 1
-    assert mem.compress_messages("group:1", ["a" * 5000]) is not None
+    assert mem.compress_messages("group:1", ["a" * 5000], max_chars=4000) is not None
     assert mem.compress_messages("group:1", ["短"]) is None
     print("memory.py 自检通过 ✓")
 
 
-class WakePersonFacts:
-    """关于「唤醒人」的独立记录（最多 200 条/人，不占用 global.facts 配额）。"""
-
-    MAX_PER_PERSON = 200
-
-    def __init__(self, path: str) -> None:
-        """绑定 JSON 文件。"""
-        self.path = path
-        self.data: dict = {"version": 1, "persons": {}}
-
-    def load(self) -> "WakePersonFacts":
-        """读盘。"""
-        try:
-            with open(self.path, encoding="utf-8") as handle:
-                raw = json.load(handle)
-            if isinstance(raw, dict):
-                self.data = raw
-                self.data.setdefault("persons", {})
-        except Exception:                                  # noqa: BLE001
-            pass
-        return self
-
-    def save(self) -> None:
-        """落盘。"""
-        os.makedirs(os.path.dirname(self.path), exist_ok=True)
-        with open(self.path, "w", encoding="utf-8") as handle:
-            json.dump(self.data, handle, ensure_ascii=False, indent=2)
-
-    def _bucket(self, qq: str) -> list:
-        """取某人的条目列表。"""
-        return self.data.setdefault("persons", {}).setdefault(str(qq), [])
-
-    def add(self, qq: str, text: str) -> str:
-        """加一条（去重、超 200 淘汰最旧）。"""
-        qq = str(qq or "").strip()
-        clean = (text or "").strip()
-        if not qq or not clean:
-            return ""
-        bucket = self._bucket(qq)
-        for item in bucket:
-            if item.get("text") == clean:
-                return str(item.get("id") or "")
-        fid = "w%03d" % (len(bucket) + 1)
-        while any(i.get("id") == fid for i in bucket):
-            fid = "w%03d" % (int(fid[1:]) + 1)
-        bucket.append({"id": fid, "text": clean, "at": int(time.time())})
-        if len(bucket) > self.MAX_PER_PERSON:
-            del bucket[0:len(bucket) - self.MAX_PER_PERSON]
-        self.save()
-        return fid
-
-    def list(self, qq: str) -> list:
-        """列某人的记录。"""
-        return [dict(i) for i in self._bucket(str(qq))]
-
-    def search(self, qq: str, query: str) -> list:
-        """按关键词找。"""
-        q = str(query or "").strip()
-        return [dict(i) for i in self._bucket(str(qq))
-                if not q or q in str(i.get("text") or "")]
-
-    def delete(self, qq: str, fid: str = "", keyword: str = "") -> int:
-        """按编号或关键词删，返回删除条数。"""
-        bucket = self._bucket(str(qq))
-        keep, removed = [], 0
-        for item in bucket:
-            if (fid and item.get("id") == fid) or (keyword and keyword in str(item.get("text") or "")):
-                removed += 1
-                continue
-            keep.append(item)
-        if removed:
-            self.data["persons"][str(qq)] = keep
-            self.save()
-        return removed
-
-    def count(self, qq: str) -> int:
-        """某人有几条记录。"""
-        return len(self._bucket(str(qq)))
+# Compatibility import: wake-person persistence has one implementation shared by
+# native intake and the tool dispatcher, including their process-wide write lock.
+if __package__:
+    from .wake_persons import WakePersonFacts as WakePersonFacts
+else:
+    from wake_persons import WakePersonFacts as WakePersonFacts

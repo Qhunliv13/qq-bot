@@ -17,7 +17,15 @@ import tempfile
 
 def _load(path: Path, name: str):
     """Load a pure source module without importing the AstrBot plugin entrypoint."""
-    spec = importlib.util.spec_from_file_location(name, path)
+    # Pure sibling imports need their package path, not the AstrBot main entry.
+    # An isolated diagnostic package also honors an explicitly selected plugin tree.
+    import sys
+    import types
+    package = "_shared_history_probe_plugin"
+    parent = types.ModuleType(package)
+    parent.__path__ = [str(path.parent)]
+    sys.modules[package] = parent
+    spec = importlib.util.spec_from_file_location(package + "." + name, path)
     if spec is None or spec.loader is None:
         raise RuntimeError("Pure diagnostic module is unavailable")
     module = importlib.util.module_from_spec(spec)

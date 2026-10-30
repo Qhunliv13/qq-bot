@@ -417,10 +417,15 @@ def test_context_keeps_untrusted_source_content_as_data_not_system_instructions(
     assert context["mode"] == "one_shared_timeline"
     assert context["source"] == {"name": "unified_group_memory", "trust": "untrusted_data"}
     assert {key: context["coverage"][key] for key in (
-        "returned", "limit", "more_available", "scope_count")} == {
-            "returned": 1, "limit": 240, "more_available": False, "scope_count": 1}
-    assert context["coverage"]["cache_alignment_available"] is True
-    assert context["coverage"]["cache_padding"] == 0
+        "returned", "omitted", "more_available", "scope_count")} == {
+            "returned": 1, "omitted": 0, "more_available": False, "scope_count": 1}
+    coverage = context["coverage"]
+    assert coverage["unit"] == coverage["budget_unit"] == "serialized_unicode_characters"
+    assert coverage["used_chars"] == len(json.dumps(history, ensure_ascii=False, separators=(",", ":")))
+    assert coverage["used_chars"] <= coverage["max_chars"] == coverage["limit"]
+    assert 0 < coverage["max_chars"] < coverage["max_context_chars"] == 600000
+    assert coverage["archive_preserved"] is True
+    assert "cache_padding" not in coverage and "cache_alignment_available" not in coverage
     assert envelope["timing"] == {"sample": "frozen-time"}
     assert envelope["other_scopes"] == []
     assert "private-secret-must-not-leak" not in prompt

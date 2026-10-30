@@ -88,10 +88,12 @@ async def run_turn(plugin, scope, triggers, controller):
             plugin._turn_context = contexts
         sentinel = object()
         previous = contexts.get(scope, sentinel)
-        # Use the exact shared chronological window rather than sending the whole
-        # 2000-entry live buffer on every autonomous opportunity.
+        # The same explicit length budget applies to autonomous and foreground
+        # opportunities; the native loop reloads source archives before compaction.
+        from .context_budget import limits
         history = history_snapshot(getattr(plugin, "_recent", {}).get(scope, []),
-                                   getattr(plugin, "_history_origins", {}).get(scope, 0))
+                                   getattr(plugin, "_history_origins", {}).get(scope, 0),
+                                   max_chars=limits()["max_context_chars"])
         contexts[scope] = {"history": list(history),
                            "clock": plugin._clock_context(), "messages": [],
                            "image_refs": [], "image_sources": [],

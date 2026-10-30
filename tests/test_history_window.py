@@ -10,6 +10,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from plugin.conversation_context import build_context  # noqa: E402
 from plugin.history_window import append_history, history_snapshot  # noqa: E402
+from plugin.context_budget import size  # noqa: E402
 
 
 @pytest.mark.parametrize("size", [0, 1, 119, 120, 121, 200, 239, 240, 241, 359, 360])
@@ -46,7 +47,7 @@ def test_long_running_capped_history_keeps_stable_prefix_and_all_latest():
     histories, origins = {}, {}
     previous, previous_start = (), None
     for number in range(6500):
-        append_history(histories, origins, "scope", f"entry-{number}")
+        append_history(histories, origins, "scope", f"entry-{number}", capacity=2000)
         history = histories["scope"]
         frozen = history_snapshot(history, origins["scope"])
         expected = tuple(f"entry-{index}" for index in range(max(0, number - 119), number + 1))
@@ -110,7 +111,7 @@ def test_logical_origin_survives_in_process_handoff():
     histories, origins = {"scope": [str(number) for number in range(2000)]}, {"scope": 2333}
     before = history_snapshot(histories["scope"], origins["scope"])
     replacement, next_origins = histories.copy(), origins.copy()
-    append_history(replacement, next_origins, "scope", "confirmed reply")
+    append_history(replacement, next_origins, "scope", "confirmed reply", capacity=2000)
     after = history_snapshot(replacement["scope"], next_origins["scope"])
     assert after[:len(before)] == before
     assert next_origins["scope"] == 2334
@@ -159,5 +160,61 @@ def test_invalid_origin_and_capacity_are_explicit():
         history_snapshot(histories["scope"], -1)
     with pytest.raises(ValueError, match="capacity"):
         append_history(histories, origins, "scope", "new", capacity=0)
+    assert histories == {"scope": ["source"]}
+    assert origins == {}
+
+
+def test_default_append_has_no_message_count_eviction(monkeypatch):
+    """Thousands of tiny entries survive below the configured serialized budget."""
+    monkeypatch.setattr("plugin.history_window.limits", lambda: {"max_context_chars": 600000})
+    histories, origins = {}, {}
+    for index in range(2501):
+        append_history(histories, origins, "scope", str(index))
+    assert histories["scope"] == [str(index) for index in range(2501)]
+    assert origins == {"scope": 0}
+    assert len(history_snapshot(histories["scope"], 0, max_chars=600000)) == 2501
+
+
+def test_default_append_uses_configured_length_not_count(monkeypatch):
+    """Only a few large entries can exhaust the configured cache length."""
+    line = "  雪🙂\n" + "x" * 3000
+    maximum = size([line])
+    monkeypatch.setattr("plugin.history_window.limits", lambda: {"max_context_chars": maximum})
+    histories, origins = {}, {}
+    append_history(histories, origins, "scope", line)
+    append_history(histories, origins, "scope", line)
+    assert histories == {"scope": [line]}
+    assert origins == {"scope": 1}
+
+
+def test_length_snapshot_exact_json_whitespace_and_no_mutation():
+    """Unicode, escaping and significant spaces count exactly without normalization."""
+    history = ["older", "  雪🙂\n\"quoted\"\\  "]
+    maximum = len(json.dumps(history[-1:], ensure_ascii=False, separators=(",", ":")))
+    assert size(history[-1:]) == maximum
+    assert history_snapshot(history, 9000, max_chars=maximum) == tuple(history[-1:])
+    assert history_snapshot(history, 0, max_chars=maximum - 1) == ()
+    assert history == ["older", "  雪🙂\n\"quoted\"\\  "]
+
+
+def test_explicit_length_overrides_legacy_cache_capacity():
+    """An explicit runtime length budget cannot be narrowed by an old row quota."""
+    histories, origins = {}, {}
+    for index in range(500):
+        append_history(histories, origins, "scope", str(index), capacity=1, max_chars=10000)
+    assert len(histories["scope"]) == 500
+    assert origins["scope"] == 0
+    assert history_snapshot(histories["scope"], 0, minimum=1, max_chars=10000) == tuple(
+        str(index) for index in range(500))
+
+
+@pytest.mark.parametrize("maximum", [-1, True, 1.5, "100"])
+def test_invalid_length_fails_before_cache_mutation(maximum):
+    """Invalid size policy must not append or evict caller-owned source evidence."""
+    histories, origins = {"scope": ["source"]}, {}
+    with pytest.raises(ValueError, match="max_chars"):
+        append_history(histories, origins, "scope", "new", max_chars=maximum)
+    with pytest.raises(ValueError, match="max_chars"):
+        history_snapshot(histories["scope"], 0, max_chars=maximum)
     assert histories == {"scope": ["source"]}
     assert origins == {}

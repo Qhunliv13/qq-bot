@@ -1,15 +1,15 @@
-"""Append-only history prefixes within the existing recent-history budgets.
+"""Whole-entry history suffixes measured by shared serialized-length budgets.
 
-The default prompt suffix contains 120 through 239 entries when enough history
-exists; shorter histories are retained intact. Its start advances on 120-entry
-boundaries to keep unchanged source prefixes stable between calls. The live
-capacity is 2000 entries. This module does not batch messages, delay replies,
-truncate individual entries, or change admission/delivery policy.
+Default live-cache retention uses the configured character budget, never a row
+quota. Explicit count capacities and minimum-based snapshots remain available
+only for legacy callers. Raw archive storage and individual entries are unchanged.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
+
+from .context_budget import limits, suffix
 
 
 def append_history(
@@ -17,21 +17,33 @@ def append_history(
     origins: dict[str, int],
     scope: str,
     line: str,
-    capacity: int = 2000,
+    capacity: int | None = None,
+    *,
+    max_chars: int | None = None,
 ) -> None:
-    """Append one source entry and track indices evicted by the existing live cap.
+    """Append one source entry and retain a whole-entry serialized-length suffix.
 
-    Every writer, including delivered replies and membership observations, must
-    use this helper so a full buffer does not reset block alignment each append.
-    A restored scope starts at logical origin zero; origins must accompany its
-    history during in-process handoff. No second copy of historical text is kept.
+    Default retention reads the shared configured character budget. An explicit
+    numeric capacity preserves old integrations only; ``max_chars`` always takes
+    precedence when supplied. Origins track evicted entries for legacy snapshots,
+    not a runtime row quota. Cache eviction never deletes archive evidence.
     """
-    if capacity <= 0:
-        raise ValueError("capacity must be positive")
+    if capacity is not None and (type(capacity) is not int or capacity <= 0):
+        raise ValueError("capacity must be a positive integer")
+    if max_chars is None and capacity is None:
+        max_chars = limits()["max_context_chars"]
+    if max_chars is not None and (type(max_chars) is not int or max_chars < 0):
+        raise ValueError("max_chars must be a nonnegative integer")
     history = histories.setdefault(scope, [])
     origins.setdefault(scope, 0)
     history.append(line)
-    dropped = max(0, len(history) - capacity)
+    if max_chars is not None:
+        # Shared serialization counts whitespace, Unicode and JSON escaping;
+        # do not approximate with text length or a maximum number of messages.
+        _, coverage = suffix(history, max_chars)
+        dropped = coverage["omitted"]
+    else:
+        dropped = max(0, len(history) - capacity)
     if dropped:
         # Retain logical positions when the physical list shifts at its live cap.
         del history[:dropped]
@@ -39,20 +51,23 @@ def append_history(
 
 
 def history_snapshot(
-    history: Sequence[str], origin: int, minimum: int = 120
+    history: Sequence[str], origin: int, minimum: int = 120,
+    *, max_chars: int | None = None,
 ) -> tuple[str, ...]:
-    """Return an immutable chronological suffix containing the latest minimum entries.
+    """Return an immutable chronological suffix without changing source entries.
 
-    The start advances only at blocks derived from minimum. With enough source
-    entries, the result contains minimum through 2 * minimum - 1 entries; shorter
-    histories are returned intact. Entries themselves are never altered. These
-    are entry-count bounds, not token or character budgets. The caller snapshots
-    before appending the current input, preserving its separate source identity.
+    ``max_chars`` selects solely by the shared compact-JSON length budget. If it
+    is omitted, the legacy minimum-based block alignment remains for explicit old
+    integrations. The caller snapshots before appending current input to preserve
+    its separate source identity; neither path modifies archived records.
     """
-    if minimum <= 0:
-        raise ValueError("minimum must be positive")
     if origin < 0:
         raise ValueError("origin must be nonnegative")
+    if max_chars is not None:
+        selected, _ = suffix(history, max_chars)
+        return tuple(selected)
+    if minimum <= 0:
+        raise ValueError("minimum must be positive")
     # Align absolute source indices, not the capped list length: otherwise every
     # eviction shifts the prefix even though the apparent history length is fixed.
     aligned = ((origin + len(history) - minimum) // minimum) * minimum

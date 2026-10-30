@@ -4,6 +4,10 @@ from copy import deepcopy
 import importlib.util
 import json
 from pathlib import Path
+import sys
+
+# Load shared pure helpers in package context, never the runtime main module.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import pytest
 
@@ -12,7 +16,7 @@ import pytest
 def memory_module():
     """Load the shared reader without starting the production bot runtime."""
     path = Path(__file__).resolve().parents[1] / "plugin" / "cross_scope_memory.py"
-    spec = importlib.util.spec_from_file_location("aligned_shared_memory", path)
+    spec = importlib.util.spec_from_file_location("plugin.aligned_shared_memory", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module

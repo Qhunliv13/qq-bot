@@ -64,8 +64,8 @@ class Recorder:
         except Exception:                                  # noqa: BLE001
             pass
 
-    def load(self, scope: str, limit: int = 200) -> list:
-        """读最近 limit 行（旧 → 新）。"""
+    def load(self, scope: str, limit: int | None = 200) -> list:
+        """Read archived display lines chronologically; None imposes no row-count cap."""
         path = self._path(scope)
         if not os.path.exists(path):
             return []
@@ -80,7 +80,8 @@ class Recorder:
                         lines.append(str(json.loads(raw).get("line") or ""))
                     except Exception:                      # noqa: BLE001
                         continue
-            return [x for x in lines if x][-limit:]
+            selected = [x for x in lines if x]
+            return selected if limit is None else selected[-limit:]
         except Exception:                                  # noqa: BLE001
             return []
 

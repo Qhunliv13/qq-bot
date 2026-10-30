@@ -3,6 +3,10 @@
 import importlib.util
 import json
 from pathlib import Path
+import sys
+
+# Keep isolated test loads inside the namespace for shared pure budget helpers.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import pytest
 
@@ -13,7 +17,7 @@ def memory(tmp_path):
     modules = []
     for name in ("history", "cross_scope_memory"):
         path = Path(__file__).resolve().parents[1] / "plugin" / (name + ".py")
-        spec = importlib.util.spec_from_file_location("occurrences_" + name, path)
+        spec = importlib.util.spec_from_file_location("plugin.occurrences_" + name, path)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         modules.append(module)

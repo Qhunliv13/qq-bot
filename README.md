@@ -54,6 +54,10 @@ PowerShell 若阻止脚本，用 `powershell.exe -NoProfile -ExecutionPolicy Byp
 - 私有数据在仓库外（Windows 在 WSL 中）；`stop` 不擦除数据。重复安装保留配置，`up` 可能构建镜像，不是升级、迁移或模型配置覆盖命令。
 - 初始模型设置用于生成配置；已有 AstrBot 面板另有运行配置，不保证改初始化文件就更新当前模型。遇到问题先读[快速开始与排障](docs/QUICKSTART.md)。
 
+## 全系统架构与状态
+
+[详细架构、所有模块状态、运行逻辑与存储说明](docs/SYSTEM_ARCHITECTURE_STATUS_20261030.md)包含完整/轻量入口区别、消息和模型链路、长度预算与有效摘要、唤醒人落盘、任务与自主观察、QQ/VM依赖、权限差异和未完成能力；不把源码实现当作线上已部署。
+
 ## 能做什么，有哪些边界
 
 | 能力 | 当前边界 |
@@ -69,6 +73,7 @@ PowerShell 若阻止脚本，用 `powershell.exe -NoProfile -ExecutionPolicy Byp
 
 ## 文档
 
+- [系统总览](docs/SYSTEM_ARCHITECTURE_STATUS_20261030.md)：整个系统的架构、请求链路、模块职责、当前状态与已知缺口。
 - [快速开始](docs/QUICKSTART.md)：从安装到第一次请求、密码查找、常见问题与可选 QQ。
 - [Windows](docs/WINDOWS.md) / [Linux](docs/LINUX.md)：平台步骤、隔离目录、权限与端口。
 - [配置与数据边界](docs/CONFIGURATION.md)：外部配置、账号授权与已有实例兼容。

@@ -6,6 +6,7 @@
 
 | 你要做什么 | 阅读 |
 |---|---|
+| 一次看清整个系统的架构、模块职责与当前状态 | [系统总览](SYSTEM_ARCHITECTURE_STATUS_20261030.md) |
 | 完全不懂代码，按图形界面一步一步创建 Bot | [零基础可视化部署](VISUAL_SETUP.md) |
 | 安装、找面板密码、排查常见错误 | [快速开始](QUICKSTART.md) |
 | 不用 WSL / Docker 的 Windows 原生网页和命令行 | [原生极轻量版](WINDOWS_LITE.md)，双击 `lite.cmd` |

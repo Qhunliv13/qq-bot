@@ -399,6 +399,26 @@ class AuditHarness:
 
     async def resolve_args(self, plugin, name, args, scope, event):
         """Resolve real scope-bound IDs immediately before a native invocation."""
+        if name in {"wake_person_info", "wp_fact_move", "wp_fact_add", "wp_fact_list",
+                    "wp_fact_search", "wp_fact_delete"}:
+            # Earlier wake_remove routes deliberately mutate the fixture config.
+            # Re-establish this test's explicit membership in the actual invoking
+            # scope rather than bypassing the production permission/privacy gate.
+            config_path = self.root / "groups.json"
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            members = config.setdefault("wake_persons", {}).setdefault(str(scope), [])
+            qq = str(args["qq"])
+            if qq not in members:
+                members.append(qq)
+                config_path.write_text(json.dumps(config), encoding="utf-8")
+            provenance = memory.WakePersonFacts.source(scope, message_record(event, event.text))
+            memory.WakePersonFacts(str(self.person_path)).load().add(
+                qq, "contract seeded person", source=provenance)
+            if name == "wp_fact_move":
+                # The old source_scope='audit' had no authentic current-scope
+                # provenance and must not be relabeled by the new move route.
+                args["id"] = memory.Memory(str(self.memory_path)).load().add_fact(
+                    "contract scoped move source " + str(scope), str(scope), source=provenance)
         if name == "qq_paste_message":
             # Persist a real scope-bound clipboard, never a fabricated magic ID.
             from plugin.message_transfer_store import TransferStore
@@ -648,11 +668,12 @@ class AuditHarness:
             if name == "skill_save" and (skill_root / "contract-save.md").exists():
                 args["expected_sha256"] = hashlib.sha256((skill_root / "contract-save.md").read_bytes()).hexdigest()
         store = memory.Memory(str(self.memory_path)).load()
-        seed_text = "contract seeded fact" + (" for " + name if name in {"facts_edit", "wp_fact_move"} else "")
+        seed_text = "contract seeded fact" + (" for " + name if name == "facts_edit" else "")
         store.add_fact(seed_text, "audit")
         fact_id = next(row["id"] for row in store.list_facts() if row["text"] == seed_text)
-        memory.WakePersonFacts(str(self.person_path)).load().add("10001", "contract seeded person")
-        if name in {"facts_edit", "wp_fact_move"}:
+        # Wake-person seeds belong to resolve_args, which knows the real invoking
+        # scope/event; no unscoped legacy record or fabricated move ID is needed.
+        if name == "facts_edit":
             args["id"] = str(fact_id)
         if name == "facts_read_image":
             # Exercise the native image lookup against a real persisted fixture,
@@ -1038,13 +1059,14 @@ async def _audit(root, monkeypatch, batch_size):
         scope = str(4200 + offset)
         calls = []
         event = harness.prepare("group_files")[1]
+        # Seed source evidence from this actual synthetic event, not a later
+        # scope rewrite or a tool-supplied identity/provenance declaration.
+        event.get_sender_id = lambda: AUDIT_OWNER
+        event.group = scope
         for name in batch:
             args, _ = harness.prepare(name)
             args = await harness.resolve_args(plugin, name, args, scope, event)
             calls.append(integration._call(name, args, "batch-%s-%s" % (offset, name)))
-        # The mixed batch contains owner-only mutations; use a genuine event identity.
-        event.get_sender_id = lambda: AUDIT_OWNER
-        event.group = scope
         # Native entry normally freezes this event's current-batch records before
         # the provider loop; exercise reply attribution with that same local input.
         plugin._turn_context[scope] = {"messages": [message_record(event, event.text)]}

@@ -341,10 +341,12 @@ class HiganPlugin(Star):
             self._history_origins = getattr(self, "_history_origins", {})
             history = self._recent.setdefault(group, [])
             if not history:
-                history.extend(self._hist().load(group, 200))
-            prior = history_snapshot(history, self._history_origins.get(group, 0))
-            # Native stored records retain timestamps and source scopes when merged.
-            prior_records = self._hist().load_records(group, limit=200)
+                history.extend(self._hist().load(group, None))
+            from .context_budget import limits
+            prior = history_snapshot(history, self._history_origins.get(group, 0),
+                                     max_chars=limits()["max_context_chars"])
+            # Native records remain uncapped by count; final context uses length.
+            prior_records = self._hist().load_records(group, limit=None)
             record = message_record(event, prompt)
             line = "%s：%s" % (event.get_sender_name(), prompt)
             self._hist().append(group, line, record=record)
@@ -756,7 +758,7 @@ class HiganPlugin(Star):
                     _m = _ilu.module_from_spec(_sp)
                     _sp.loader.exec_module(_m)
                     _cnt = _m.WakePersonFacts(
-                        str(Path(HIGAN_ROOT) / "memory" / "wake_persons.json")).load().count(qq)
+                        str(Path(HIGAN_ROOT) / "memory" / "wake_persons.json")).load().count(qq, current_scope=_gid)
                 except Exception:  # noqa: BLE001
                     _cnt = 0
                 return "【唤醒人 QQ %s · 我记了他 %d 条】%s" % (qq, _cnt, base)
@@ -862,6 +864,8 @@ class HiganPlugin(Star):
         try:
             persisted_memory = build_memory_context(
                 Memory(str(Path(HIGAN_ROOT) / "memory" / "memory.json")).load(), str(group))
+            if turn.get("context_summary") is not None:
+                persisted_memory["context_summary"] = turn["context_summary"]
         except Exception as exc:
             # Missing/corrupt memory must be explicit, never a fabricated empty
             # successful store or an implicit rewrite of the persistent data.
@@ -1278,7 +1282,7 @@ class HiganPlugin(Star):
             # 首次访问会话时从磁盘恢复历史。
             if not history:
                 try:
-                    _old = self._hist().load(group, 200)
+                    _old = self._hist().load(group, None)
                     if _old:
                         history.extend(_old)
                         logger.info("[higan] 已从磁盘恢复 %s 的历史 %d 行 ✓" % (group, len(_old)))
@@ -1286,12 +1290,15 @@ class HiganPlugin(Star):
                     logger.warning("[higan] 恢复历史失败（忽略）：%r", _exc)
             from .history_window import append_history, history_snapshot as stable_snapshot
             self._history_origins = getattr(self, "_history_origins", {})
-            history_snapshot = stable_snapshot(history, self._history_origins.get(group, 0))
+            from .context_budget import limits
+            history_snapshot = stable_snapshot(history, self._history_origins.get(group, 0),
+                                               max_chars=limits()["max_context_chars"])
             append_history(self._recent, self._history_origins, group, line)
             # 同时写入带群标签的全局缓冲。
             try:
+                from .context_budget import suffix
                 self._all_recent.append("[群%s] %s" % (group, line))
-                del self._all_recent[:-120]
+                self._all_recent[:], _ = suffix(self._all_recent, limits()["max_context_chars"])
             except Exception:  # noqa: BLE001
                 pass
             try:
@@ -1306,6 +1313,15 @@ class HiganPlugin(Star):
                 event.stop_event()
                 logger.info("[higan] source_notice attachment_history_only=True")
                 return
+            # Keep the configured person's actual message independently of whether
+            # probability/time windows select a reply. Never persist rendered history,
+            # quotes, source notices, or a model-generated summary as their utterance.
+            try:
+                from .wake_persons import observe_wake_person_message
+                observe_wake_person_message(HIGAN_ROOT, str(group), event, text)
+            except Exception as exc:
+                # Storage failures must not fabricate a receipt or expose chat bodies.
+                logger.warning("[higan] 唤醒人消息未保存 type=%s", type(exc).__name__)
             # Only real admitted chat can establish an authentic framework destination.
             # State failures do not break foreground messages or fabricate an origin.
             try:
@@ -1947,7 +1963,7 @@ class HiganPlugin(Star):
                                                   "group": {"type": "string"}}, []),
             _f("wp_fact_move", "把一条通用事实移进某个唤醒人的记录（会从通用里删掉）",
                {"id": {"type": "string"}, "qq": {"type": "string"}}, ["id", "qq"]),
-            _f("wp_fact_add", "记一条关于某个唤醒人的事（单独记，最多 200 条）",
+            _f("wp_fact_add", "记一条关于本会话唤醒人的模型事实（与原生发言观察分开，不自动淘汰）",
                {"qq": {"type": "string"}, "text": {"type": "string"}}, ["qq", "text"]),
             _f("wp_fact_list", "看某个唤醒人的记录", {"qq": {"type": "string"}}, ["qq"]),
             _f("wp_fact_search", "在某个唤醒人的记录里按关键词找",
@@ -2809,39 +2825,13 @@ class HiganPlugin(Star):
                 return {"ok": False, "error": str(_exc)[:120]}
 
         if name == "wake_person_info":
-            # 查看唤醒人的配置、事实和定点时间。
             try:
-                with open(str(Path(HIGAN_ROOT) / "groups.json"), encoding="utf-8") as _h:
-                    _c = json.load(_h)
-                _qq = str(args.get("qq") or "").strip()
-                if not _qq:
-                    return {"ok": False, "error": "要给 qq"}
-                _groups = [str(_g) for _g, _lst in (_c.get("wake_persons") or {}).items()
-                           if _qq in [str(x) for x in (_lst or [])]]
-                _conf = (_c.get("wake_person_conf") or {}).get(_qq) or {}
-                _at = _c.get("wake_at") or {}
-                _facts = []
-                try:
-                    import importlib.util as _ilu6
-                    from pathlib import Path as _P6
-                    _sp6 = _ilu6.spec_from_file_location(
-                        __package__ + ".memory_wpi", str(_P6(BASE_DIR, "memory.py")))
-                    _wpm = _ilu6.module_from_spec(_sp6)
-                    _sp6.loader.exec_module(_wpm)
-                    _st6 = _wpm.WakePersonFacts(
-                        str(Path(HIGAN_ROOT) / "memory" / "wake_persons.json")).load()
-                    _facts = _st6.list(_qq)
-                except Exception:  # noqa: BLE001
-                    _facts = []
-                return {"ok": True, "qq": _qq,
-                        "is_wake_person_in": _groups,
-                        "conf": {"pct": _conf.get("pct", 100),
-                                 "words": _conf.get("words") or []},
-                        "wake_at": {g: (_at.get(g) or []) for g in _groups} or _at,
-                        "facts_count": len(_facts),
-                        "facts": _facts[:50]}
-            except Exception as _exc:  # noqa: BLE001
-                return {"ok": False, "error": str(_exc)[:150]}
+                from .wake_persons import dispatch_person_facts
+                return dispatch_person_facts(name, args, root=HIGAN_ROOT,
+                                             current_scope=str(scope), event=event)
+            except Exception as exc:
+                logger.warning("[higan] 唤醒人读取失败 type=%s", type(exc).__name__)
+                return {"ok": False, "error": "wake_person_store_unavailable"}
 
         if name in ("wake_person_set", "wake_person_show"):
             #  单唤醒人配置：pct / words / hours
@@ -2942,64 +2932,16 @@ class HiganPlugin(Star):
                 logger.warning("[higan] wake 工具失败：%r", str(_exc)[:120])
                 return {"ok": False, "error": str(_exc)[:120]}
 
-        if name == "wp_fact_move":
-            #  通用事实 → 某个唤醒人的记录（原子：先写成功再从通用里删）
+        if name in ("wp_fact_move", "wp_fact_add", "wp_fact_list", "wp_fact_search", "wp_fact_delete"):
             try:
-                import importlib.util as _ilu5
-                from pathlib import Path as _P5
-                _sp5 = _ilu5.spec_from_file_location(__package__ + ".memory_wpm", str(_P5(BASE_DIR, "memory.py")))
-                _wpmod5 = _ilu5.module_from_spec(_sp5)
-                _sp5.loader.exec_module(_wpmod5)
-                _qq5 = str(args.get("qq") or "").strip()
-                _fid5 = str(args.get("id") or "").strip()
-                if not _qq5 or not _fid5:
-                    return {"ok": False, "error": "要同时给 id 和 qq"}
-                _gm = _wpmod5.Memory(str(Path(HIGAN_ROOT) / "memory" / "memory.json")).load()
-                _hit = [f for f in _gm.list_facts() if str(f.get("id")) == _fid5]
-                if not _hit:
-                    return {"ok": False, "error": "通用事实里没有 %s" % _fid5}
-                if _hit[0].get("images"):
-                    # The destination is text-only: never report a successful move
-                    # that deletes the only durable copy of a fact's attachments.
-                    return {"ok": False, "error": "destination_does_not_support_images"}
-                _text = str(_hit[0].get("text") or "")
-                _st5 = _wpmod5.WakePersonFacts(
-                    str(Path(HIGAN_ROOT) / "memory" / "wake_persons.json")).load()
-                _new_id = _st5.add(_qq5, _text)
-                if not _new_id:
-                    return {"ok": False, "error": "写入唤醒人记录失败"}
-                _gm.delete_fact(_fid5)
-                logger.info("[higan] 通用事实 %s 已移入唤醒人 %s（%s）" % (_fid5, _qq5, _new_id))
-                return {"ok": True, "moved": _fid5, "to_person": _qq5,
-                        "new_id": _new_id, "count": _st5.count(_qq5)}
-            except Exception as _exc:  # noqa: BLE001
-                return {"ok": False, "error": str(_exc)[:150]}
-
-        if name in ("wp_fact_add", "wp_fact_list", "wp_fact_search", "wp_fact_delete"):
-            #  关于某个唤醒人的记录（单独存，最多 200 条，不计入 facts）
-            try:
-                import importlib.util as _ilu3
-                from pathlib import Path as _P3
-                _sp3 = _ilu3.spec_from_file_location(
-                    __package__ + ".memory_wp", str(_P3(BASE_DIR, "memory.py")))
-                _wpmod = _ilu3.module_from_spec(_sp3)
-                _sp3.loader.exec_module(_wpmod)
-                _st = _wpmod.WakePersonFacts(str(Path(HIGAN_ROOT) / "memory" / "wake_persons.json")).load()
-                _qq = str(args.get("qq") or "").strip()
-                if name == "wp_fact_add":
-                    _fid = _st.add(_qq, str(args.get("text") or ""))
-                    return {"ok": bool(_fid), "id": _fid, "count": _st.count(_qq)}
-                if name == "wp_fact_list":
-                    return {"ok": True, "qq": _qq, "facts": _st.list(_qq)}
-                if name == "wp_fact_search":
-                    return {"ok": True, "qq": _qq,
-                            "hits": _st.search(_qq, str(args.get("query") or ""))}
-                _n = _st.delete(_qq, str(args.get("id") or ""),
-                                str(args.get("keyword") or ""))
-                return {"ok": True, "deleted": _n}
-            except Exception as _exc:  # noqa: BLE001
-                logger.warning("[higan] 唤醒人记录失败：%r", str(_exc)[:120])
-                return {"ok": False, "error": str(_exc)[:120]}
+                from .wake_persons import dispatch_person_facts
+                return dispatch_person_facts(name, args, root=HIGAN_ROOT,
+                    current_scope=str(scope), event=event,
+                    can_write=event is not None and self._policy_allows(event, str(scope)))
+            except Exception as exc:
+                # No raw content/path/OS error is exposed as a fake success receipt.
+                logger.warning("[higan] 唤醒人记录失败 type=%s", type(exc).__name__)
+                return {"ok": False, "error": "wake_person_store_unavailable"}
 
         from .fact_tools import dispatch as fact_dispatch, schemas as fact_schema
         if name == "facts_delete" or name in {item["function"]["name"] for item in fact_schema()}:
@@ -3343,7 +3285,7 @@ class HiganPlugin(Star):
                         "image_refs": [], "image_sources": [], "clock": self._clock_context()}
         try:
             turns[scope]["quote_history"] = self._hist().load_record_snapshot(
-                scope, limit=200)["records"]
+                scope, limit=None)["records"]
         except Exception:
             turns[scope]["quote_history"] = []
         try:
@@ -3619,7 +3561,7 @@ class HiganPlugin(Star):
         local_context = local_route(group, getattr(event, "unified_msg_origin", None)) and (
             is_local_event(event, self) or (isinstance(event, TaskEvent) and event.plugin is self))
         if local_context or (str(group).isascii() and str(group).isdigit() and int(group) > 0):
-            from .cross_scope_memory import CrossScopeMemory, DEFAULT_SHARED_CACHE_BLOCK
+            from .cross_scope_memory import CrossScopeMemory
             current_records = turn.get("messages") or []
             excluded = [(str(group), str(record["id"])) for record in current_records
                         if isinstance(record, dict) and record.get("id") is not None]
@@ -3627,7 +3569,10 @@ class HiganPlugin(Star):
                 snapshot_started = time.monotonic()
                 shared = await asyncio.to_thread(
                     CrossScopeMemory(self._hist()).unified_snapshot,
-                    exclude_messages=excluded, cache_block_size=DEFAULT_SHARED_CACHE_BLOCK)
+                    exclude_messages=excluded, max_chars=0)
+                # max_chars=0 deliberately returns all eligible evidence as
+                # omitted_records for one later, whole-request length selection.
+                shared["records"] = list(shared.pop("omitted_records", [])) + list(shared["records"])
                 logger.info("[higan] reply_phase phase=history_snapshot seconds=%.3f rows=%d",
                             time.monotonic() - snapshot_started, len(shared["records"]))
                 # Public QQ history stays read-only; local history never joins its pool.
@@ -3635,7 +3580,7 @@ class HiganPlugin(Star):
                 if local_context:
                     local_history = turn.get("local_history")
                     if local_history is None:
-                        local_history = self._hist().load_records(str(group), limit=200)
+                        local_history = self._hist().load_records(str(group), limit=None)
                     turn["history"].extend(dict(row, origin_scope=str(group)) for row in local_history)
                     # Preserve native timestamps; never recast local input as a QQ group.
                     turn["history"].sort(key=lambda row: row.get("ts", 0) if isinstance(row.get("ts"), (int, float)) else 0)
@@ -3652,7 +3597,7 @@ class HiganPlugin(Star):
             turn.pop("history_context", None)
             try:
                 turn["quote_history"] = self._hist().load_record_snapshot(
-                    str(group), limit=200, exclude_message_ids=[record.get('id') for record
+                    str(group), limit=None, exclude_message_ids=[record.get('id') for record
                     in (turn.get('messages') or []) if isinstance(record, dict)])["records"]
             except Exception:
                 # Missing original metadata cannot authorize a guessed native quote.
@@ -3690,7 +3635,43 @@ class HiganPlugin(Star):
                        "tool_describe to expose exact schemas on the next request. "
                        "All existing permissions and execution requirements still apply.")
         context_started = time.monotonic()
+        from .context_budget import limits, size
+        from .context_summary import prepare as prepare_summary
+        budgets = limits()
+        # Exact private archive rows remain separate from shared public groups;
+        # use all eligible originals for compaction, not the already-sized cache.
+        full_history = list((turn.get("quote_history") or turn.get("history") or [])
+                            if str(group).startswith("private:") else (turn.get("history") or []))
+        turn["history"] = []
+        turn.pop("context_summary", None)
+        baseline = self._request_context(event, group, text, has_image)
+        schemas = self._tool_schemas() if tool_profile is None else tool_profile.schemas()
+        fixed_chars = len(system) + len(baseline) + size(schemas)
+        history_chars = max(0, budgets["max_context_chars"] - fixed_chars - budgets["summary_chars"] - 2048)
+        # Summarization is actually executed, checked on disk and supplied as
+        # separately marked untrusted data, not merely a request-building helper.
+        turn["history"], length_coverage, turn["context_summary"] = await prepare_summary(
+            self, str(group), full_history, history_chars, budgets["summary_chars"], root=HIGAN_ROOT)
+        turn.setdefault("history_context", {"mode": "scoped_history", "source": "native_archive"})
+        prior_coverage = dict(turn["history_context"].get("coverage") or {})
+        prior_coverage.update(length_coverage)
+        selected_scopes = {str(row.get("scope", group)) for row in turn["history"] if isinstance(row, dict)}
+        prior_coverage["returned_scopes"] = [scope for scope in prior_coverage.get("archive_scopes", [])
+                                             if scope in selected_scopes]
+        turn["history_context"]["coverage"] = dict(prior_coverage,
+            limit=history_chars, max_context_chars=budgets["max_context_chars"], fixed_chars=fixed_chars,
+            budget_unit="serialized_unicode_characters", archive_preserved=True)
         prompt = self._request_context(event, group, text, has_image)
+        if len(system) + len(prompt) + size(schemas) > budgets["max_context_chars"]:
+            # Never silently drop current input, facts or tool schemas to claim a
+            # false fit. History can shrink further; irreducible inputs fail closed.
+            from .context_budget import suffix
+            excess = len(system) + len(prompt) + size(schemas) - budgets["max_context_chars"]
+            turn["history"], _ = suffix(turn["history"], max(0, length_coverage["used_chars"] - excess - 1024))
+            prompt = self._request_context(event, group, text, has_image)
+            if len(system) + len(prompt) + size(schemas) > budgets["max_context_chars"]:
+                logger.warning("[higan] context_budget_exceeded fixed_input_cannot_fit")
+                return ""
         logger.info("[higan] reply_phase phase=context seconds=%.3f chars=%d",
                     time.monotonic() - context_started, len(prompt))
 
@@ -4297,7 +4278,10 @@ class HiganPlugin(Star):
         if text:
             chain.message(text)
         if m:
-            context = "\n".join(self._recent.get(group, [])[-6:]) or text
+            from .history_window import history_snapshot
+            from .context_budget import limits
+            context = "\n".join(history_snapshot(self._recent.get(group, []), 0,
+                max_chars=limits()["max_context_chars"])) or text
             keywords = self._split_keywords(m.group(1))       # 支持多个关键词
             sticker = await self._pick_sticker_reviewed(keywords, context)
             if sticker:

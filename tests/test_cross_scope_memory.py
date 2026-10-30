@@ -3,6 +3,10 @@
 import importlib.util
 import json
 from pathlib import Path
+import sys
+
+# Package context resolves the shared pure budgeting helper without loading main.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import pytest
 
@@ -13,7 +17,7 @@ def modules():
     result = []
     for name in ("history", "cross_scope_memory"):
         path = Path(__file__).resolve().parents[1] / "plugin" / (name + ".py")
-        spec = importlib.util.spec_from_file_location("isolated_" + name, path)
+        spec = importlib.util.spec_from_file_location("plugin.isolated_" + name, path)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         result.append(module)

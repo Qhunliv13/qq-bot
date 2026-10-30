@@ -3,6 +3,10 @@
 import importlib.util
 import json
 from pathlib import Path
+import sys
+
+# Shared pure helpers need package context, not the production plugin entry point.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import pytest
 
@@ -13,7 +17,7 @@ def modules():
     loaded = []
     for name in ("history", "cross_scope_memory"):
         path = Path(__file__).resolve().parents[1] / "plugin" / (name + ".py")
-        spec = importlib.util.spec_from_file_location("cross_group_recall_" + name, path)
+        spec = importlib.util.spec_from_file_location("plugin.cross_group_recall_" + name, path)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         loaded.append(module)

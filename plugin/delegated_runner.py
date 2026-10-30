@@ -32,9 +32,11 @@ async def run_worker(plugin, task, scope, inbox) -> str:
     before a new model request, after all previous tool pairs have completed.
     """
     system = conversation_context.system_prompt(plugin.persona)
+    from .context_budget import limits
     history = history_snapshot(
         getattr(plugin, "_recent", {}).get(scope, []),
         getattr(plugin, "_history_origins", {}).get(scope, 0),
+        max_chars=limits()["max_context_chars"],
     )
     prompt = conversation_context.build_context(
         scope=scope, messages=[], history=history, clock=plugin._clock_context(),

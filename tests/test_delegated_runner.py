@@ -188,7 +188,8 @@ def test_empty_task_has_no_fake_human_and_history_uses_logical_origin():
     asyncio.run(delegated_runner.run_worker(plugin, "", "a", empty_inbox))
     context = json.loads(plugin.requests[0]["prompt"])
     assert context["conversation"]["messages"] == []
-    assert context["conversation"]["history"] == list(history_snapshot(plugin._recent["a"], 137))
+    assert context["conversation"]["history"] == list(history_snapshot(
+        plugin._recent["a"], 137, max_chars=600000))
     assert context["task"] == {"kind": "delegated_research", "goal": "", "read_only": True}
     assert context["observations"] == []
 

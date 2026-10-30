@@ -12,7 +12,8 @@ import pytest
 
 import test_production_integration as integration
 from test_production_integration import Event, _provider
-from plugin.cross_scope_memory import CrossScopeMemory, DEFAULT_SHARED_CACHE_BLOCK, UNIFIED_SOURCE
+from plugin.cross_scope_memory import CrossScopeMemory, UNIFIED_SOURCE
+from plugin.context_budget import size
 from plugin.message_batch import message_record
 
 # Alias the existing fixture instead of duplicating the AST production harness.
@@ -65,7 +66,17 @@ def _assert_context(envelope, expected):
     metadata = conversation["history_context"]
     assert metadata["mode"] == "one_shared_timeline"
     assert metadata["source"] == expected["source"] == UNIFIED_SOURCE
-    assert metadata["coverage"] == expected["coverage"]
+    coverage = metadata["coverage"]
+    for key in ("returned", "omitted", "more_available", "scope_count",
+                "archive_scopes", "returned_scopes", "unit", "used_chars"):
+        assert coverage[key] == expected["coverage"][key]
+    assert coverage["unit"] == coverage["budget_unit"] == "serialized_unicode_characters"
+    assert coverage["used_chars"] == size(conversation["history"])
+    assert coverage["used_chars"] <= coverage["max_chars"] == coverage["limit"]
+    assert 0 < coverage["max_chars"] < coverage["max_context_chars"] == 600000
+    assert coverage["fixed_chars"] > 0
+    assert coverage["archive_preserved"] is True
+    assert "cache_padding" not in coverage
     return conversation
 
 
@@ -83,7 +94,7 @@ def test_native_group_request_unifies_public_sources_and_excludes_current(produc
     before = {group: plugin._hist().load_records(group, limit=None)
               for group in ("42", "77", "88", "private:1012")}
     expected = CrossScopeMemory(plugin._hist()).unified_snapshot(
-        cache_block_size=DEFAULT_SHARED_CACHE_BLOCK, exclude_messages=[(scope, "current-native")])
+        max_chars=600000, exclude_messages=[(scope, "current-native")])
     envelope = _request(plugin, event, monkeypatch)
     conversation = _assert_context(envelope, expected)
     history = conversation["history"]
@@ -111,7 +122,7 @@ def test_same_query_from_two_groups_has_identical_persisted_history_without_ids(
         event = _event(scope, message_id=None)
         _seed(plugin, scope, event.text, None)
     expected = CrossScopeMemory(plugin._hist()).unified_snapshot(
-        cache_block_size=DEFAULT_SHARED_CACHE_BLOCK)
+        max_chars=600000)
     for scope in ("42", "77"):
         event = _event(scope, message_id=None)
         envelope = _request(plugin, event, monkeypatch)
@@ -131,7 +142,7 @@ def test_native_batch_is_separate_and_excludes_every_scoped_current_id(productio
         plugin._hist().append("42", event.text, record=record)
     plugin._turn_context["42"] = {"messages": copy.deepcopy(records), "history": ["stale batch"]}
     expected = CrossScopeMemory(plugin._hist()).unified_snapshot(
-        cache_block_size=DEFAULT_SHARED_CACHE_BLOCK, exclude_messages=[("42", record["id"]) for record in records])
+        max_chars=600000, exclude_messages=[("42", record["id"]) for record in records])
     envelope = _request(plugin, events[-1], monkeypatch)
     conversation = _assert_context(envelope, expected)
     assert [record["id"] for record in conversation["messages"]] == ["batch-1", "batch-2"]
@@ -140,22 +151,22 @@ def test_native_batch_is_separate_and_excludes_every_scoped_current_id(productio
                    for row in conversation["history"])
 
 
-def test_native_shared_history_uses_aligned_240_minimum_not_twenty_per_group(production, monkeypatch):
-    """The native path retains the latest 240 rows plus bounded cache-alignment padding."""
+def test_native_shared_history_uses_length_not_count_minimum(production, monkeypatch):
+    """The native path keeps all 500 small records without per-group or old 240-row caps."""
     plugin = production()
-    for number in range(245):
+    for number in range(500):
         _seed(plugin, "77", f"public history number {number:03d}", f"stored-{number}")
     expected = CrossScopeMemory(plugin._hist()).unified_snapshot(
-        cache_block_size=DEFAULT_SHARED_CACHE_BLOCK)
+        max_chars=600000)
     conversation = _assert_context(_request(plugin, _event(), monkeypatch), expected)
-    assert len(conversation["history"]) == 245
+    assert len(conversation["history"]) == 500
     assert conversation["history"][0]["line"] == "public history number 000"
-    assert conversation["history"][-240]["line"] == "public history number 005"
-    assert conversation["history"][-1]["line"] == "public history number 244"
+    assert conversation["history"][-1]["line"] == "public history number 499"
     assert conversation["history_context"]["coverage"]["more_available"] is False
-    assert conversation["history_context"]["coverage"]["limit"] == 240
-    assert conversation["history_context"]["coverage"]["cache_padding"] == 5
-    assert conversation["history_context"]["coverage"]["cache_block_size"] == DEFAULT_SHARED_CACHE_BLOCK
+    assert conversation["history_context"]["coverage"]["omitted"] == 0
+    assert conversation["history_context"]["coverage"]["returned"] == 500
+    assert conversation["history_context"]["coverage"]["unit"] == "serialized_unicode_characters"
+    assert "cache_block_size" not in conversation["history_context"]["coverage"]
 
 
 def test_native_timeline_reads_durable_sources_not_group_live_cache(production, monkeypatch):
@@ -165,7 +176,7 @@ def test_native_timeline_reads_durable_sources_not_group_live_cache(production, 
     plugin._recent = {"42": ["live current group phantom"], "77": ["live other group phantom"]}
     plugin._turn_context["42"] = {"history": ["frozen phantom"]}
     expected = CrossScopeMemory(plugin._hist()).unified_snapshot(
-        cache_block_size=DEFAULT_SHARED_CACHE_BLOCK)
+        max_chars=600000)
     envelope = _request(plugin, _event(), monkeypatch)
     _assert_context(envelope, expected)
     assert "phantom" not in json.dumps(envelope)
@@ -198,7 +209,16 @@ def test_native_private_turn_keeps_own_history_without_joining_group_timeline(pr
     event = _event("private:1012")
     plugin._turn_context[event.group] = {"history": ["own private frozen history"]}
     envelope = _request(plugin, event, monkeypatch)
-    assert envelope["conversation"]["history"] == ["own private frozen history"]
-    assert "history_context" not in envelope["conversation"]
+    history = envelope["conversation"]["history"]
+    assert len(history) == 1
+    assert history[0]["scope"] == "private:1012"
+    assert history[0]["line"] == history[0]["record"]["body"] == "private hidden-memory nonce"
+    assert history[0]["record"]["id"] == "private-hidden"
+    assert envelope["conversation"]["history_context"]["mode"] == "scoped_history"
+    coverage = envelope["conversation"]["history_context"]["coverage"]
+    assert coverage["unit"] == "serialized_unicode_characters"
+    assert coverage["returned"] == 1 and coverage["omitted"] == 0
+    assert coverage["used_chars"] == size(history) <= coverage["max_chars"]
     assert envelope["other_scopes"] == []
     assert "public-memory nonce" not in json.dumps(envelope)
+    assert "own private frozen history" not in json.dumps(envelope)
