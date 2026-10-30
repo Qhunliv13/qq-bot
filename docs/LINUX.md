@@ -1,45 +1,57 @@
-# Linux quick deployment
+# Linux 安装与管理
 
-## What this starts
+## 最短安装步骤
 
-The root [install.sh](../install.sh) is a thin Bash entry point for the shared
-[bootstrap](../tools/bootstrap.py). With **no arguments**, it runs `up`; otherwise
-it forwards every argument unchanged. It preserves the caller's working directory,
-standard input and the Python process's exit status. Quote paths containing spaces.
-Use Bash, not `sh`. The examples use `bash install.sh`, so a missing executable bit
-on a Windows checkout does not prevent launch. The file must remain UTF-8 with LF
-line endings.
+准备好 **Bash、宿主 Python 3.10+、已运行且当前用户可访问的 Docker Engine，以及支持 `up --wait` 的 Compose v2**，在完整仓库根目录执行：
 
-The default build starts the **full bundled AstrBot runtime and dashboard**, plus
-this project's plugin, in Docker. It is not a minimal replacement server. The first
-build downloads images and dependencies and can take time. **NapCat is not bundled
-or installed. Starting successfully does not log into QQ, configure an external
-OneBot adapter, or prove that a model API works.** QQ integration is a separate,
-explicit task; no message is sent to QQ by these setup/health commands.
+```bash
+bash ./install.sh
+```
 
-## Prerequisites (install manually)
+按提示填写**模型地址（Base URL）、模型名称（Model ID）、API Key**，Key 隐藏输入。当前安装路径使用 OpenAI 兼容 HTTP 接口，不是任意供应商的原生协议都支持；模型与工具调用能力仍取决于实际服务。可选 QQ 所有者 ID 可以留空，填了也不会自动登录 QQ。
 
-- A Linux host, Bash, and `python3` (host Python **3.10+ recommended**). The bootstrap
-  uses only the Python standard library; no host `pip install` is needed. This is
-  distinct from the bundled AstrBot project's **Python >=3.12** requirement: the
-  [Dockerfile](../deploy/Dockerfile) supplies Python 3.12 inside the container.
-- Docker Engine running and accessible to the current user, with the **Compose v2
-  plugin** (`docker compose`, not the legacy `docker-compose` command).
-- A complete checkout, including the vendored AstrBot source; sufficient disk space
-  for the full image build, and network access for the build and chosen model API.
-- An OpenAI-compatible base URL, a valid model ID, and an API key.
+首次构建会下载镜像和依赖、占用时间和磁盘；容器提供 Python 3.12，不需要给宿主执行 `pip install`。安装启动的是完整内嵌 AstrBot 与插件，不是最小替代服务。**不安装 NapCat、不配置 QQ 登录、不接管已有实例**。
 
-Use Docker's official, distribution-specific package-repository instructions:
-[Docker Engine installation](https://docs.docker.com/engine/install/) and
-[Compose plugin installation](https://docs.docker.com/compose/install/linux/).
-For Ubuntu see [the Ubuntu Engine guide](https://docs.docker.com/engine/install/ubuntu/).
-Review and run the applicable package commands yourself; do not pipe a downloaded
-installer into a shell. The launcher does **not** install Docker, invoke `sudo`,
-change firewall rules, or restart host services. Docker access is privileged;
-consult [Docker's Linux post-install guidance](https://docs.docker.com/engine/install/linux-postinstall/)
-before granting group membership, or use the documented rootless configuration.
+默认数据放在仓库外的 **`$HOME/.local/share/qhunliv-bot`**；如果该目录可能已被另一个实例使用，先按后文选择新目录和运行名，不直接运行默认安装。
 
-Verify the prerequisites manually (these commands do not start a bot):
+## 面板与日常管理
+
+默认面板只绑定本机 **http://127.0.0.1:6185**，用户名 **`astrbot`**，密码随机生成。查看当前实例信息或在自己的终端显示面板密码：
+
+```bash
+bash ./install.sh info
+bash ./install.sh info --show-password
+```
+
+`info` 读取私有配置，显示运行名、数据/配置路径、配置中的面板地址与用户名；不需要 Docker、不联网、不启动服务、不调用模型。**配置地址不是健康证明**。默认隐藏密码，显式选项也仅显示面板密码，不显示模型 API Key。这里是私有 `settings.json` 中的初始账号/密码；若在面板改过，以修改后为准，`info` 不重置当前登录信息。不要上传该文件、密码输出或终端截图。
+
+继续使用**同一数据目录和运行名**；新安装选定的端口随初始化保存，后续默认沿用：
+
+| 命令 | 用途与边界 |
+|---|---|
+| `bash ./install.sh doctor` | 检查已初始化配置、Docker/Compose；不构建、不启动 |
+| `bash ./install.sh status` | 查看容器状态，不验证模型凭据或 QQ 登录 |
+| `bash ./install.sh health` | 检查本地入口，不调用模型或发送 QQ 消息 |
+| `bash ./install.sh logs` | 跟踪最后 100 行；Ctrl+C 只退出日志查看，不停 bot |
+| `bash ./install.sh chat --prompt '你好'` | 主动调用同一 bot 的模型，可能收费并执行获授权工具 |
+| `bash ./install.sh stop` | 只停止归属校验通过的所选实例，不擦除数据 |
+| `bash ./install.sh up` | 用原状态启动，仍可能构建镜像，不是升级或重置 |
+
+`chat` 也接受标准输入，不另建模型循环：
+
+```bash
+printf '%s\n' '你好' | bash ./install.sh chat
+```
+
+不要把密钥写进提示词、命令行或日志。请求成功只证明这一条模型请求，不代表 QQ 已连接或消息已送达；日志按私有资料处理，分享前脱敏。
+
+## 缺少环境时
+
+启动脚本**不自动安装 Docker、不调用 sudo、不改防火墙、不重启宿主服务**。请按自己的发行版查看 [Docker Engine 安装](https://docs.docker.com/engine/install/)、[Compose 插件安装](https://docs.docker.com/compose/install/linux/)；Ubuntu 可参考 [官方 Ubuntu 指南](https://docs.docker.com/engine/install/ubuntu/)。阅读并自行执行适用的包管理步骤，不把远程下载脚本直接管进 shell。
+
+Docker 访问有高权限含义；添加用户组前先读 [Docker Linux post-install](https://docs.docker.com/engine/install/linux-postinstall/)，或采用官方 rootless 配置。访问失败时自行按官方要求修复，安装器不自动提权或修复 daemon。
+
+以下命令只读，不启动 bot：
 
 ```bash
 bash --version
@@ -49,148 +61,105 @@ docker compose version
 docker info --format '{{.ServerVersion}}'
 ```
 
-If Docker access fails, resolve it using the official instructions; the launcher
-will not attempt an automatic privilege escalation or daemon repair.
+还需要完整仓库（包括内嵌 AstrBot 源码）、镜像构建所需磁盘/内存、依赖源及模型 API 网络。宿主 Python 用标准库运行安装器，与容器内上游 Python >=3.12 要求不同；[`Dockerfile`](../deploy/Dockerfile) 在容器内提供后者。
 
-## Choose isolated state, then start
+## 指定隔离目录与运行名
 
-Use a **new, dedicated directory outside the checkout**, not an existing production
-bot directory, and reuse exactly that directory for all subsequent commands. The
-bootstrap refuses an unmanaged nonempty directory rather than importing or
-rewriting it. The default state location is `$HOME/.local/share/qhunliv-bot`; if it
-might already be in use, do not use the no-argument shortcut for a fresh instance.
-
-The commands below assume the checkout is your current directory. Choose a unique
-state directory and runtime name for this installation:
+新实例用**仓库之外的新专用目录**，不要选择已有 bot 数据目录。初始化会拒绝陌生非空目录，不自动导入或覆盖。以下示例需在同一 shell 中执行；新终端要重新设置变量：
 
 ```bash
-BOT_STATE="$HOME/.local/share/qhunliv-bot-linux-demo"
-BOT_NAME="qhunliv-bot-linux-demo"
-bash install.sh init --data-dir "$BOT_STATE" --runtime-name "$BOT_NAME"
-bash install.sh doctor --data-dir "$BOT_STATE" --runtime-name "$BOT_NAME"
-bash install.sh up --data-dir "$BOT_STATE" --runtime-name "$BOT_NAME"
+BOT_STATE="$HOME/.local/share/qhunliv-bot-local"
+BOT_NAME="qhunliv-bot-local"
+bash ./install.sh init --data-dir "$BOT_STATE" --runtime-name "$BOT_NAME"
+bash ./install.sh doctor --data-dir "$BOT_STATE" --runtime-name "$BOT_NAME"
+bash ./install.sh up --data-dir "$BOT_STATE" --runtime-name "$BOT_NAME"
+bash ./install.sh info --data-dir "$BOT_STATE" --runtime-name "$BOT_NAME"
 ```
 
-`init` prompts for the model URL/ID and a hidden API key, and optionally QQ owner
-IDs. Supplying owner IDs alone does **not** enable a QQ adapter or log into QQ.
-`init` writes private external configuration without Docker. `doctor` checks
-prerequisites/configuration read-only; it does not build or start services. `up`
-initializes if needed, checks prerequisites, then builds and starts the full runtime.
-It uses Compose's health wait before reporting success: the default readiness wait
-is **300 seconds**, configurable with `--wait-timeout` (integer seconds, 1–3600).
-This wait is for runtime health, **not** QQ login or a successful model API request;
-it is not a total timeout for downloading dependencies or building the image.
-For a slower first startup you can allow 600 seconds:
+- `init` 不需要 Docker，首次写私有配置，Key 隐藏输入；反复执行验证原配置，不覆盖秘密。
+- `doctor` 读取已初始化配置，检查环境，不构建、不启动。
+- `up` 必要时先初始化，然后预检、构建、启动并等待本地健康。默认等待 **300 秒**，整数范围 1–3600 秒；不限制整个镜像下载/构建总时长。
+
+慢机器可延长健康等待：
 
 ```bash
-bash install.sh up --data-dir "$BOT_STATE" --runtime-name "$BOT_NAME" --wait-timeout 600
+bash ./install.sh up --data-dir "$BOT_STATE" --runtime-name "$BOT_NAME" --wait-timeout 600
 ```
 
-If startup fails or health waiting times out, inspect `status` and `logs` for that
-same state/name/port selection before retrying. Do not repeatedly tear down or
-recreate the runtime, delete its state, or use `down` as a health-timeout remedy.
-
-For an unused default state directory the shortest interactive command is simply:
+后续每条管理命令都沿用同样的目录/运行名；例如：
 
 ```bash
-bash install.sh
+bash ./install.sh status --data-dir "$BOT_STATE" --runtime-name "$BOT_NAME"
+bash ./install.sh health --data-dir "$BOT_STATE" --runtime-name "$BOT_NAME"
+bash ./install.sh logs --data-dir "$BOT_STATE" --runtime-name "$BOT_NAME"
+bash ./install.sh chat --data-dir "$BOT_STATE" --runtime-name "$BOT_NAME" --prompt '你好'
+bash ./install.sh stop --data-dir "$BOT_STATE" --runtime-name "$BOT_NAME"
 ```
 
-For invocation from another directory, use the absolute launcher path, for example
-`bash "/home/me/QQ Bot/install.sh" status --data-dir "$BOT_STATE" --runtime-name "$BOT_NAME"`.
-Relative paths such as `--persona-file ./persona.txt` resolve from your current
-working directory, not from the checkout. Options do not imply `up`: use
-`bash install.sh up --data-dir ...`, not `bash install.sh --data-dir ...`.
+数据包含 `settings.json`、`astrbot` 与 `higan` 状态；备份整个私有目录再做更新。重复 `init` / `up` 不是重置、迁移或现有配置覆盖命令；不能靠删标记文件来绕过所有权保护。初始模型字段是配置生成输入，已有 AstrBot 面板另有运行配置；不保证手改初始化文件或重传参数会更新当前模型，本轮没有模型热更新命令。
 
-The dashboard is loopback-only at **http://127.0.0.1:6185** by default. Its generated
-password is stored in the selected external state's `settings.json`. Keep that file
-private; do not commit it, print it into logs, or share it. For a remote host use an
-SSH tunnel or a separately reviewed access setup; do not open the firewall or bind
-the dashboard publicly just to follow this guide.
+## 多实例与端口
 
-Unique state/project names do not by themselves prevent host-port collisions.
-The [Compose file](../deploy/compose.yaml) currently uses `BOT_WEB_PORT` (default
-6185) and `BOT_ONEBOT_PORT` (default 6199), both bound to `127.0.0.1`. The selected
-ports must be valid and distinct. Select unused ports before launching a second
-instance, and keep those values consistent for all
-commands for that instance. For example, after checking that 16185 and 16199 are
-free, export both values **before** `doctor`/`up` and keep them set for subsequent
-commands (the current interface does not persist these exports):
+不同数据目录/运行名**不会自动避免端口冲突**。[Compose 配置](../deploy/compose.yaml) 的默认 `BOT_WEB_PORT=6185`、`BOT_ONEBOT_PORT=6199` 均绑定 `127.0.0.1`；两端口须不同、在 1–65535 且未被占用。
+
+新安装先核对 16185、16199 未被占用，再在**首次初始化的 Linux 环境**中设置；目录须为该新实例专用：
 
 ```bash
+BOT_STATE="$HOME/.local/share/qhunliv-bot-second"
+BOT_NAME="qhunliv-bot-second"
 export BOT_WEB_PORT=16185
 export BOT_ONEBOT_PORT=16199
-bash install.sh doctor --data-dir "$BOT_STATE" --runtime-name "$BOT_NAME"
-bash install.sh up --data-dir "$BOT_STATE" --runtime-name "$BOT_NAME"
+bash ./install.sh init --data-dir "$BOT_STATE" --runtime-name "$BOT_NAME"
+unset BOT_WEB_PORT BOT_ONEBOT_PORT
+bash ./install.sh doctor --data-dir "$BOT_STATE" --runtime-name "$BOT_NAME"
+bash ./install.sh up --data-dir "$BOT_STATE" --runtime-name "$BOT_NAME"
+bash ./install.sh info --data-dir "$BOT_STATE" --runtime-name "$BOT_NAME"
 ```
 
-With that override, open http://127.0.0.1:16185 rather than the default URL. An
-exposed OneBot port does not mean an adapter is configured or QQ is logged in.
+首次初始化把端口保存至私有设置的 `deployment.web_port` / `deployment.onebot_port`，后续命令默认沿用，不必重复导出。旧安装没有该字段时仍使用原默认值，不自动改写配置。若显式设置上述环境变量，它们只对当前进程临时覆盖已保存值；`info` 只显示所选配置，实际端口变更还需通过 `up` 应用，不能据显示地址判断已监听。
 
-## Check and use the same instance
+此示例本机面板是 **http://127.0.0.1:16185**，不是默认地址。重复 `init` 不会替已有安装改端口。不要为了换端口编辑安装器管理的 `compose.env`，完整性检查会拒绝。暴露 OneBot 端口不等于已配置适配器或登录 QQ。
 
-Keep `BOT_STATE` and `BOT_NAME` set to the original values (or substitute them
-explicitly if opening a new terminal):
+远程服务器的 `127.0.0.1` 是服务器自己；在个人电脑访问面板请用 SSH 隧道或经审查的访问方案，不要为照抄教程直接开放面板端口/防火墙或关闭认证。
 
-```bash
-bash install.sh status --data-dir "$BOT_STATE" --runtime-name "$BOT_NAME"
-bash install.sh health --data-dir "$BOT_STATE" --runtime-name "$BOT_NAME"
-bash install.sh logs --data-dir "$BOT_STATE" --runtime-name "$BOT_NAME"
-```
+## 故障排查
 
-- `status` reports Compose container state, not an end-to-end model test.
-- `health` checks the existing runtime's local client/socket readiness without
-  sending a model or QQ request. Startup can take time; inspect logs if not ready.
-- `logs` follows the last 100 lines; Ctrl+C exits the log viewer, not the bot.
-  Treat runtime logs as private and redact before sharing.
+| 现象 | 下一步 |
+|---|---|
+| 找不到配置、提示未初始化 | 核对原用户/目录/运行名；真正的新实例先 `init` 或 `up` |
+| Docker / Compose 报错 | 确认 daemon、当前账号权限及 Compose v2；`info` 无需 Docker 仍可查看配置 |
+| 启动超时 | 同一实例查 `status` / `logs`，不要删数据或用拆除容器来“修复”健康等待 |
+| 面板打不开 | 用 `info` 核对配置端口，再查 `status` / `logs`；远程主机用隧道 |
+| `health` 正常但 `chat` 失败 | 检查自己的模型 URL/ID/权限/余额；健康检查没有调用模型 |
+| 非空目录、运行名/归属不符 | 找回正确参数，或新安装用新目录和名字；不要覆盖现有实例 |
+| 设置更改没有生效 | `init` / `up` 保留已有配置；不要假设初始化文件就是面板当前模型唯一来源 |
+| QQ 未登录、消息未发送 | 安装默认不接 QQ，按 [快速开始](QUICKSTART.md#可选外接-qq)单独设置 |
 
-After readiness succeeds, send one deliberate model request through that same
-running bot (this may incur your model provider's normal cost):
+构建、健康、真实模型、QQ 登录各自有独立验收边界；已知网络阻塞等记录见 [部署验证记录](QUICK_DEPLOY_VERIFICATION.md)。不要自动换不可信镜像源或把某条离线测试通过当作实际部署成功。
 
-```bash
-bash install.sh chat --data-dir "$BOT_STATE" --runtime-name "$BOT_NAME" --prompt "Hello from Linux"
-printf '%s\n' 'A prompt supplied on standard input' | bash install.sh chat --data-dir "$BOT_STATE" --runtime-name "$BOT_NAME"
-```
+## 高级参数与入口约定
 
-Chat success verifies that request only; it does not establish QQ connectivity.
-Never put API keys into `--prompt`, the command-line arguments, or pasted logs.
-For unattended initialization use the shared bootstrap's `--api-key-env VARIABLE`
-option with a securely supplied environment variable; pass the variable **name**,
-not the key. Interactive hidden entry is preferred for a manual installation.
+根 [`install.sh`](../install.sh) 只是共享 [`bootstrap`](../tools/bootstrap.py) 的薄 Bash 入口：无参数默认 `up`，有参数原样传递，保留调用者工作目录、stdin 与 Python 退出码；包含空格的路径须加引号。使用 Bash 而非 `sh`，显式 `bash` 不依赖 Windows checkout 的 executable bit；脚本保持 UTF-8 与 LF。
 
-## Configuration is preserved
+从其它目录可用绝对路径，如 `bash "/home/me/QQ Bot/install.sh" status --data-dir "$BOT_STATE" --runtime-name "$BOT_NAME"`。相对 `--persona-file ./persona.txt` 按**调用者当前目录**解析，不是仓库目录。带选项时须显式写命令：用 `bash ./install.sh up --data-dir ...`，而不是 `bash ./install.sh --data-dir ...`。
 
-Repeating `init` validates the managed state and leaves existing settings/secrets
-unchanged. Repeating `up` reuses that external state; it is not a reset or migration
-command. Setup flags are not an overwrite interface for an existing installation.
-Keep the original runtime name, state directory and port selection. A marker/name
-mismatch or an unmanaged state directory is a safety failure: inspect the choice,
-do not delete the marker or repoint the command at production state to bypass it.
-Back up private external state before intentional configuration maintenance.
+非交互初始化可用 `--api-key-env VARIABLE` 从同一进程环境读取 Key；传的是**变量名而非秘密值**。不在共享启动文件或跟踪文件存 Key；手动安装优先用隐藏输入。详细参数可查看 `python3 tools/bootstrap.py --help`。
 
-## Offline launcher tests (no Docker required)
+## 开发者：离线入口测试
 
-The single shared [unittest fixture](../tests/test_linux_launcher.py) uses real Bash
-and a fake `python3` executable in a private Linux `/tmp` directory. It verifies
-space-containing checkout paths, unrelated caller cwd, exact arguments (including
-shell syntax and Unicode), stdin preservation and nonzero child exit codes. It
-never invokes Docker, starts a runtime, installs packages, or accesses the network.
+共享 [`unittest fixture`](../tests/test_linux_launcher.py) 用真实 Bash、Linux 私有 `/tmp` 目录下的模拟 `python3` 验证带空格路径、无关 cwd、准确参数（包括 shell 字符和 Unicode）、stdin 与非零退出码；不调用 Docker、不启动 bot、不安装包、不联网。
 
-On Linux, no pytest installation is necessary:
+Linux 无需 pytest 即可运行：
 
 ```bash
 python3 tools/test_linux_launcher.py
 ```
 
-On Windows, the ordinary test collection runs the source checks and deliberately
-skips real-Bash tests. Run the same stdlib fixture explicitly in the existing WSL
-distribution, adjusting the mounted checkout path if needed:
+Windows 普通测试会验证源码约定，跳过真实 Bash 项；在已有 WSL 内可显式运行同一标准库入口，把示例发行版和路径换成自己的：
 
 ```powershell
 python -m pytest tests/test_linux_launcher.py -q
-wsl -d Ubuntu-TSC -- python3 /mnt/c/qhunliv13_web/_public_qqbot/tools/test_linux_launcher.py
+wsl -d Ubuntu -- python3 /mnt/c/path/to/checkout/tools/test_linux_launcher.py
 ```
 
-The [standalone runner](../tools/test_linux_launcher.py) loads that same fixture;
-there is no second Linux-only implementation to drift. Actual executable fixtures
-are created on the Linux filesystem, not on the Windows-mounted checkout.
+[`独立 runner`](../tools/test_linux_launcher.py) 加载同一个 fixture，没有第二套 Linux 实现；可执行 fixture 放在 Linux 文件系统而非 Windows 挂载盘。此类离线测试不代表实际模型请求、QQ 登录或完整镜像部署验收。

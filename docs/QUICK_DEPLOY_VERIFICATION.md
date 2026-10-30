@@ -9,7 +9,7 @@ chat **not yet accepted**. No production installation changed.
 - Linux: `bash ./install.sh` from the checkout; defaults to shared bootstrap `up`.
 - Windows: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1`;
   defaults to `up` through the WSL launcher, not another installer implementation.
-- Explicit commands remain init/doctor/up/status/logs/health/chat. Existing private
+- Explicit commands are init/doctor/up/info/stop/status/logs/health/chat. Existing private
   state is validated, not overwritten. Unmanaged directories and project ownership
   conflicts fail closed. Default full tool exposure remains unchanged.
 - `up` waits for Compose health with a 300-second default (configurable 1–3600).
@@ -69,6 +69,16 @@ no real model request or QQ login was performed. Both lab containers are stopped
 and retained. The dedicated daemon subsequently exited 0 gracefully; the temporary
 proxy relay was cancelled after builds completed. Full regression after source
 freeze: **4485 passed, 44 skipped, 348 subtests passed**.
+
+## Open-source onboarding follow-up (2026-10-30)
+
+- Shared bootstrap now exposes `info` without Docker or network access; default output and `info --json` do not include model keys or passwords. `info --show-password` reveals only the dashboard password by explicit local request, and cannot be combined with JSON or unrelated commands.
+- New initialization saves deployment ports once; later shells use them without re-exporting environment variables. Explicit environment overrides are temporary. Old settings remain valid and are not rewritten. Windows browser launch reads the secret-free information from the same Linux data directory instead of assuming a Windows-side default port.
+- `stop` checks ownership of the selected Compose project and issues `compose stop`, not `down`, deletion or reset. Tests reject another installation's project before any stop action; no live service was stopped for this feature's test.
+- Real PowerShell tests cover copied Chinese/spaced checkouts, Unicode Linux HOME, multi-distro selection/cancellation, unsupported WSL list commands, prerequisite diagnostics and same-instance command forwarding. They replace WSL/install/browser boundaries; they do not prove a complete Windows first installation.
+- Actual WSL Bash launched `init`, `info`, `info --json` and explicit password retrieval from `/tmp` against disposable external state with spaces. Saved non-default ports survived removing environment overrides; settings bytes and restrictive permissions were unchanged. No Docker daemon, model or QQ connection was needed or used.
+- User-facing README, quick start and platform guides now lead with installation, three model inputs, access recovery and common operations. Existing detailed capabilities remain in [feature details](FEATURES.md); advanced evidence is not presented as onboarding.
+- Full regression for this onboarding pass: **4624 passed, 44 skipped, 348 subtests passed**; final targeted launcher/configuration follow-up: **147 passed**. Follow-up account-change regression and output wording explicitly distinguish initial credentials from later dashboard changes; `info` does not read, reset or claim to recover the current dashboard password. This remains offline/interface coverage, not complete first-install/model/QQ acceptance.
 
 ## Remaining acceptance
 

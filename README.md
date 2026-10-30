@@ -1,102 +1,76 @@
 # 彼岸酱（Qhunliv-bot）
 
-内嵌固定版本 AstrBot 的 bot 发行包，包含群聊、共享群记忆、原生工具调用、排队执行、主动观察、后台任务及本地独立入口。原始 AstrBot 许可证与声明完整保留；NapCat／QQ 客户端、登录会话和凭据不在仓库中，QQ 通过外部 OneBot 可选接入。
+开源、可自托管的聊天与工具助手，内嵌固定版本 AstrBot。用自己的模型 API，在本地面板或命令行使用；也可另外连接 QQ。包含持久记忆、工具调用、排队执行与后台任务，无需使用作者的账号、模型供应商或服务器。
 
-## Windows 双击部署
+## 开始使用
 
-下载并完整解压仓库 ZIP，**双击根目录的 [`install.cmd`](install.cmd)**，不需要先打开 PowerShell、安装 Windows Python 或输入部署命令。
+**Windows：**下载并完整解压仓库 ZIP，双击根目录 [`install.cmd`](install.cmd)。不用先装 Windows Python；向导检查 WSL2 与 Docker，缺依赖时先征求同意。Windows 提示重启或首次初始化 Ubuntu 时，完成后再次双击继续，不会强制重启。
 
-向导会检测 WSL2、自动使用唯一可用发行版（有多个时让你选择），并检查 Python / Docker / Compose；缺少依赖时先征求同意，再通过配置好的 Linux 软件源安装和启动 Docker。首次只需按提示填写模型地址、模型名和隐藏的 API key，随后自动构建、等待健康检查并打开网页面板。再次双击继续使用原配置，不重置密钥。
-
-- 未安装 WSL 时，向导可请求管理员授权调用微软安装程序；若 Windows 要求重启或 Ubuntu 首次初始化，完成后再次双击即可，**不会自动重启系统**。
-- 已有 Docker Desktop 时复用其 WSL Integration，不替换已有 Docker；自动依赖安装目前支持提供 `docker.io` / `docker-compose-v2` 的 apt 发行版。网络不可达、硬件虚拟化未启用或依赖源不提供包时会明确停止，不报成功。
-- 使用完整运行时，默认不削减功能；QQ 登录与不依赖 NapCat 的原生 QQ 仍未完成，不接管生产实例。面板账号为 `astrbot`，随机密码在向导所示 Linux 数据目录的 `settings.json` 中。
-
-[Windows 详细说明](docs/WINDOWS.md) · [全部文档导航](docs/README.md) · [验证证据](docs/evidence/README.md)
-
-## Linux 一条命令启动
-
-Linux（仓库根目录）：
+**Linux：**准备 Python 3.10+、Docker Engine 与 Compose v2，在仓库根目录运行：
 
 ```bash
 bash ./install.sh
 ```
 
-Windows PowerShell（仓库根目录，使用 WSL2 中的完整运行时）：
+首次构建需网络、时间和磁盘；Linux 入口不自动安装系统依赖。已有 Docker 不替换；Windows Docker Desktop 需开启所选 WSL 发行版的 Integration。[Windows 说明](docs/WINDOWS.md) · [Linux 说明](docs/LINUX.md)
 
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
-```
+## 模型设置：只需三项
 
-首次交互配置模型，自动创建仓库之外的私有数据目录，构建内嵌 AstrBot 镜像并等待运行时健康检查。两入口复用 `tools/bootstrap.py`，不另建安装核心；已有配置与密钥不会被重复初始化覆盖。完整版本需要 Docker Engine/Compose v2 及首次构建网络；Windows 双击向导可经确认准备依赖，命令行入口不静默安装系统依赖。PowerShell 的 Bypass 仅用于本次进程，不修改系统执行策略。
-
-详见 [Linux 快捷部署](docs/LINUX.md)、[Windows 快捷部署](docs/WINDOWS.md)、[开箱部署](docs/QUICKSTART.md)和[第三方声明](THIRD_PARTY_NOTICES.md)。健康检查不等于模型请求或 QQ 登录成功；不会迁移或替换现有生产，也不会自动安装 NapCat。整镜像构建及启动实测状态以部署验证记录为准，不以入口测试代替。
-
-## 选择运行版本
-
-| 版本 | 平台与启动 | 包含内容 | 不包含 |
-|---|---|---|---|
-| 完整 Linux | Linux + Docker Compose，`python3 tools/bootstrap.py up` | 内嵌 AstrBot、本地入口、插件能力与独立状态 | 默认不安装或登录 QQ |
-| 完整 Windows | Windows + WSL2，双击 `install.cmd`（复用 Desktop 或 Linux Engine） | **复用同一** Linux 安装器和完整容器，不另起一套核心 | 不是原生 Windows QQ；需要 WSL 与 Docker |
-| Lite 文字版 | Windows / Linux，`python tools/lite.py --system-file persona.txt --interactive` | 仅 Python 标准库和已有模型 HTTP 适配器，进程内最多保留可配置轮数 | 不提供 QQ、AstrBot、工具、持久记忆、后台任务或网页面板 |
-
-分别参见[Windows 操作说明](docs/WINDOWS.md)与[Lite 操作说明](docs/LITE.md)。这三个入口均不接管现有生产实例；Lite 不是删减生产配置，也不承诺处理无标记的模型内部规划。首次安装需用户自己的模型地址、模型名与凭据；真实 QQ 登录与独立原生 QQ 接入仍未完成。
-
-### 保留全部能力的轻量请求模式
-
-完整运行时另提供可选的[工具按需展开模式](docs/TOOL_PROFILES.md)：`tool_profile.mode=light` 只减少初始工具定义，使用已有发现工具逐步展开，工具、权限、记忆、任务和数据不删除。默认 `full` 保持全部工具定义；**现有生产部署保持全量工程化与既有功能全开，不自动改为 light 或 Lite**。按需发现可能增加模型轮次，不能承诺模型行为、总费用或延迟完全相同。
-
-## 当前能力与边界
-
-- **共享群记忆**：已记录的群聊按时间合成一条共享上下文，模型展示保留最新 240 条，并按 30 条小块对齐历史起点，额外携带 0–29 条旧记录以减少缓存前缀滑动；可用记录不足时全部保留。旧精确窗口 API 默认仍为最多 240 条。保留群、发送者和消息来源。私聊不进入共享群时间线。历史可按关键字检索，不是向量检索；上下文窗口不代表永久记忆容量。群间共享意味着跨群内容可被读取，部署前应确认使用范围。
-- **提示词与缓存**：人设原样保留，附加层仅描述来源和传输协议。工具观察在请求数据中先于共享历史，以便观察未更新时跨历史追加／滚窗复用其前缀；观察更新或切换会话时可能损失历史前缀，实际收益依流量而定。共享历史仍保留最新 240 条并以 30 条块对齐起点，最多携带 29 条额外旧记录，归档与检索不受影响。当前消息与时间等易变数据后置；仅调整 JSON 键顺序，协议 v1、解析后的完整字段与历史顺序不变。工具回执关联原始输入，不重复嵌入整份上下文预览。实际命中以提供方 `cached_tokens` 为准，字节前缀复用不等于缓存命中；图片、晚到的旧时间戳或同秒跨群记录排序变化仍可能打断前缀，不承诺固定命中率。
-- **原生工具**：工具目录包含 106 个唯一 schema，覆盖记忆、历史、QQ 操作、文件、虚拟机、任务、技能和委派。目录存在不代表当前账号、上游模型或 NapCat 实现支持全部操作；写权限与目标范围在执行时校验。
-- **事实管理**：事实带稳定编号、来源和自由分类标签。`facts_classify` 按编号批量替换或清空标签，`facts_categories` 查看可见类别统计，`facts_delete` 按精确编号删除；指定编号时不扩展为关键词批量删除。保存失败不报成功，删除后的编号不分配给新事实。只读子智能体可查事实并返回分类／删除建议，由主智能体执行当前会话授权的修改。
-- **消息转发与复制**：`qq_forward_messages` 按消息 ID 或最近条数选择真实群消息，支持原群／跨群、合并／逐条转发；合并引用原消息保留发言人，逐条使用原生转发。`qq_copy_message` 保存原消息组件，`qq_paste_message` 在授权目标群以机器人身份粘贴；剪贴板按当前会话隔离，富消息能否发送仍取决于平台。发送使用稳定操作 ID 防重；逐条转发的原生空回执只证明受理，不冒充已确认送达。
-- **QQ 申请**：原生入群与好友申请事件单独持久化，不作为空白聊天交给模型。所有者可查看已采集的申请并明确同意／拒绝；审批绑定原生请求与账号，持久防重，未知结果不自动重试。平台受理不等于已入群或已成为好友。当前 NapCat 没有已注册的主动加群、回答入群验证题、主动加好友接口，对应三个工具明确返回能力不可用，不执行替代操作。
-- **公开回复**：普通前台 final 需要明确的结构化公开正文；无工具调用的未标记文本先作为非公开草稿，最多用原始上下文请求一次无工具 final，失败则不发送、不按措辞关键词硬裁剪；独立 `reasoning_content` 不并入正文。自主观察的 final、以及同轮已通过 `reply_now` 或插件媒体通道（如 `send_shot`、`send_sticker`）在同一会话成功发送后的 final 默认作为内部草稿，使用已有 `delivery=new` 显式发布；`reply_now` 等发送工具仍可多次调用，默认不结束回路，`finish=true` 可显式结束。规则区分发布动作与完成文本，不比较措辞或相似度。发送档案保留原生消息 ID、输入与引用来源、目标会话和时间，未确认回执单独标记。协议与局限详见[思考与公开输出边界](docs/REASONING_OUTPUT_BOUNDARY.md)。
-- **排队执行**：消息入口完成必要采集后入队返回，不等待整轮模型／工具／发送。受跟踪的会话 worker 取得共享执行锁后才快照待处理消息；等待期间同群消息组成下一批，当前正在执行的批次不被改写。群权限在出队和发送时复核，热重载排空已有工作。模型、媒体读取、执行锁和重载就绪等待仍会带来延迟，不保证固定响应时间。
-- **主动观察**：持久化调度提供思考机会，不是强制发言。默认机会间隔 600 秒且可调整，轮询间隔 30 秒；只向已观察到的真实会话发起操作，并受群策略和执行忙闲影响。
-- **委派 worker**：异步运行只读原生工具子任务，支持查看、排队补充指令和中断；结果回执按会话范围保存。补充指令不打断正在进行的模型请求；进程重启后不自动恢复失去执行者的 worker。
-- **后台任务与回执**：任务持久化、执行前认领，失败暂停；未确认结果的认领不自动重试。后台轮次使用独立的任务输入，不继承前台待处理消息；任务结束、暂停或认领失效后，不再请求下一轮模型或发送滞后的最终回复。当前任务上限 50 个、最短间隔 30 秒，约每 25 秒检查到期任务并等待执行锁；不是准点交付保证。QQ 消息发送依赖平台消息 ID 回执，不能以模型文本、HTTP 成功或服务存活替代送达证据。
-
-模型和工具仍受各自请求超时、可配置回合/整轮预算、平台权限与外部服务可用性约束；不承诺无限执行、全部工具可用或测试覆盖真实部署的所有路径。
-
-## 目录
-
-| 路径 | 用途 |
+| 提示项 | 填写内容 |
 |---|---|
-| [`plugin/`](plugin/) | AstrBot 插件与原生工具、记忆、排队、任务和回执实现 |
-| [`tests/`](tests/) | 离线单元、契约与集成适配测试 |
-| [`tools/`](tools/) | 探针、策略管理、发布检查与受控应用工具；各文件的参数和副作用需单独确认 |
-| [`tools/README.md`](tools/README.md) | 当前检查、探针、策略与发布工具索引 |
-| [`trash/`](trash/README.md) | 历史报告、本机记录及旧补丁脚本归档；不作为当前使用入口 |
+| 模型地址 / Base URL | 你的服务提供的 HTTP(S) API 地址，是否带 `/v1` 按服务说明 |
+| 模型名称 / Model ID | 服务实际支持的模型 ID，不是任意显示名 |
+| API Key | 自己的有效凭据；安装时隐藏输入，不写进命令行或 Git |
 
-`tools/*_probe.py` 等探针的联网、读取和发送范围并不相同，执行前先读脚本；不把所有探针统一视为只读。`tools/validate_release.py` 检查发布文件；绑定原作者服务器的旧发布工具已移入[个人运维归档](trash/20261030-personal-operations/README.md)，不作为通用部署入口。新安装不带个人所有者/群默认值，模型、地址和数据目录由[外部配置](docs/CONFIGURATION.md)决定。
+当前接入使用 **OpenAI 兼容 HTTP 接口**，不宣称支持所有供应商原生协议。可选 QQ 所有者可以留空；默认没有预置个人身份或强制人设。
 
-## 本地检查与配置
+启动后打开 **http://127.0.0.1:6185**，面板用户名 **`astrbot`**。用下面的 `info` 查看配置地址和私有数据目录；需要密码时，Linux 加 `--show-password`、Windows 加 `-ShowPassword`。不要分享密码输出、截图或整个 `settings.json`。
 
-```bash
-python -m pytest tests -q
-python -m compileall -q plugin
-```
+## 常用操作
 
-这些命令验证本地源码，不代表实际 QQ 登录、模型请求或生产部署已通过。全新实例使用上述安装器配置模型与隔离数据；内嵌 AstrBot 不需另行克隆，QQ 接入仍需独立配置。容器保留 `/root/higan` 内部路径以兼容现有模块，绑定到所选外部数据目录；不要直接迁移或覆盖旧数据。
+在仓库根目录操作，沿用首次安装的发行版、用户、数据目录、运行名与端口。Windows 向导若打印了带 `-Distro`、`-User`、`-DataDir` 的命令，请使用实际参数。
 
-密钥、密码和令牌仅从私有运行配置或相应环境变量提供。不要提交运行数据库、聊天档案、图片附件、工具观察文件、会话资料或 Dashboard / 上游凭据；非秘密路径与账号标识也应在部署前复核。
+| 操作 | Linux | Windows PowerShell |
+|---|---|---|
+| 地址、账号与数据位置 | `bash ./install.sh info` | `.\install.ps1 info` |
+| 环境预检 | `bash ./install.sh doctor` | `.\install.ps1 doctor` |
+| 容器状态 | `bash ./install.sh status` | `.\install.ps1 status` |
+| 本地健康检查 | `bash ./install.sh health` | `.\install.ps1 health` |
+| 跟踪日志 | `bash ./install.sh logs` | `.\install.ps1 logs` |
+| 本地请求一次模型 | `bash ./install.sh chat --prompt '你好'` | `'Hello' \| .\install.ps1 chat` |
+| 停止此实例（保留数据） | `bash ./install.sh stop` | `.\install.ps1 stop` |
+| 使用原数据启动 | `bash ./install.sh up` | `.\install.ps1 up` |
 
-## 独立 QQ 接入重写（未完成）
+PowerShell 若阻止脚本，用 `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 info`（其它命令替换 `info`）；仅本次进程放行，不改系统策略。
 
-目标是保留现有个人 QQ、全部功能与数据，完全移除 NapCat 运行依赖；当前已建立依赖清单、离线覆盖检查，以及独立的[事务／事件传输基础模块](qq_transport/README.md)；**尚无可替换的独立原生 QQ 后端**。详见 [实施边界与验收计划](docs/QQ_TRANSPORT_REWRITE.md) 和 [最小已观察契约](docs/qq-transport-required.json)。运行 `python tools/qq_transport_parity_audit.py` 可审查声明覆盖，结果不授权生产切换；现有接入保持不变。
+- `info` 不需要 Docker、不联网，默认隐藏密码；显式显示的也只有面板密码，不显示模型 API Key。配置中的 URL 不是就绪证明。
+- `health` 不调用模型、不发 QQ 消息；`chat` 会请求你的模型，可能收费并按请求执行获授权工具。Ctrl+C 退出日志查看不停止 bot。
+- 私有数据在仓库外（Windows 在 WSL 中）；`stop` 不擦除数据。重复安装保留配置，`up` 可能构建镜像，不是升级、迁移或模型配置覆盖命令。
+- 初始模型设置用于生成配置；已有 AstrBot 面板另有运行配置，不保证改初始化文件就更新当前模型。遇到问题先读[快速开始与排障](docs/QUICKSTART.md)。
 
-## QQ 作为能力，而非唯一入口
+## 能做什么，有哪些边界
 
-[原完整实例的本地入口](docs/LOCAL_FULL_CORE.md)在同一个现有 bot 上接入 root-only Unix socket，复用人设、模型、工具、记忆、任务和全局队列；不再要求请求先来自 QQ。QQ 登录和全部旧状态不迁移，QQ 仍作为原生能力保留；当前宿主仍是 AstrBot，不宣称已移除其生命周期。[简单独立 harness](docs/BOT_HARNESS.md)继续供显式嵌入使用，不另建第二套生产状态。[核心解耦设计](docs/BOT_CORE_DECOUPLING.md)仅保留为后续参考。
+| 能力 | 当前边界 |
+|---|---|
+| 本地面板、命令行对话 | 默认无需 QQ；模型、健康与 QQ 登录分别验证 |
+| 群聊共享记忆、历史检索、带来源事实 | 私聊不并入共享群时间线；跨群内容共享需先确认使用范围；不是向量检索 |
+| 记忆、文件、任务等原生工具 | 工具目录存在不等于可用，依赖模型、权限与外部服务；虚拟机/邮件等需另配服务 |
+| 排队、主动观察、后台任务、只读委派 | 受预算、执行锁与服务可用性约束，不保证准点交付或无限执行 |
+| 可选 QQ / OneBot 接入 | 不打包 NapCat/QQ，不自动登录；实际发送需平台回执，健康不等于送达 |
+| 完整运行时与可选 Lite 文字入口 | 完整版依赖 Docker；Lite 不含面板、QQ、工具、持久记忆或后台任务 |
 
-## 版本与档案
+完整功能说明与已知限制见 [功能细节](docs/FEATURES.md)。独立原生 QQ 后端仍未完成，不能据静态清单或离线测试替换现有接入。实际构建、模型请求与 QQ 登录的验收范围见 [部署验证记录](docs/QUICK_DEPLOY_VERIFICATION.md)，不把安装入口测试当作完整部署成功。
 
-当前源码以所检出的 Git 提交及其 tag 为准。历史发布记录、现场报告、本机整理资料与旧补丁脚本集中保存在 [`trash/`](trash/README.md)，原始内容保留以便追溯。档案不代表当前版本、部署事实或操作授权，不据旧记录直接执行补丁。
+## 文档
 
-## 开源协议
+- [快速开始](docs/QUICKSTART.md)：从安装到第一次请求、密码查找、常见问题与可选 QQ。
+- [Windows](docs/WINDOWS.md) / [Linux](docs/LINUX.md)：平台步骤、隔离目录、权限与端口。
+- [配置与数据边界](docs/CONFIGURATION.md)：外部配置、账号授权与已有实例兼容。
+- [功能细节](docs/FEATURES.md)：记忆、工具、任务、输出边界及源码目录，原技术说明保留。
+- [全部文档](docs/README.md)：高级用法、架构、研究与证据；[工具索引](tools/README.md)区分检查和有副作用的探针。
 
-本项目采用 GNU Affero General Public License v3.0（AGPL-3.0-only），完整条款见 [LICENSE](LICENSE)；第三方依赖遵循各自协议。
+## 开源与归属
+
+本项目采用 **AGPL-3.0-only**，见 [LICENSE](LICENSE)。内嵌 AstrBot 的原始版权、许可和声明完整保留，见 [第三方声明](THIRD_PARTY_NOTICES.md)；NapCat、QQ 客户端、登录会话和凭据不在仓库中。
+
+当前版本以检出的 Git 提交与 tag 为准；[历史档案](trash/README.md)保留旧记录供追溯，不是当前操作入口或部署授权。不要提交密钥、运行数据库、聊天档案、附件或私有配置。

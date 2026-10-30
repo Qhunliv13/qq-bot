@@ -5,8 +5,11 @@ Run ``python tools/bootstrap.py up`` for a first-run model setup and startup.
 ``init`` prepares state without Docker. Docker Desktop (Windows, WSL2/Linux
 containers) or Docker Engine (Linux), with Compose v2 supporting --wait and
 --wait-timeout, is required. ``up`` waits for local runtime health, not model
-connectivity or QQ login; no NapCat installation is managed. Set BOT_WEB_PORT
-(default 6185) and BOT_ONEBOT_PORT (default 6199) to distinct host ports.
+connectivity or QQ login; no NapCat installation is managed. ``info`` shows local
+access details without Docker (passwords hidden unless explicitly requested).
+``stop`` only stops the owned project and retains state. First-init BOT_WEB_PORT
+(default 6185) and BOT_ONEBOT_PORT (default 6199) are saved as distinct host ports;
+later explicit environment overrides are temporary.
 """
 
 import argparse
@@ -76,6 +79,12 @@ def validate_settings(settings):
         raise ValueError("persona must be text")
     if not isinstance(settings.get("dashboard_password"), str) or len(settings["dashboard_password"]) < 16:
         raise ValueError("dashboard password must have at least 16 characters")
+    deployment = settings.get("deployment", {})
+    if not isinstance(deployment, dict):
+        raise ValueError("settings.deployment must be an object")
+    ports = [deployment.get("web_port", 6185), deployment.get("onebot_port", 6199)]
+    if any(type(port) is not int or not 1 <= port <= 65535 for port in ports) or ports[0] == ports[1]:
+        raise ValueError("deployment ports must be distinct integers from 1 to 65535")
     return settings
 
 
@@ -86,8 +95,35 @@ def private_write(path, content):
         handle.write(content)
 
 
+def install_info(data, name, *, show_password=False, as_json=False):
+    """Show actionable local access details without Docker, model requests or secret dumps."""
+    settings = load_install(data, name)
+    environment = docker_environment(data, settings)
+    if as_json:
+        # The launcher may consume this branch; secrets are deliberately absent.
+        print(json.dumps({"runtime_name": name, "data_dir": str(data),
+                          "settings_file": str(data / "settings.json"),
+                          "dashboard_url": "http://127.0.0.1:" + environment["BOT_WEB_PORT"],
+                          "initial_dashboard_username": "astrbot", "readiness_checked": False}))
+        return
+    print("Runtime name: " + name)
+    print("Data directory: " + str(data))
+    print("Private settings file: " + str(data / "settings.json"))
+    print("Dashboard URL (configured, not a readiness check): http://127.0.0.1:" + environment["BOT_WEB_PORT"])
+    print("Dashboard username (initial setup): astrbot")
+    if show_password:
+        # Explicit local disclosure of only this one secret; never print model/API configuration.
+        print("Dashboard password (initial setup; private, do not share): " + settings["dashboard_password"])
+    else:
+        print("Dashboard password: hidden. Use info --show-password (Windows: info -ShowPassword) to reveal it locally.")
+    print("Username/password are initial setup values; dashboard changes may supersede them. This command does not reset credentials.")
+    print("No runtime/model/QQ check performed. Use health or status for the selected installation.")
+
+
 def load_install(data, name):
     """Reject unmanaged state and name drift before any Docker operation."""
+    if not (data / MARKER).is_file():
+        raise ValueError("No initialized installation at the selected data directory. Run up for first setup, or reuse the original --data-dir and --runtime-name.")
     marker = json.loads((data / MARKER).read_text(encoding="utf-8"))
     if marker != {"schema_version": 1, "runtime_name": name}:
         raise ValueError("runtime marker mismatch; use the original --runtime-name and data directory")
@@ -118,12 +154,14 @@ def initialize(args, data, name):
             owners = input("Owner QQ IDs, comma-separated (empty disables QQ owner access): ").strip().split(",")
             owners = [owner.strip() for owner in owners if owner.strip()]
     persona = Path(args.persona_file).read_text(encoding="utf-8") if args.persona_file else ""
+    ports = docker_environment(data, {})
     settings = validate_settings({
         "schema_version": 1,
         "model": {"base_url": base, "model": model, "api_key": key},
         "owner_qqs": list(dict.fromkeys(owners)),
         "persona": persona,
         "dashboard_password": secrets.token_urlsafe(24),
+        "deployment": {"web_port": int(ports["BOT_WEB_PORT"]), "onebot_port": int(ports["BOT_ONEBOT_PORT"])},
     })
     # Validation precedes all writes. Exclusive creates also fail closed on races.
     data.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -154,13 +192,17 @@ def validated_port(name, default):
     return int(value)
 
 
-def docker_environment(data):
-    """Pin external state and validate distinct loopback ports before any Docker call."""
+def docker_environment(data, settings=None):
+    """Use saved deployment ports with explicit env overrides, always on the selected state."""
     environment = os.environ.copy()
     environment["BOT_DATA_DIR"] = data.as_posix()
-    # Normalize ports once here so Compose and the reported dashboard URL agree.
-    web_port = validated_port("BOT_WEB_PORT", 6185)
-    onebot_port = validated_port("BOT_ONEBOT_PORT", 6199)
+    if settings is None:
+        settings_path = data / "settings.json"
+        settings = validate_settings(json.loads(settings_path.read_text(encoding="utf-8"))) if settings_path.is_file() else {}
+    deployment = settings.get("deployment", {})
+    # One source determines Compose, access information and subsequent commands.
+    web_port = validated_port("BOT_WEB_PORT", deployment.get("web_port", 6185))
+    onebot_port = validated_port("BOT_ONEBOT_PORT", deployment.get("onebot_port", 6199))
     if web_port == onebot_port:
         raise ValueError("BOT_WEB_PORT and BOT_ONEBOT_PORT must be distinct")
     environment["BOT_WEB_PORT"] = str(web_port)
@@ -216,10 +258,12 @@ def wait_timeout(value):
 def parse_args(argv):
     """Expose setup and same-instance client commands with shared simple flags."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("init", "doctor", "up", "logs", "status", "health", "chat"))
+    parser.add_argument("command", choices=("init", "doctor", "up", "info", "stop", "logs", "status", "health", "chat"))
     parser.add_argument("--data-dir", default=str(DEFAULT_DATA_DIR))
     parser.add_argument("--runtime-name", "--name")
     parser.add_argument("--non-interactive", action="store_true")
+    parser.add_argument("--show-password", action="store_true", help="info only: reveal the dashboard password locally, never the model API key")
+    parser.add_argument("--json", action="store_true", help="info only: machine-readable access information without any password or API key")
     parser.add_argument("--model-base")
     parser.add_argument("--model")
     parser.add_argument("--api-key-env", metavar="VARIABLE", help="read API key from this environment variable; never pass a key on argv")
@@ -229,6 +273,10 @@ def parse_args(argv):
     parser.add_argument("--wait-timeout", type=wait_timeout, default=300, metavar="SECONDS",
                         help="up: wait for local runtime health, 1-3600 seconds (default: 300); not QQ/model verification")
     args = parser.parse_args(argv)
+    if args.json and (args.command != "info" or args.show_password):
+        parser.error("--json is only supported by info and cannot be combined with --show-password")
+    if args.show_password and args.command != "info":
+        parser.error("--show-password is only supported by info")
     if args.prompt is not None and args.command != "chat":
         parser.error("--prompt is only supported by chat")
     return args
@@ -242,6 +290,8 @@ def main(argv=None):
         name = runtime_name(args.runtime_name, data)
         if args.command == "init":
             initialize(args, data, name)
+        elif args.command == "info":
+            install_info(data, name, show_password=args.show_password, as_json=args.json)
         elif args.command in ("doctor", "up"):
             if args.command == "up" and not (data / MARKER).exists():
                 # One entry point reuses init safety checks, never a second writer.
@@ -251,9 +301,8 @@ def main(argv=None):
                 check_project_ownership(data, name)
                 run_docker(compose_command(data, name, "up", "-d", "--build", "--wait",
                                            "--wait-timeout", str(args.wait_timeout)), data)
-                print("Local runtime ready. Open http://127.0.0.1:"
-                      + str(validated_port("BOT_WEB_PORT", 6185))
-                      + "; read the private settings.json dashboard_password.")
+                print("Local runtime ready (local health check passed; model/QQ unverified).")
+                install_info(data, name)
                 print("Model/QQ operation requires separate verification; no QQ login was performed.")
         else:
             load_install(data, name)
@@ -273,7 +322,8 @@ def main(argv=None):
             else:
                 # Read-only output can disclose another installation's private logs.
                 check_project_ownership(data, name)
-                action = ["logs", "--tail", "100", "--follow"] if args.command == "logs" else ["ps"]
+                action = {"logs": ["logs", "--tail", "100", "--follow"],
+                          "status": ["ps"], "stop": ["stop"]}[args.command]
                 run_docker(compose_command(data, name, *action), data)
         return 0
     except (ValueError, OSError, EOFError, subprocess.CalledProcessError) as error:

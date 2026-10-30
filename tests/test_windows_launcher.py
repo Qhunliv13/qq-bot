@@ -42,7 +42,7 @@ def test_guide_warns_about_linux_secret_and_local_full_runtime():
         assert term in guide
 
 
-def _invoke_mock_wsl(tmp_path, command, *, stdin=None, pipe=False, root=False, python_exit=0, launch_exit=0):
+def _invoke_mock_wsl(tmp_path, command, *, stdin=None, pipe=False, root=False, python_exit=0, launch_exit=0, dashboard_url='http://127.0.0.1:26185'):
     """Run the real launcher with an in-process PowerShell wsl.exe stub."""
     runner = tmp_path / "run.ps1"
     log = tmp_path / "wsl.jsonl"
@@ -54,8 +54,10 @@ def _invoke_mock_wsl(tmp_path, command, *, stdin=None, pipe=False, root=False, p
     shutil.copy2(ROOT / 'install.ps1', checkout / 'install.ps1')
     entry = checkout / 'install.ps1' if root else checkout / 'tools' / 'windows.ps1'
     input_log = tmp_path / 'stdin.txt'
-    # This mock records argv and stdin; it never starts WSL or Docker.
+    browser_log = tmp_path / 'browser.txt'
+    # This mock records argv and stdin; it never starts WSL, Docker or a browser.
     runner.write_text(
+        f"function Start-Process {{ param([string] $FilePath); [System.IO.File]::WriteAllText('{browser_log.as_posix()}', $FilePath) }}\n"
         "function wsl.exe {\n"
         "  [CmdletBinding(PositionalBinding=$false)]\n"
         "  param([Parameter(ValueFromRemainingArguments=$true)][string[]] $Words,\n"
@@ -66,6 +68,7 @@ def _invoke_mock_wsl(tmp_path, command, *, stdin=None, pipe=False, root=False, p
         f"    [System.IO.File]::AppendAllText('{log.as_posix()}', "
         "(ConvertTo-Json -Compress -InputObject @($allWords)) + [Environment]::NewLine)\n"
         "    if ($allWords -contains 'wslpath') { '/mnt/c/checkout with spaces' }\n"
+        f"    elseif ($allWords -contains '--json') {{ '{{\"dashboard_url\":\"{dashboard_url}\"}}' }}\n"
         f"    elseif ($allWords -contains 'tools/bootstrap.py') {{ $global:LASTEXITCODE = {launch_exit} }}\n"
         f"    else {{ $global:LASTEXITCODE = {python_exit} }}\n"
         "  }\n"

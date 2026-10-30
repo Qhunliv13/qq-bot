@@ -1,83 +1,119 @@
-# Windows 双击部署 / full local runtime
+# Windows 安装与管理
 
-## 推荐：双击 install.cmd
+## 最简单：完整解压后双击 install.cmd
 
-完整解压仓库 ZIP 后，双击根目录 `install.cmd`。Windows Python、手动 PowerShell 命令都不需要。
+1. 下载并**完整解压**仓库 ZIP，双击根目录 [`install.cmd`](../install.cmd)。不用先安装 Windows Python，也不用先打开 PowerShell。
+2. 向导检查 WSL2 和 Linux 发行版：只有一个可用发行版时自动使用，有多个时按编号选；不会把 Docker Desktop 的内部发行版当作安装目标。
+3. 检查 Linux Python 3.10+、Docker 和 Compose v2。缺依赖时先询问，经同意后才尝试从所选发行版配置好的签名 apt 软件源安装和启动 Docker；不替换或升级已有 Docker。
+4. 按提示填写**模型地址、模型名称、API Key**；Key 隐藏输入，可选 QQ 所有者可以留空。当前路径需要 OpenAI 兼容 HTTP 接口，不是任意供应商原生协议都可用。
+5. 等待构建和本地健康检查，成功后向导尝试打开面板。再次双击复用原设置，不重置密码或记忆。
 
-1. 自动检测 WSL2；仅一个可用发行版时直接选用，多个时按编号选择，不接管 Docker Desktop 内部发行版。
-2. 检查 Linux Python 3.10+、Docker 和 Compose v2。经你确认后，可从所选发行版已配置的签名 apt 软件源安装缺少的包并启动 Docker；已有 Docker 不替换、不升级。
-3. 调用同一 `tools/bootstrap.py`。首次输入模型 URL、模型名、隐藏 API key 和可选 QQ 所有者；再次启动保留原设置。构建与健康检查成功后打开面板。
+没有 WSL 时，可授权向导调用微软 `wsl --install --distribution Ubuntu --no-launch`。硬件虚拟化、Windows 功能安装、系统重启和 Ubuntu 首次初始化，仍可能需要按系统提示完成；**不会强制重启、转换现有 WSL1 或停掉其它发行版**。完成后再次双击继续。
 
-没有 WSL 时可授权向导调用微软 `wsl --install --distribution Ubuntu --no-launch`。硬件虚拟化、Windows 功能安装、重启、Ubuntu 首次初始化可能仍需你按系统提示完成；**不会强制重启、转换现有 WSL1 或停掉其它发行版**。完成后再次双击继续。
+已有 Docker Desktop 请开启 **Use the WSL 2 based engine** 及所选发行版的 **Resources → WSL Integration**。向导自动依赖安装仅适用于提供 `docker.io` / `docker-compose-v2` 的 apt 发行版；包不存在、已有 Docker 缺匹配 Compose 插件、Desktop 未开启集成时会明确停止，不自动换源或替换 Docker。
 
-向导只在所选 WSL 中用 root 准备依赖和启动已有统一安装器，不改变默认 Linux 用户；数据仍使用该默认用户原有的 `~/.local/share/qhunliv-bot`，不会因切到 root 新建第二份默认配置。管理时可继续双击，也可使用下方高级命令；向导创建的 root-owned 状态应加 `-User root -DataDir '/home/你的用户/.local/share/qhunliv-bot'`（按向导打印的实际路径）。面板账号 `astrbot`，随机密码位于此目录的私有 `settings.json`；不要上传或分享。
+首次构建需要镜像/依赖源网络及磁盘、内存；不会关闭 TLS、改 DNS 或默认代理来掩盖下载失败。本入口运行的是**完整本地运行时（full local runtime）与 AstrBot 容器、插件**，不是远程轻客户端；不自动安装 NapCat、登录 QQ 或迁移已有实例。
 
-自动依赖安装适用于提供 `docker.io` 和 `docker-compose-v2` 包的 apt 发行版；不存在这些包、已有 Docker 缺匹配 Compose 插件或 Desktop 未开启 WSL Integration 时明确停止，不自动切换软件源或替换 Docker。已有 Docker Desktop 请开启 **Resources → WSL Integration** 后重试。首次构建还需要官方镜像/依赖源网络、磁盘与内存；不会关闭 TLS、改 DNS 或默认代理来掩盖下载失败。
+## 面板地址、账号与密码
 
-只读环境检查：`powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\windows-setup.ps1 -CheckOnly`。这不安装包、不启动服务、不配置模型。完整构建、模型真实请求与 QQ 登录的验收是不同阶段，见 [验证记录](QUICK_DEPLOY_VERIFICATION.md)。
+默认本机面板：**http://127.0.0.1:6185**，用户名 **`astrbot`**。密码随机生成，私有数据存放在 **WSL Linux 中、仓库之外**，不是 ZIP 解压目录。
 
-官方 WSL 安装与重启说明：[Microsoft WSL commands](https://learn.microsoft.com/en-us/windows/wsl/basic-commands)。
+在仓库根目录打开 Windows PowerShell，运行：
 
-## 高级命令行入口（WSL2 + Docker Desktop / Linux Engine）
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 info
+```
 
-This is the **full local** bot, including its image build and bundled dependencies; it is not a light-client or remote-service mode. The Windows script is only a launcher: all installation, Docker Compose, state safety, health and chat operations are implemented by the existing `tools/bootstrap.py` in Linux. No QQ/NapCat installation, login, or production migration is performed.
+这会显示运行名、数据目录、私有配置路径、配置中的面板 URL 与用户名；**不是健康检查**，不需要 Docker、不启动服务、不联网、不调用模型。默认隐藏密码。只在自己的终端确实需要时运行：
 
-## Quick launch from the repository root
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 info -ShowPassword
+```
 
-After the prerequisites below are ready, open ordinary Windows PowerShell (no administrator rights needed) in the checkout and run this **single entry point**:
+显式选项只显示初始面板密码，不显示模型 API Key；已在面板修改的账号/密码以修改后为准，`info` 不重置它们。不要分享密码输出、截图或整个 `settings.json`；该文件还含模型秘密。PowerShell 的 `Bypass` 仅作用于本次进程，不修改系统执行策略。
+
+**管理同一实例要用原参数。** 向导用所选 WSL 的 root 准备依赖和启动，但不改变默认 Linux 用户；默认数据路径仍取该默认用户的 `~/.local/share/qhunliv-bot`，不会自动新建第二套 root 默认配置。若向导打印了发行版、用户和路径，请逐项沿用，例如（替换为向导实际值）：
+
+```powershell
+.\install.ps1 info -Distro Ubuntu -User root -DataDir '/home/your-user/.local/share/qhunliv-bot'
+```
+
+向导产生的 root-owned 数据可能需要 `-User root` 才能读取。不要为修复权限改成另一个新目录，也不要把 `/home/your-user/...` 示例当作真实路径。
+
+## 常用命令
+
+若系统已经允许脚本执行，可以直接用 `.\install.ps1`；否则用上面的完整 `powershell.exe ... -File` 前缀。以下示例默认使用原安装实例，必要时每条都加同样的 `-Distro`、`-User`、`-DataDir`、`-RuntimeName`。
+
+```powershell
+.\install.ps1 doctor       # 读取已初始化配置并检查环境，不构建/启动
+.\install.ps1 status       # 查看容器状态，不验证模型或 QQ
+.\install.ps1 health       # 检查本地入口，不调用模型或发送 QQ 消息
+.\install.ps1 logs         # 跟踪最后 100 行，Ctrl+C 只退出日志
+'Hello' | .\install.ps1 chat  # 主动请求模型，可能收费并执行获授权工具
+.\install.ps1 stop         # 只停止归属确认的所选实例，不删除状态
+.\install.ps1 up           # 使用原数据启动，可能构建镜像，不是升级/重置
+```
+
+`up` 默认等待本地运行时健康 300 秒；可用 `.\install.ps1 up -WaitTimeout 600`（整数 1–3600 秒）。这不是镜像构建总时限，也不验证模型 Key 或 QQ 登录。`chat` 的成功只证明该次请求，不证明 QQ 已接入或消息已送达。
+
+| 问题 | 优先检查 |
+|---|---|
+| 提示未初始化、找不到配置 | 用首次安装的发行版/用户/目录运行；真正的新实例用 `up` 或 `init` |
+| 面板打不开 | `info` 看配置地址，`status` / `logs` 看实际状态；自定义端口不要继续用 6185 |
+| Docker 不可用 | 启动已有 Desktop 并开启所选 WSL 的 Integration，再跑 `doctor`；不删除实例 |
+| 提示目录不归当前用户/安装 | 沿用向导打印的 `-User root -DataDir '实际Linux路径'`；不要删标记绕过 |
+| 健康正常但模型请求失败 | 检查自己的模型服务/ID/权限；不要上传 Key 或日志原文 |
+| 重传模型参数没有更新 | 初始化参数只负责首次设置；`init` / `up` 保留已有配置，见后文配置边界 |
+| 无法输入或中文管道乱码 | 按下方输入说明操作；要求精确 Unicode 时优先在 Linux 终端请求 |
+
+## 高级：手动准备后从命令行安装
+
+命令行入口 [`install.ps1`](../install.ps1) 不安装 WSL/Python/Docker、不请求管理员权限、不修改系统配置；与双击向导的依赖准备阶段不同。它只把操作交给 WSL 中同一 [`tools/bootstrap.py`](../tools/bootstrap.py)，没有第二套安装、容器或状态管理核心。
+
+先准备：
+
+- WSL2 发行版与其中的 Python 3.10+，仓库可从 Linux 访问（通常在 `/mnt/c/...`）。
+- 已运行的 Docker Desktop 及该发行版的 WSL Integration，或所选 Linux 中可访问的 Docker Engine / Compose v2。确认 `docker compose version` 与 `docker info` 可用。
+- 自己的有效模型 Base URL、模型 ID 和 API Key；首次构建需要网络、时间与磁盘。
+
+从仓库根目录执行，无参数就是 `up`，缺模型设置时交互询问：
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-No arguments means `up`: missing model configuration is requested interactively, the API key prompt is hidden, then the shared Linux bootstrap checks/builds/starts the full local runtime. `Bypass` applies only to this PowerShell process; the launcher does not change execution-policy settings. It does not install WSL, Python or Docker, request administrator rights, or alter system configuration. First image build can download dependencies and take time/disk space. A quoted absolute script path works from another directory, including checkout paths containing spaces.
+Windows PowerShell 5.1 与 PowerShell 7 均支持；从其它目录可用带引号的脚本绝对路径，包含空格的仓库路径可用。参数验证及默认命令由 [`tools/windows.ps1`](../tools/windows.ps1) 统一实现，该直接入口也保留。缺失/过旧 Linux Python、不可访问发行版会给出前置要求提示；Docker 检查仍由共享安装核心完成。
 
-If script execution is already allowed, use ` .\install.ps1 ` directly. All existing options are forwarded unchanged, for example:
-
-```powershell
-.\install.ps1 -Distro Ubuntu -ModelBase 'https://provider.example/v1' -Model 'model-id'
-.\install.ps1 status -Distro Ubuntu
-```
-
-The root script has no second parameter parser: validation and the default command live only in `tools/windows.ps1`. That direct entry remains supported too. Windows PowerShell 5.1 and PowerShell 7 are supported; missing/old Linux Python and inaccessible distributions produce prerequisite hints on stderr, while Docker/Compose checks remain in the shared bootstrap.
-
-## Prerequisites
-
-1. Install WSL2 with a Linux distribution, and install Python 3.10+ in that distribution. Keep this repository accessible from WSL (typically under `/mnt/c/...`).
-2. Install and start Docker Desktop for Windows, enable **Use the WSL 2 based engine**, and enable **Resources → WSL Integration** for the selected distribution. In that distribution verify `docker compose version` and `docker info` work. The bootstrap `doctor` command performs its own Docker/Compose checks. This launcher does not install Docker or configure integration.
-3. Run these commands in Windows PowerShell 5.1 or PowerShell 7 from the repository root. If using a named distribution, add `-Distro Ubuntu` to **each** command; otherwise the configured WSL default is used. Keep using the same distribution, `-DataDir`, and `-RuntimeName` for a given installation.
+需要显式选择发行版、目录或运行名时，每次保持一致；不带 `-Distro` 使用 WSL 默认发行版。示例 URL 仅占位，不能连接真实模型：
 
 ```powershell
-.\install.ps1 init -Distro Ubuntu -ModelBase 'https://example.invalid/v1' -Model 'your-model' -OwnerQQ 123456789
+.\install.ps1 init -Distro Ubuntu -ModelBase 'https://provider.example/v1' -Model 'model-id'
 .\install.ps1 doctor -Distro Ubuntu
-.\install.ps1 up -Distro Ubuntu
-.\install.ps1 status -Distro Ubuntu
-.\install.ps1 health -Distro Ubuntu
-.\install.ps1 logs -Distro Ubuntu
-.\install.ps1 chat -Distro Ubuntu
+.\install.ps1 up -Distro Ubuntu -WaitTimeout 600
+.\install.ps1 info -Distro Ubuntu
 ```
 
-`init` prompts for an API key in the **WSL Linux process** if a usable key has not been provided by its Linux environment. Supply a real OpenAI-compatible model base URL and model ID; the illustrative URL above does not connect to a provider. `up` initializes first if needed, then checks prerequisites and builds/starts the full local image (first build may take time and disk space). `logs` follows the last 100 log lines until interrupted. `health` checks the local runtime; `chat` sends one real model request. QQ login remains a separate manual step. Dashboard: `http://127.0.0.1:6185` after `up`; private credentials are stored in the Linux state directory's `settings.json`, never in this checkout.
+`-OwnerQQ` 可提供一个或多个自己的 QQ ID（例如 `-OwnerQQ @('123456789','987654321')`）；这只是配置所有者，不启用适配器或登录。`-DataDir` / `-PersonaFile` 只接受**所选 WSL 内可访问的绝对 Linux 路径**，例如 `/home/your-user/bot-state` 与 `/home/your-user/persona.txt`，不接受 Windows 盘符、相对路径、引号/注入字符或 shell 片段。仓库路径由 `wslpath` 转换。
 
-### Startup readiness timeout
-
-`up` waits for the local runtime health check, not for model authentication or QQ login. The shared Python bootstrap uses a **300-second** readiness timeout by default. Override it with `-WaitTimeout` (integer seconds, **1–3600**); the Windows launcher forwards `--wait-timeout` only when you supply the flag:
+默认私有目录在所选 Linux 用户家目录，建议不要放 `/mnt/c` 等 Windows 挂载盘；初始化使用 Linux 私有目录/文件权限并拒绝陌生非空目录。新实例可显式选新目录和运行名：
 
 ```powershell
-.\install.ps1 up -Distro Ubuntu -WaitTimeout 600
+.\install.ps1 init -Distro Ubuntu -DataDir '/home/your-user/bot-state' -PersonaFile '/home/your-user/persona.txt' -RuntimeName 'my-local-bot'
 ```
 
-A healthy container does not prove that your model API key is valid; `chat` makes a real model request separately. Port configuration remains the existing Linux `BOT_WEB_PORT` environment setting; there is no Windows `-WebPort` option, and Windows environment variables are not automatically transported into WSL.
+新安装在首次初始化时把端口保存到私有配置的 `deployment.web_port` / `deployment.onebot_port`，之后默认沿用；旧安装没有该字段时仍使用原默认值，不自动重写。首次选择非默认端口要在 **Linux** 初始化环境设置 `BOT_WEB_PORT` / `BOT_ONEBOT_PORT`，没有 Windows `-WebPort` 选项，Windows 环境变量也不自动传入 WSL。多实例步骤见 [Linux 说明](LINUX.md#多实例与端口)。显式 Linux 环境变量可临时覆盖已保存端口，实际监听变更还需 `up` 应用；单独 `info` 不改变运行状态。
 
-### Linux API key environment (optional non-interactive setup)
+## 可选：非交互 API Key
 
-`-ApiKeyEnv` is an **environment variable name**, not a key value. Set that variable in the **selected WSL distribution** before invoking `init`/first `up`, and verify it is available to non-interactive `wsl.exe --exec` processes. A Windows `$env:MY_MODEL_KEY` is **not automatically injected** into WSL. Do not put the secret on the command line, in Git, or in the PowerShell script. For non-interactive setup, all three of `-ModelBase`, `-Model`, and a populated Linux `-ApiKeyEnv` variable are required; with interactive setup the Python bootstrap securely prompts for missing fields. Avoid exporting the key in shared shell startup or tracked files; prefer a private Linux secret mechanism configured for the intended WSL process.
+手动安装优先使用隐藏输入。`-ApiKeyEnv` 是**Linux 环境变量名，不是 Key 值**；Windows `$env:MY_MODEL_KEY` 不会自动注入 WSL。不要把密钥放进 Git、PowerShell 脚本、命令参数或共享 shell 初始化文件。
+
+非交互安装需同时提供 `-ModelBase`、`-Model` 和在目标 WSL 进程中实际可用的 `-ApiKeyEnv` 变量：
 
 ```powershell
 .\install.ps1 init -Distro Ubuntu -ModelBase 'https://provider.example/v1' -Model 'model-id' -ApiKeyEnv 'MY_MODEL_KEY' -NonInteractive
 ```
 
-A plain `export` in one interactive Linux shell does **not** make the variable available to a new Windows-launched `wsl.exe --exec` process. For reliable non-interactive bootstrap, open the chosen WSL distribution, read/export the secret there, and invoke the shared bootstrap **in that same Linux shell** (the read prompt is hidden and does not store the key in shell history):
+仅在另一个交互 Linux shell 中 `export` 不会传给新的 `wsl.exe --exec` 进程。可靠做法是在所选 WSL 的**同一 shell**隐藏读取、导出，再调用共享安装核心（示例路径须替换）：
 
 ```bash
 cd /mnt/c/path/to/checkout
@@ -87,15 +123,26 @@ python3 tools/bootstrap.py up --model-base 'https://provider.example/v1' --model
 unset MY_MODEL_KEY
 ```
 
-Otherwise omit `-NonInteractive` and let Python's hidden WSL prompt request the key. Windows environment-key forwarding is intentionally not implemented; do not pass a secret as `-ApiKeyEnv`. Existing initialized settings remain unchanged on repeated `init`/`up`; an absent key is not silently replaced.
+否则省略 `-NonInteractive`，由 Linux Python 的隐藏提示输入。反复 `init` / `up` 不替换已有密钥，也不重写初始人格和记忆；这些参数不是现有安装的配置覆盖接口。初始模型设置是生成配置的输入，已有 AstrBot 面板另有运行配置；不要假设手改 `settings.json` 就会更新当前模型。本轮没有模型配置热更新命令。
 
-### External paths and safe chat input
+## 聊天输入与安全边界
 
-Default state is the selected Linux user's private `~/.local/share/qhunliv-bot`, outside the checkout; the bootstrap validates ownership and refuses unmanaged nonempty state. `-DataDir` and `-PersonaFile` accept **absolute Linux paths only** visible inside that WSL distribution (for example `/home/user/bot-state` and `/home/user/persona.txt`). Windows drive paths, relative paths, quoted/injection characters and shell fragments are rejected. Prefer a Linux home path for secret state, rather than storing it on a Windows drive under `/mnt/c`; Python creates owner-private files and directories in Linux. The checkout is translated with `wslpath`; the launcher never creates a second Python bootstrap or passes a model API key in argv.
+`chat` 不带提示参数时读取标准输入（standard input）；Windows 入口不把消息文本放入 WSL 命令行参数。可输入一行，再在 Windows 控制台用 Ctrl+Z、Enter 表示 EOF（Linux 终端用 Ctrl+D），或使用管道：
 
 ```powershell
-.\install.ps1 init -Distro Ubuntu -DataDir '/home/user/bot-state' -PersonaFile '/home/user/persona.txt' -RuntimeName 'my-local-bot' -OwnerQQ @('123456789','987654321')
 'Hello' | .\install.ps1 chat -Distro Ubuntu
 ```
 
-For interactive chat, enter one line directly into WSL's standard input and signal EOF (`Ctrl+Z` then Enter in Windows PowerShell; `Ctrl+D` in a Linux console), or pipe a file/stream to the script. **No chat message appears in the WSL command-line arguments.** Offline tests execute Windows PowerShell with a fake WSL command to verify argv and pipeline stdin through both entry points. Read-only checks on Ubuntu-TSC (WSL2, Python 3.12.3) verified `wslpath`, `--cd`, and piped stdin to a harmless Python reader; Docker was absent, so no runtime build or chat/model request was attempted. Windows PowerShell's native pipeline encoding can differ from UTF-8 (especially for non-ASCII input); prefer interactive chat in the Linux terminal when exact Unicode input matters. Do not place secrets in chat text; the actual bot/model may log or transmit the request. The Python bootstrap's internal container client may pass its prompt inside the container exec argv; the Windows launcher does not alter that existing behavior.
+Windows PowerShell 原生管道编码可能不同于 UTF-8，尤其非 ASCII 文本；精确中文/Unicode 输入优先在 Linux 终端请求。不要在聊天中放密钥，实际模型和运行时可能记录或传输请求。共享 Python 核心的容器客户端可能在**容器内 exec 参数**中传递提示词；Windows 入口不改变该既有行为。
+
+## 只读预检与验证范围
+
+不想安装或启动任何东西时，可先运行：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\windows-setup.ps1 -CheckOnly
+```
+
+它不安装包、不启动服务、不设置模型。微软 WSL 操作说明可查 [Microsoft WSL commands](https://learn.microsoft.com/en-us/windows/wsl/basic-commands)。
+
+离线测试用模拟 WSL 验证两个 PowerShell 入口的 argv 与管道 stdin；已有真实 WSL 只读检查验证过 `wslpath`、`--cd` 和无害 Python stdin 读取，不把这些结果当作镜像构建或模型请求验收。完整构建、本地健康、真实模型与 QQ 登录分别验收，见 [部署验证记录](QUICK_DEPLOY_VERIFICATION.md)。

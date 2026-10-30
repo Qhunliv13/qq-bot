@@ -6,6 +6,7 @@
 
 | 配置 | 用途 |
 |---|---|
+| `deployment.web_port` / `deployment.onebot_port` | 安装器首次保存的本机端口，旧配置缺失时仍用 6185/6199；显式 `BOT_WEB_PORT` / `BOT_ONEBOT_PORT` 仅临时覆盖。用 `info` 查配置地址、`up` 应用变更，不必每次重新导出。 |
 | `HIGAN_ROOT` | 所有持久状态的共同绝对目录；未设置时为当前系统账号的 `~/higan`。root 账号自然仍使用旧 `/root/higan`，不扫描、复制或迁移其它账号数据。 |
 | `HIGAN_SETTINGS_FILE` | 显式外部 JSON 配置；密钥、人设、所有者列表不放进源码。已有配置原样保留，不自动补个人身份。 |
 | `owner_qqs` / `HIGAN_OWNER_QQS` | 所有者 QQ 的字符串数组；优先私有配置文件。空列表不授予所有者权限。 |

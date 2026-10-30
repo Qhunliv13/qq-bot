@@ -2,12 +2,13 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('init', 'doctor', 'up', 'status', 'logs', 'health', 'chat')]
+    [ValidateSet('init', 'doctor', 'up', 'info', 'stop', 'status', 'logs', 'health', 'chat')]
     [string] $Command = 'up',
     [string] $Distro,
     # The double-click wizard uses root for Docker without changing WSL's default user.
     [string] $User,
     [switch] $OpenDashboard,
+    [switch] $ShowPassword,
     [string] $ModelBase,
     [string] $Model,
     [string] $ApiKeyEnv,
@@ -63,6 +64,7 @@ try {
         $distroArgs += @('--user', $User)
     }
     if ($OpenDashboard -and $Command -ne 'up') { throw 'OpenDashboard is only supported with up.' }
+    if ($ShowPassword -and $Command -ne 'info') { throw 'ShowPassword is only supported with info.' }
 
     $repo = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).ProviderPath
     # wslpath executes without bash -c; it translates the exact checkout containing this launcher.
@@ -107,6 +109,7 @@ try {
         $bootstrapArgs += @('--wait-timeout', [string] $WaitTimeout)
     }
     if ($NonInteractive) { $bootstrapArgs += '--non-interactive' }
+    if ($ShowPassword) { $bootstrapArgs += '--show-password' }
     foreach ($owner in $OwnerQQ) {
         if ($owner -cnotmatch '^[0-9]{5,20}$') { throw 'OwnerQQ must be 5-20 ASCII digits.' }
         $bootstrapArgs += @('--owner-qq', $owner)
@@ -129,11 +132,23 @@ try {
     if ($null -eq $LASTEXITCODE) { throw 'WSL did not return an exit code.' }
     $launchExitCode = $LASTEXITCODE
     if ($OpenDashboard -and $launchExitCode -eq 0) {
-        # Browser launch follows successful Compose health only; never imply model/QQ readiness.
-        $port = if ($env:BOT_WEB_PORT) { $env:BOT_WEB_PORT } else { '6185' }
-        if ($port -cmatch '^[0-9]{1,5}$' -and [int] $port -ge 1 -and [int] $port -le 65535) {
-            try { Start-Process ('http://127.0.0.1:' + [int] $port) | Out-Null }
-            catch { [Console]::Error.WriteLine('Runtime is ready, but the browser could not open. Use the dashboard URL printed above.') }
+        # Resolve the saved port from the same bootstrap, not Windows defaults.
+        # Only the info JSON branch is captured; it never emits keys/passwords.
+        $infoArgs = @('info', '--json')
+        if ($DataDir) { $infoArgs += @('--data-dir', $DataDir) }
+        if ($RuntimeName) { $infoArgs += @('--runtime-name', $RuntimeName) }
+        $infoLaunch = @($distroArgs) + @('--cd', $linuxRepo, '--exec', 'python3', 'tools/bootstrap.py') + $infoArgs
+        try {
+            $infoText = @(& $wsl @infoLaunch)
+            if ($LASTEXITCODE -ne 0) { throw 'Access information unavailable.' }
+            $access = ($infoText -join [Environment]::NewLine) | ConvertFrom-Json -ErrorAction Stop
+            $dashboardUrl = [string] $access.dashboard_url
+            if ($dashboardUrl -cnotmatch '^http://127\.0\.0\.1:[0-9]{1,5}$') { throw 'Invalid local dashboard address.' }
+            $port = [int] ($dashboardUrl -split ':')[-1]
+            if ($port -lt 1 -or $port -gt 65535) { throw 'Invalid local dashboard port.' }
+            Start-Process $dashboardUrl | Out-Null
+        } catch {
+            [Console]::Error.WriteLine('Runtime is ready, but the browser could not open. Use the dashboard URL printed above; info shows it again.')
         }
     }
     exit $launchExitCode
