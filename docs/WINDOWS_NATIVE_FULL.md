@@ -32,7 +32,8 @@
 | `runtime/.venv` | 此实例专用 Python 环境；不继承全局 site-packages |
 | `runtime/pip-cache` | 此实例私有 pip 缓存；重试可复用已缓存下载 / 构建产物，不使用全局缓存，不保证部分文件续传 |
 | `higan` | 同一插件的记忆、历史、任务和本地操作端点等私有状态 |
-| `runtime/setup.log` | 资产安装固定步骤 / 退出状态；不保存 pip 原始输出 |
+| `runtime/setup.log` | 资产安装固定步骤 / 退出状态 / 超时；不保存 pip 原始输出 |
+| `runtime/setup-review-required.json` | 安装步骤启动前写入，确认清理后移除；异常遗留时阻止后续安装，不能删标记绕过归属核查 |
 | `run/runtime.log` | 宿主私有运行日志，可能含聊天 / URL，**不得原样上传** |
 
 面板只监听 **`127.0.0.1`**，默认端口 **6185**，初始用户名 `astrbot`、随机密码。首次隐式默认端口冲突会选择空闲端口并保存到 `deployment.web_port` / `deployment.onebot_port`；OneBot 初始候选端口为 6199，不代表已启用 QQ。后续沿用保存值，不停别人的服务。显式 `BOT_WEB_PORT` / `BOT_ONEBOT_PORT` 可用于首次选端口；已有状态不自动重分配。`info` 给出配置地址，不能证明监听成功。
@@ -58,9 +59,15 @@
 .\tools\windows-native.ps1 stop                # 认证请求排空停止，保留数据
 ```
 
-`stop` 的成功消息只表示同一实例接受关闭请求，不证明进程已退出；有在途请求时等待排空。当前实现先排空已接受本地请求及 QQ / 工具 worker，再交给上游核心取消和清理，不以按名称杀进程或强杀来模拟成功。关闭后生命周期仍待真实 smoke，不把模拟测试写成验收。
+`stop` 的成功消息只表示同一实例接受关闭请求，不证明进程已退出；有在途请求时等待排空。当前实现先排空已接受本地请求及 QQ / 工具 worker，再交给上游核心取消和清理，不以按名称杀进程或强杀来模拟成功。已隔离实测本地在途回复排空及实际进程退出；真实 QQ / 外部工具排空仍未验收。
 
 支持的参数：`-DataDir`（**绝对 Windows 路径**）、`-RuntimeName`、`-ModelBase`、`-Model`、`-ApiKeyEnv`、`-PersonaFile`（Windows 文件路径）、`-OwnerQQ`、`-NoBrowser`、`-Json`、`-ShowPassword`、`-WaitTimeout`、`-NonInteractive`。`-NoBrowser` 仅供 `wizard`；`-Json` / `-ShowPassword` 仅供 `info`。`-WaitTimeout` 为 1–3600 秒，默认 300，只限制启动后的就绪等待，不是依赖下载总时限。超时不自动杀实例。
+
+### 安装步骤总时限与重试
+
+Windows 10 / Windows Server 2016 及以上的原生安装步骤使用独立 Windows Job：创建 venv、完整依赖安装和 `pip check` **各默认最多 1800 秒**。可在当前 PowerShell 设置 `$env:BOT_NATIVE_SETUP_TIMEOUT = '3600'` 后启动，允许 **1–86400 秒整数**；不改系统环境变量。该设置不限制面板 HTTP 资源下载总时长，不替代 `-WaitTimeout`，也不限制已运行 Bot 的模型 / 工具。
+
+安装超时只收回该步骤的专属进程树（包括 venv 启动器与构建子进程），不按进程名杀服务、不终止已运行 Bot；不会自动重试。缓存与已有文件保留，但中断的 pip 不是事务，**不保证 venv 字节未变化或已经完整**。清理确认后可明确点击“启动”重试，仍安装完整原始依赖并执行 `pip check`，两者成功才写完成标记。每个步骤在启动前先写上述保护标记，确认清理后才移除；若进程意外退出、清理未确认或标记移除失败，保留保护并禁止再次安装；必须先核查归属，不要删除标记或另开安装器绕过。创建 Job／原子归属不受支持时安全失败，不退回无隔离安装。
 
 ```powershell
 .\tools\windows-native.ps1 init -DataDir 'C:\BotData\MyFull' -RuntimeName 'my-full' -ModelBase 'https://provider.example/v1' -Model 'model-id' -ApiKeyEnv 'MY_MODEL_KEY' -NonInteractive

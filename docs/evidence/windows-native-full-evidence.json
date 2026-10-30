@@ -4,12 +4,13 @@
   "scope": "isolated Windows installed full runtime",
   "final_regression": {
     "after_existing_instance_python_selection_fix": true,
-    "passed": 5381,
-    "skipped": 49,
+    "after_contained_installer_deadline_fix": true,
+    "passed": 5418,
+    "skipped": 50,
     "subtests_passed": 460,
-    "seconds": 354.64,
+    "seconds": 364.74,
     "pyflakes_passed": true,
-    "release_scanned_files": 155,
+    "release_scanned_files": 156,
     "release_failures": []
   },
   "core": {
@@ -329,6 +330,28 @@
     "global_packages_modified": false,
     "full_first_install_accepted": false,
     "default_large_download_stall_resolved": false
+  },
+  "actual_installer_deadline_followup": {
+    "job": "pwsh-783b4e4356594f91",
+    "scope": "real local installer process tree and private-venv pip check; no network install",
+    "windows_atomic_job_assignment": true,
+    "job_handle_not_inherited": true,
+    "only_nul_stdio_handle_inherited": true,
+    "configured_timeout_seconds": 3,
+    "review_guard_armed_before_running": true,
+    "root_and_child_exact_handles_exited_after_timeout": true,
+    "cache_retained": true,
+    "completion_marker_absent_after_timeout": true,
+    "guard_removed_after_confirmed_cleanup": true,
+    "explicit_subsequent_private_venv_pip_check_passed": true,
+    "network_used": false,
+    "packages_installed": false,
+    "default_large_download_stall_resolved": false,
+    "focused_integration_passed": 221,
+    "focused_integration_skipped": 5,
+    "preexisting_full_venv_reinstalled": false,
+    "postchange_actual_launcher_job": "pwsh-6f91939a5b8048e7",
+    "postchange_existing_host_up_health_parent_survival_stop_exit": true
   },
   "actual_host": {
     "job": "pwsh-11cf492cf5664a67",

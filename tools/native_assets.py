@@ -30,6 +30,8 @@ from urllib.parse import unquote, urlsplit
 import urllib.request
 import zipfile
 
+from tools.native_setup_process import SetupCleanupError, run_setup_step
+
 # Both the Python core and bundled WebUI must match the committed upstream pin.
 ASTRBOT_VERSION = "4.28.1"
 PYPI_JSON_URL = "https://pypi.org/pypi/AstrBot/4.28.1/json"
@@ -46,6 +48,11 @@ MAX_ASSET_FILES = 20000
 SOURCE_MARKER = ".native-source.json"
 DEPENDENCY_MARKER = "dependencies.json"
 DASHBOARD_MARKER = ".native-dashboard.json"
+# A finite per-child-step policy, not Bot readiness or the asset HTTP deadline.
+# Slow networks may explicitly choose up to one day; timeout never retries itself.
+SETUP_TIMEOUT_ENV = "BOT_NATIVE_SETUP_TIMEOUT"
+DEFAULT_SETUP_TIMEOUT = 1800
+SETUP_REVIEW_MARKER = "setup-review-required.json"
 _EXCLUDED_DIRS = {".git", "tests", "node_modules", "__pycache__", ".venv", ".pytest_cache", ".ruff_cache"}
 
 
@@ -197,6 +204,12 @@ def _run(arguments, cwd, label):
     The owner-only log therefore records only fixed step names and exit status.
     """
     runtime = cwd if cwd.name == "runtime" else cwd.parent
+    if (runtime / SETUP_REVIEW_MARKER).exists():
+        raise AssetError("Native setup cleanup needs ownership review before another installation can start.")
+    raw_timeout = os.environ.get(SETUP_TIMEOUT_ENV, str(DEFAULT_SETUP_TIMEOUT))
+    if not re.fullmatch(r"[0-9]{1,5}", raw_timeout) or not 1 <= int(raw_timeout) <= 86400:
+        raise AssetError("BOT_NATIVE_SETUP_TIMEOUT must be an integer from 1 to 86400 seconds.")
+    timeout = int(raw_timeout)
     log_path = runtime / "setup.log"
     descriptor = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
     with os.fdopen(descriptor, "w", encoding="utf-8") as log:
@@ -207,15 +220,53 @@ def _run(arguments, cwd, label):
         environment["PYTHONNOUSERSITE"] = "1"
         log.write(label + ": started\n")
         log.flush()
+        review_marker = runtime / SETUP_REVIEW_MARKER
+        marker_armed = False
+        cleanup_confirmed = False
         try:
-            result = subprocess.run([str(item) for item in arguments], cwd=str(cwd), env=environment,
-                                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                    stderr=subprocess.DEVNULL, shell=False, check=False)
+            if os.name == "nt":
+                # Arm the fail-closed marker BEFORE a process exists. If teardown
+                # later cannot be proved, no last-minute marker write is needed.
+                _write_json(review_marker, {"schema": 1, "review_required": True})
+                marker_armed = True
+                # Assign at process creation, before even the venv redirector can
+                # spawn. The shared supervisor owns only finite installer work.
+                try:
+                    status = run_setup_step([str(item) for item in arguments], cwd=str(cwd),
+                                            environment=environment, timeout=timeout)
+                except SetupCleanupError:
+                    raise
+                except BaseException:
+                    # The supervisor contract proves an empty job before any
+                    # non-cleanup exception escapes, including cancellation.
+                    cleanup_confirmed = True
+                    raise
+                cleanup_confirmed = True
+            else:
+                # This is not the Linux/Compose installer and makes no Unix
+                # descendant containment claim; preserve the test/compatibility path.
+                status = subprocess.run([str(item) for item in arguments], cwd=str(cwd), env=environment,
+                                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                        stderr=subprocess.DEVNULL, shell=False, check=False, timeout=timeout).returncode
+        except SetupCleanupError:
+            # The pre-armed marker remains. It contains no PID, argv or secrets
+            # and is never auto-cleared after cleanup uncertainty.
+            log.write(label + ": cleanup unconfirmed\n")
+            raise AssetError("Native setup cleanup could not be confirmed; retry is blocked pending ownership review.") from None
+        except subprocess.TimeoutExpired:
+            log.write(label + ": timed out\n")
+            raise AssetError("Native setup step timed out; owned setup work was ended on Windows. "
+                             "Cached files were retained; explicitly retry or adjust BOT_NATIVE_SETUP_TIMEOUT.") from None
         except (OSError, subprocess.SubprocessError):
             log.write(label + ": could not start\n")
             raise AssetError("Native setup could not start a required local Python step.") from None
-        log.write(label + ": exit " + str(result.returncode) + "\n")
-        if result.returncode:
+        finally:
+            if marker_armed and cleanup_confirmed:
+                # Fail closed if removal fails; never hide a retained guard or
+                # mark dependencies complete while another setup remains blocked.
+                review_marker.unlink()
+        log.write(label + ": exit " + str(status) + "\n")
+        if status:
             raise AssetError("Native setup failed during " + label + "; see runtime/setup.log.")
 
 
@@ -378,7 +429,8 @@ def inspect_assets(data, repo):
         _, manifest, _ = _source(repo)
         runtime = paths["astrbot_root"].parent
         dependency = _json_file(runtime / DEPENDENCY_MARKER)
-        checks = {"source": _source_matches(paths["astrbot_root"], manifest),
+        checks = {"setup_cleanup": not (runtime / SETUP_REVIEW_MARKER).exists(),
+                  "source": _source_matches(paths["astrbot_root"], manifest),
                   "venv": _venv_valid(paths["python"]),
                   "dependencies": dependency == {"schema": 1, "source_sha256": manifest["source_sha256"],
                                                    "python": list(sys.version_info[:2]), "complete": True},
@@ -406,6 +458,8 @@ def prepare_assets(data, repo):
         vendor, manifest, dependencies = _source(repo)
         root = paths["astrbot_root"]
         runtime = root.parent
+        if (runtime / SETUP_REVIEW_MARKER).exists():
+            raise AssetError("Native setup cleanup needs ownership review before another installation can start.")
         runtime.mkdir(parents=True, exist_ok=True)
         if root.exists() and any(root.iterdir()):
             if not _source_matches(root, manifest):

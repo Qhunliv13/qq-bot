@@ -375,7 +375,8 @@ Windows 默认[原生完整部署](WINDOWS_NATIVE_FULL.md)：[windows-native.ps1
 | [bootstrap.py](../tools/bootstrap.py) | Linux/显式 WSL fresh init/doctor/up/wizard/info/stop/status/logs/health/chat；up 建镜像容器、stop 只选中项目，chat 可能计费/执行获授权工具。 |
 | [windows-native.ps1](../tools/windows-native.ps1) | Windows 默认完整入口；Python 3.12/3.13 检测、显式同意后官方用户级 Python 安装，转共享 UI/原生管理，不暗降级 Lite/WSL。 |
 | [native_runtime.py](../tools/native_runtime.py) | 私有原生实例 init/up/health/chat/stop；认证同实例就绪、owned detached host、状态保存与排空退出；stop 接受不等于进程已退出。 |
-| [native_assets.py](../tools/native_assets.py) | 私有 venv 安装完整 vendored pyproject、复制核心/插件、固定官方 wheel SHA256 提取面板；只用实例 `runtime/pip-cache`，不含外部测试下载适配器。 |
+| [native_assets.py](../tools/native_assets.py) | 私有 venv 安装完整 vendored pyproject、复制核心/插件、固定官方 wheel SHA256 提取面板；只用实例 `runtime/pip-cache`，不含外部测试下载适配器。安装步骤总时限独立于就绪等待；完成前写保护标记，清理未确认禁止重试。 |
+| [native_setup_process.py](../tools/native_setup_process.py) | Windows 10+ 原生安装子进程的唯一 Job 监督实现：创建时原子归属、仅 NUL 句柄继承、root 退出且 Job 清空才成功；超时只收回安装树，父进程死亡自动清理，不限制已运行 Bot。 |
 | [setup_inputs.py](../tools/setup_inputs.py) | 模型地址/名称/Key和owner输入校验、隐藏key提示；不探提供方。 |
 | [setup_ports.py](../tools/setup_ports.py) | fresh端口冲突检测并短时持有；仅未显式选择的默认值可换空闲端口。 |
 | [setup_wizard.py](../tools/setup_wizard.py)、[setup_wizard.html](../tools/setup_wizard.html) | full setup固定本地页面+loopback HTTP controller；精确Host/Origin/Bearer/CSP，save/start/stop/chat/credential显式动作；raw logs不传HTTP。 |
@@ -484,10 +485,11 @@ Windows 默认[原生完整部署](WINDOWS_NATIVE_FULL.md)：[windows-native.ps1
 
 ### 12.1 已通过证据与仍未验证的边界（2026-10-31）
 
-- **PowerShell 解释器选择修复后最终全仓回归：5,381 passed、49 skipped、460 subtests passed，354.64s**；先前私有缓存基线 `97cba97` 为 5,365/49/460。全范围 pyflakes 无错误；release validator 扫描 **155 个第一方文件，failures 为空**。启动器／资产／运行时专项 **185 passed、4 skipped**；缓存集成 **184 passed、4 skipped**；真实 Chromium 安装网页测试 **8 passed**，覆盖 native/container 两分支，但不证明 AstrBot Dashboard 浏览器渲染或桌面双击实装。实际 Dashboard 登录渲染另有后述证据。
+- **安装子进程限时修复后最终全仓回归：5,418 passed、50 skipped、460 subtests passed，364.74s**；先前私有缓存基线 `97cba97` 为 5,365/49/460。全范围 pyflakes 无错误；release validator 扫描 **156 个第一方文件，failures 为空**。启动器／资产／运行时专项 **185 passed、4 skipped**；缓存集成 **184 passed、4 skipped**；真实 Chromium 安装网页测试 **8 passed**，覆盖 native/container 两分支，但不证明 AstrBot Dashboard 浏览器渲染或桌面双击实装。实际 Dashboard 登录渲染另有后述证据。
 - **实际隔离 Python 3.13 全量依赖通过**：vendored AstrBot 4.28.1 `pyproject.toml` 的 **63 项适用 requirement 全部满足，`pip check` 通过**。官方同版本 wheel **7,063,082 bytes** 经固定 SHA256 校验，预构建 Dashboard 就绪；核心、插件与完整依赖未被精简或替代。
 - **实际已安装宿主 smoke 通过**（job `pwsh-11cf492cf5664a67`）：不改动的 AstrBot 4.28.1 + 复制的完整插件 + 私有 venv；loopback Dashboard HTML、初始密码 API 登录、认证 local health，以及同一完整模型/工具回路的可见文本。提供方是合成本地 OpenAI-compatible 服务，共两次模型请求，没有外部模型或 QQ。第二次请求被保持在途后 stop 接受，精确进程 HANDLE wait 证明仍在处理时进程存活；释放请求后可见回复完成，随后宿主实际退出。独立短命 CLI 父进程 `up` 后退出而 health 仍可用；持久状态重启得到新 PID，认证 stop 再次实际退出，所有测试宿主已停止。
 - **首次安装／默认网络未通过**：原默认 pip 的精确 owned child 在 SSL body read 卡住后安全终止；48 个完整 wheel 按官方文件名／长度／SHA256 校验，约 19 MB jieba 与 Dashboard wheel 用官方 64 KiB HTTPS range 恢复。最终下载借助产品外 `native_fixture_pip.py`（stdlib HTTPS、64 KiB、8 线程、精确官方 file host/Content-Range/length，pip link hash 不变）及 `native_full_install_retry.py`。产品基线 `97cba97` 只改实例私有 `runtime/pip-cache`，适配器不发货；不能据此宣称默认大文件网络或完整首次安装通过。后续独立小包检查使用未修改 pip，在新私有根／缓存连续下载官方 filelock 4.2.4 wheel（162,475 bytes），第二次明确命中缓存，文件大小和 SHA256 与官方发布一致；新私有 venv 经产品子进程安装该单依赖并通过 pip check，严格 SID ACL 校验通过，无全局包、模型或 QQ 操作。该小包证据不外推大文件停滞已解决。
+- **安装子进程限时／安全恢复通过**：Windows 10+ Job 在 CreateProcess 时原子接管安装步骤，非继承 kill-on-close Job，仅新 NUL stdio 句柄可继承；默认每步 1800s，可用 `BOT_NATIVE_SETUP_TIMEOUT` 设置 1–86400s。root 退出且 Job 清空、仍在期限内才成功；超时收回专属安装树，不杀已运行 Bot，不改 pip 传输。启动前写重试保护标记，仅确认清理后移除；未确认或父进程意外退出遗留标记时要求归属核查。实际产品级 3s 父子树超时／精确句柄退出、缓存保留、无完成标记、随后私有 venv pip check 通过；集成 **221 passed、5 skipped**，含 venv 重定向器后代在父监督进程死亡时退出、Unicode／句柄边界、保护标记写入／移除失败与期限晚完成拒绝。仅验证等待有界和恢复门禁，不说明大文件下载速度已修复；面板 HTTP／运行中模型工具不受此安装时限约束。
 - **实际 Dashboard 浏览器登录通过**（job `410e1cb43f454865`）：Chromium 渲染固定版本 Dashboard 登录表单，42 次本地 JS 请求，初始密码登录 POST 200／取得 token 并离开登录路由，页面 JS 错误为 0；2 次非本地请求被阻断，无模型／QQ 调用。认证 stop 后精确进程 wait 确认退出；仅验收登录渲染／导航，不代表全部页面交互。
 - **实际 Windows PowerShell 5.1 wrapper 生命周期通过**（job `pwsh28a035e48f3547c6`）：修正解释器选择后，在同时安装 3.12/3.13 的主机上沿用该实例已有的 3.13，而非新偏好 3.12。实际 `windows-native.ps1 up` 父进程退出后 health 仍存活，wrapper health 的 PID 与宿主一致；wrapper stop 后 OS 进程 HANDLE wait 确认实际退出，无模型／QQ 调用，宿主已停止。仅验收已安装实例的 wrapper 生命周期，不证明新下载、winget／新电脑双击安装；修复后全仓回归结果单独记录在本节首项。
 - **ACL 与保密边界**：填充后 fixture 根的初次 `icacls` 在写秘密前 2s 超时；只针对精确已知 fixture 的 60s 有界隐私操作验证严格当前用户 SID ACL 后才进行宿主测试，未放宽产品 ACL。运行 key 全为随机合成本地值，不是生产凭据；不公开秘密或原始日志。

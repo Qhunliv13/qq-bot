@@ -233,6 +233,8 @@ class Controller:
                        "操作未完成。首次构建需要网络和磁盘空间；检查运行环境后重试。已有配置和数据不会重置。")
             if action == "check" and getattr(self.core, "DEPLOYMENT_MODE", "container") == "windows-native":
                 message = "原生环境尚未就绪。需要 Windows 与 Python 3.12/3.13；重新打开 install.cmd 可检查 Python。无需 WSL 或 Docker。首次下载还需联网和足够磁盘空间。"
+            elif action == "start" and getattr(self.core, "DEPLOYMENT_MODE", "container") == "windows-native":
+                message = "原生安装或启动未完成。安装步骤有独立总时限（BOT_NATIVE_SETUP_TIMEOUT）；检查网络和私有 setup.log 的固定阶段。缓存及已有配置保留，不会自动重试；若清理未确认则禁止再次安装，需先核查归属，不要删除保护标记绕过。"
             self._set(**{field: "failed"}, message=message)
         finally:
             with self.lock:

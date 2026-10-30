@@ -177,7 +177,7 @@ def test_doctor_missing_assets_is_strictly_read_only(vendor_repo, tmp_path, monk
     monkeypatch.setattr(assets, "_download", forbidden)
     report = assets.inspect_assets(data, vendor_repo)
     assert not report["ready"]
-    assert report["checks"] == dict.fromkeys(("source", "venv", "dependencies", "dashboard"), False)
+    assert report["checks"] == {"setup_cleanup": True, **dict.fromkeys(("source", "venv", "dependencies", "dashboard"), False)}
     assert not data.exists()
 
 
@@ -457,7 +457,15 @@ def test_process_environment_and_log_are_secret_safe(tmp_path, monkeypatch):
         assert not kwargs["shell"]
         return SimpleNamespace(returncode=1)
 
+    def contained(arguments, cwd, environment, timeout):
+        """Capture the Windows supervisor boundary without launching a process."""
+        assert timeout == assets.DEFAULT_SETUP_TIMEOUT
+        captured["env"] = environment
+        captured["cwd"] = cwd
+        return 1
+
     monkeypatch.setattr(assets.subprocess, "run", run)
+    monkeypatch.setattr(assets, "run_setup_step", contained)
     with pytest.raises(assets.AssetError) as caught:
         assets._run(["fake-python", "-m", "pip"], root, "dependency installation")
     assert "secret" not in str(caught.value)
@@ -481,10 +489,133 @@ def test_process_launch_exception_is_not_exposed(tmp_path, monkeypatch):
         raise OSError("raw-private-secret")
 
     monkeypatch.setattr(assets.subprocess, "run", fail)
+    monkeypatch.setattr(assets, "run_setup_step", fail)
     with pytest.raises(assets.AssetError) as caught:
         assets._run([sys.executable], runtime, "venv creation")
     assert "raw-private-secret" not in str(caught.value)
     assert "raw-private-secret" not in (runtime / "setup.log").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("value", ["", "0", "86401", "-1", "1.5", "secret-value", "999999999"])
+def test_setup_timeout_invalid_values_never_spawn(tmp_path, monkeypatch, value):
+    """Validate the explicit deadline before tool launch or any safe-progress log write."""
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    monkeypatch.setenv(assets.SETUP_TIMEOUT_ENV, value)
+
+    def forbidden(*args, **kwargs):
+        """Refuse tool execution when deadline configuration is invalid."""
+        raise AssertionError("unexpected spawn")
+
+    monkeypatch.setattr(assets, "run_setup_step", forbidden)
+    monkeypatch.setattr(assets.subprocess, "run", forbidden)
+    with pytest.raises(assets.AssetError, match="1 to 86400"):
+        assets._run([sys.executable], runtime, "dependency installation")
+    assert not (runtime / "setup.log").exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows contained installer contract")
+@pytest.mark.parametrize("value", ["1", "86400"])
+def test_setup_timeout_is_configurable_and_secret_safe(tmp_path, monkeypatch, value):
+    """Only the supervisor receives the deadline; a timed-out step retains cache and no marker."""
+    runtime = tmp_path / "runtime"
+    cache = runtime / "pip-cache"
+    cache.mkdir(parents=True)
+    sentinel = cache / "retained"
+    sentinel.write_bytes(b"already cached")
+    monkeypatch.setenv(assets.SETUP_TIMEOUT_ENV, value)
+
+    def timed_out(arguments, cwd, environment, timeout):
+        """Represent an already-confirmed owned process-tree cleanup."""
+        assert timeout == int(value)
+        raise subprocess.TimeoutExpired("private-secret-command", timeout, output=b"secret", stderr=b"secret")
+
+    monkeypatch.setattr(assets, "run_setup_step", timed_out)
+    with pytest.raises(assets.AssetError, match="explicitly retry") as caught:
+        assets._run([sys.executable], runtime, "dependency installation")
+    assert "secret" not in str(caught.value)
+    assert sentinel.read_bytes() == b"already cached"
+    assert not (runtime / assets.DEPENDENCY_MARKER).exists()
+    assert not (runtime / assets.SETUP_REVIEW_MARKER).exists()
+    log = (runtime / "setup.log").read_text(encoding="utf-8")
+    assert "timed out" in log and "secret" not in log
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows contained installer contract")
+def test_uncertain_setup_cleanup_blocks_future_prepare(vendor_repo, tmp_path, monkeypatch):
+    """Do not overlap another installer after job-empty status could not be proven."""
+    data = tmp_path / "state"
+    runtime = data / "runtime"
+    runtime.mkdir(parents=True)
+    calls = []
+
+    def uncertain(*args, **kwargs):
+        """Model unconfirmed cleanup without launching or leaving any actual process."""
+        calls.append(True)
+        raise assets.SetupCleanupError("raw-private-secret")
+
+    monkeypatch.setattr(assets, "run_setup_step", uncertain)
+    with pytest.raises(assets.AssetError, match="retry is blocked") as caught:
+        assets._run([sys.executable], runtime, "dependency installation")
+    assert "secret" not in str(caught.value)
+    assert json.loads((runtime / assets.SETUP_REVIEW_MARKER).read_text(encoding="utf-8")) == {
+        "schema": 1, "review_required": True}
+    assert not assets.inspect_assets(data, vendor_repo)["checks"]["setup_cleanup"]
+    with pytest.raises(assets.AssetError, match="ownership review"):
+        assets.prepare_assets(data, vendor_repo)
+    with pytest.raises(assets.AssetError, match="ownership review"):
+        assets._run([sys.executable], runtime, "dependency installation")
+    assert len(calls) == 1
+    assert not (runtime / "astrbot").exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows contained installer contract")
+def test_review_marker_failure_prevents_any_spawn(tmp_path, monkeypatch):
+    """A full disk or permission error arming the guard must fail before child creation."""
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+
+    def failed_write(*args, **kwargs):
+        """Model a failure to durably arm without needing real filesystem damage."""
+        raise OSError("raw-private-secret")
+
+    def forbidden(*args, **kwargs):
+        """No subprocess may exist without the durable retry guard."""
+        raise AssertionError("unexpected spawn")
+
+    monkeypatch.setattr(assets, "_write_json", failed_write)
+    monkeypatch.setattr(assets, "run_setup_step", forbidden)
+    with pytest.raises(assets.AssetError) as caught:
+        assets._run([sys.executable], runtime, "dependency installation")
+    assert "secret" not in str(caught.value)
+    assert not (runtime / assets.DEPENDENCY_MARKER).exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows contained installer contract")
+def test_review_marker_survives_unconfirmed_cleanup_and_blocks_success(tmp_path, monkeypatch):
+    """A failed guard removal remains a failed operation, not a misleading success."""
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    guard = runtime / assets.SETUP_REVIEW_MARKER
+    original_unlink = Path.unlink
+
+    def retain_guard(path, *args, **kwargs):
+        """Leave only the exact guard in place; do not change unrelated cleanup."""
+        if path == guard:
+            raise OSError("guard_removal_failed")
+        return original_unlink(path, *args, **kwargs)
+
+    def completed(*args, **kwargs):
+        """Only a simulated fully completed step can reach guard removal."""
+        assert guard.exists()
+        return 0
+
+    monkeypatch.setattr(assets, "run_setup_step", completed)
+    monkeypatch.setattr(Path, "unlink", retain_guard)
+    with pytest.raises(OSError, match="guard_removal_failed"):
+        assets._run([sys.executable], runtime, "dependency installation")
+    assert guard.exists() and not (runtime / assets.DEPENDENCY_MARKER).exists()
+    assert "exit 0" not in (runtime / "setup.log").read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize("url", ["http://files.pythonhosted.org/a.whl", "https://evil.example/a.whl", "https://files.pythonhosted.org.evil.example/a.whl", "https://user:secret@files.pythonhosted.org/a.whl", "https://files.pythonhosted.org:444/a.whl", "https://files.pythonhosted.org/a.whl?override=secret"])

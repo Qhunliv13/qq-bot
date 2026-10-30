@@ -58,6 +58,30 @@ def _wait(controller):
     assert controller.snapshot()["busy"] is False
 
 
+def test_native_start_failure_explains_setup_deadline_without_raw_output(core, tmp_path, monkeypatch):
+    """A failed contained step releases UI busy, retains settings and never auto-replays."""
+    monkeypatch.setattr(core, "DEPLOYMENT_MODE", "windows-native", raising=False)
+    controller = _controller(core, tmp_path)
+    _save(controller)
+    before = (controller.data / "settings.json").read_bytes()
+    calls = []
+
+    def failed(action, **kwargs):
+        """Return a tool failure whose original data must stay outside UI state."""
+        calls.append(action)
+        raise RuntimeError("https://private-secret@provider.invalid/hidden")
+
+    monkeypatch.setattr(controller, "_command", failed)
+    controller.action("start", {})
+    _wait(controller)
+    state = controller.snapshot()
+    assert calls == ["up"] and state["runtime"] == "failed"
+    assert "BOT_NATIVE_SETUP_TIMEOUT" in state["message"]
+    assert "不要删除保护标记" in state["message"]
+    assert "secret" not in json.dumps(state)
+    assert before == (controller.data / "settings.json").read_bytes()
+
+
 def test_new_session_has_no_side_effects_and_no_claimed_readiness(core, tmp_path):
     """Opening setup must not create state, call a model, or claim QQ readiness."""
     controller = _controller(core, tmp_path)
