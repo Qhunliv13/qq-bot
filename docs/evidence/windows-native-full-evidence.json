@@ -294,7 +294,28 @@
     "test_download_adapter_shipped_in_product": false,
     "dependencies_reduced": false,
     "global_packages_modified": false,
-    "product_private_cache_real_network_reuse_verified": false
+    "small_wheel_private_cache_real_network_reuse_verified": true,
+    "full_install_private_cache_real_network_reuse_verified": false
+  },
+  "actual_private_cache_followup": {
+    "scope": "small official wheel only; not complete first installation",
+    "download_job": "pwsh-e6007c3ae77e46aa",
+    "fresh_venv_install_job": "pwsh-e69cb06ee8f14b25",
+    "package": "filelock==4.2.4",
+    "filename": "filelock-4.2.4-py3-none-any.whl",
+    "bytes": 162475,
+    "sha256": "301241438c57936ef93f4243a94f2559022268bfcf9b375a9a72eb0f8db8358e",
+    "official_release_hash_matches": true,
+    "first_download_reported_cached_wheel": false,
+    "second_download_reported_cached_wheel": true,
+    "fresh_root_and_cache_private_acl_verified": true,
+    "fresh_private_venv_single_dependency_install": true,
+    "product_subprocess_boundary_used_for_install": true,
+    "pip_check_passed": true,
+    "pip_transport_patched": false,
+    "global_packages_modified": false,
+    "full_first_install_accepted": false,
+    "default_large_download_stall_resolved": false
   },
   "actual_host": {
     "job": "pwsh-11cf492cf5664a67",
@@ -348,7 +369,7 @@
     "new-PC double-click full first install",
     "default network download path",
     "Python 3.12 full installation",
-    "actual private-cache network reuse",
+    "full-install private-cache network reuse beyond the verified small wheel",
     "all Dashboard pages",
     "whole terminal window closure and user logoff",
     "external model providers",
