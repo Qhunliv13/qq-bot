@@ -314,3 +314,128 @@ def test_native_chat_sends_prompt_via_stdin_and_masks_saved_secrets(core, tmp_pa
     assert _MODEL["api_key"] not in result
     assert settings["dashboard_password"] not in result
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize("milestone,expected", [
+    ("venv creation: started", "创建原生 Python 独立环境"),
+    ("venv creation: exit 0", "准备安装原生依赖"),
+    ("dependency installation: started", "下载并安装原生依赖"),
+    ("dependency installation: exit 0", "准备验证依赖"),
+    ("dependency verification: started", "正在验证原生依赖"),
+    ("dependency verification: exit 0", "准备原生资源和控制台"),
+])
+def test_native_busy_snapshot_reports_only_safe_fresh_milestones(core, tmp_path, monkeypatch, milestone, expected):
+    """Refresh fixed progress per poll without persisting or echoing private log data."""
+    monkeypatch.setattr(core, "DEPLOYMENT_MODE", "windows-native", raising=False)
+    controller = _controller(core, tmp_path)
+    controller.busy = True
+    controller.state.update(runtime="checking", message="original worker message")
+    runtime = controller.data / "runtime"
+    runtime.mkdir(parents=True)
+    log = runtime / "setup.log"
+    log.write_text("venv creation: started\n", encoding="utf-8")
+    assert "创建原生 Python 独立环境" in controller.snapshot()["message"]
+    secret = "fictitious-private-secret"
+    log.write_text(milestone + "\n" + milestone + " " + secret + "\n"
+                   + "ERROR C:\\private\\" + secret + "\n", encoding="utf-8")
+    value = controller.snapshot()
+    assert expected in value["message"]
+    assert "下载" in value["message"] and "较久" in value["message"]
+    assert secret not in json.dumps(value)
+    assert str(controller.data) not in value["message"]
+    assert "%" not in value["message"]
+    assert value["busy"] is True and value["runtime"] == "checking"
+    assert controller.state["message"] == "original worker message"
+
+
+@pytest.mark.parametrize("content", [
+    b"unknown fictitious-secret\n",
+    b"dependency installation: started fictitious-secret\n",
+    b"prefix dependency installation: started\n",
+    b"dependency installation: started\x00\n",
+    b"dependency installation: started\xff\n",
+    b"dependency installation: started",
+    b"dependency installation: exit 1\n",
+    b"dependency verification: could not start\n",
+    b"dependency verification: exit 0\n" + b"x" * 8192 + b"\n",
+    b"x" * 8192 + b"dependency verification: exit 0\n",
+])
+def test_native_unknown_tampered_or_truncated_log_keeps_message(core, tmp_path, monkeypatch, content):
+    """Unknown text and partial tail lines cannot become progress or leak secrets."""
+    monkeypatch.setattr(core, "DEPLOYMENT_MODE", "windows-native", raising=False)
+    controller = _controller(core, tmp_path)
+    controller.busy = True
+    controller.state.update(runtime="checking", message="unchanged")
+    log = controller.data / "runtime" / "setup.log"
+    log.parent.mkdir(parents=True)
+    log.write_bytes(content)
+    assert controller.snapshot()["message"] == "unchanged"
+
+
+@pytest.mark.parametrize("mode,busy,runtime", [
+    ("windows-native", False, "checking"),
+    ("windows-native", True, "ready"),
+    ("container", True, "checking"),
+])
+def test_snapshot_progress_does_not_replace_other_states(core, tmp_path, monkeypatch, mode, busy, runtime):
+    """Only an actively checking native runtime may read installer milestones."""
+    monkeypatch.setattr(core, "DEPLOYMENT_MODE", mode, raising=False)
+    controller = _controller(core, tmp_path)
+    controller.busy = busy
+    controller.state.update(runtime=runtime, message="unchanged")
+    log = controller.data / "runtime" / "setup.log"
+    log.parent.mkdir(parents=True)
+    log.write_bytes(b"dependency installation: started\n")
+
+    def forbidden(*args, **kwargs):
+        """Inactive and container snapshots must not even open a native log."""
+        raise AssertionError("unexpected log access")
+
+    monkeypatch.setattr(type(log), "open", forbidden)
+    assert controller.snapshot()["message"] == "unchanged"
+
+
+@pytest.mark.parametrize("unreadable", [False, True])
+def test_native_log_read_failure_keeps_current_message(core, tmp_path, monkeypatch, unreadable):
+    """A missing or inaccessible private log never fails the public snapshot."""
+    monkeypatch.setattr(core, "DEPLOYMENT_MODE", "windows-native", raising=False)
+    controller = _controller(core, tmp_path)
+    controller.busy = True
+    controller.state.update(runtime="checking", message="unchanged")
+    if unreadable:
+        def denied(*args, **kwargs):
+            """Simulate a local read failure without exposing its private detail."""
+            raise PermissionError("fictitious-private-secret")
+
+        monkeypatch.setattr(type(controller.data), "open", denied)
+    assert controller.snapshot()["message"] == "unchanged"
+
+
+def test_native_log_tail_read_is_bounded(core, tmp_path, monkeypatch):
+    """Read at most 4096 bytes even when the installer log has grown very large."""
+    import io
+
+    monkeypatch.setattr(core, "DEPLOYMENT_MODE", "windows-native", raising=False)
+    controller = _controller(core, tmp_path)
+    controller.busy = True
+    controller.state.update(runtime="checking", message="unchanged")
+    handle = io.BytesIO(b"x" * 16384 + b"\r\ndependency installation: started\r\n")
+    original_read = handle.read
+    reads = []
+
+    def bounded_read(size=-1):
+        """Fail the test if snapshot asks for an unbounded or oversized read."""
+        assert 0 <= size <= 4096
+        reads.append(size)
+        return original_read(size)
+
+    def open_log(path, mode):
+        """Only the known private binary log is an allowed progress source."""
+        assert path == controller.data / "runtime" / "setup.log"
+        assert mode == "rb"
+        return handle
+
+    monkeypatch.setattr(handle, "read", bounded_read)
+    monkeypatch.setattr(type(controller.data), "open", open_log)
+    assert "下载并安装原生依赖" in controller.snapshot()["message"]
+    assert reads == [4096]

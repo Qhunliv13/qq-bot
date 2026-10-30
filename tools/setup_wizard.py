@@ -50,6 +50,36 @@ class Controller:
         with self.lock:
             value = dict(self.state, initialized=self.initialized, busy=self.busy,
                          deployment_mode=getattr(self.core, "DEPLOYMENT_MODE", "container"))
+            if (value["deployment_mode"] == "windows-native" and value["busy"]
+                    and value["runtime"] == "checking"):
+                # Only exact, completed installer milestones may affect public text;
+                # never echo log content, paths, child errors or download URLs.
+                progress = {
+                    b"venv creation: started": "正在创建原生 Python 独立环境；首次准备和下载可能较久，请保留此窗口。",
+                    b"venv creation: exit 0": "正在准备安装原生依赖；首次下载可能较久，耗时取决于网络，请保留此窗口。",
+                    b"dependency installation: started": "正在下载并安装原生依赖；首次下载可能较久，耗时取决于网络，请保留此窗口。",
+                    b"dependency installation: exit 0": "原生依赖安装完成，正在准备验证依赖；后续资源下载可能较久，请保留此窗口。",
+                    b"dependency verification: started": "正在验证原生依赖；后续资源下载可能较久，请保留此窗口。",
+                    b"dependency verification: exit 0": "正在准备原生资源和控制台；首次下载可能较久，耗时取决于网络，请保留此窗口。",
+                }
+                try:
+                    with (self.data / "runtime" / "setup.log").open("rb") as log:
+                        log.seek(0, 2)
+                        offset = max(0, log.tell() - 4096)
+                        log.seek(offset)
+                        lines = log.read(4096).split(b"\n")
+                    # Discard a possibly truncated first line and an unfinished last
+                    # line; byte matching cannot normalize tampered text into a step.
+                    if offset:
+                        lines = lines[1:]
+                    for line in reversed(lines[:-1]):
+                        message = progress.get(line.removesuffix(b"\r"))
+                        if message is not None:
+                            value["message"] = message
+                            break
+                except OSError:
+                    # Missing/unreadable logs must not alter the worker's message.
+                    pass
             if self.initialized:
                 settings = self.core.load_install(self.data, self.name)
                 env = self.core.docker_environment(self.data, settings)
