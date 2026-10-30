@@ -4,11 +4,21 @@
 
 ## 一条命令启动全新实例
 
+Linux（仓库根目录）：
+
 ```bash
-python3 tools/bootstrap.py up
+bash ./install.sh
 ```
 
-首次交互配置模型，自动创建仓库之外的私有数据目录并构建内嵌 AstrBot 镜像；完整 Linux 版本需要 Linux、Docker Compose v2 和首次构建网络。Windows 完整入口使用 WSL2／Docker Desktop，轻量文字入口不需要 Docker；详见下文版本表。详见[开箱部署](docs/QUICKSTART.md)和[第三方声明](THIRD_PARTY_NOTICES.md)。这不会迁移或替换现有生产，也不会自动安装 NapCat。本地无 Docker daemon，当前验证覆盖初始化与回归，尚未完成整镜像构建验收。
+Windows PowerShell（仓库根目录，使用 WSL2 中的完整运行时）：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
+```
+
+首次交互配置模型，自动创建仓库之外的私有数据目录，构建内嵌 AstrBot 镜像并等待运行时健康检查。两入口复用 `tools/bootstrap.py`，不另建安装核心；已有配置与密钥不会被重复初始化覆盖。完整版本需要 Docker Engine/Compose v2（Windows 可使用 Docker Desktop WSL2 集成）及首次构建网络，安装脚本不静默安装系统依赖。PowerShell 的 Bypass 仅用于本次进程，不修改系统执行策略。
+
+详见 [Linux 快捷部署](docs/LINUX.md)、[Windows 快捷部署](docs/WINDOWS.md)、[开箱部署](docs/QUICKSTART.md)和[第三方声明](THIRD_PARTY_NOTICES.md)。健康检查不等于模型请求或 QQ 登录成功；不会迁移或替换现有生产，也不会自动安装 NapCat。整镜像构建及启动实测状态以部署验证记录为准，不以入口测试代替。
 
 ## 选择运行版本
 

@@ -2,22 +2,26 @@
 
 ## 当前生产状态与这份发行包的区别
 
-当前生产代码为 `7af432c`：原 AstrBot 宿主、外置 NapCat、原个人 QQ 登录，
-本地完整入口和观察上下文减负已部署。该安装器**不更新、不接管现有生产目录或容器**。
+原生产保留 AstrBot 宿主、外置 NapCat 与原个人 QQ 接入。本指南不提供当前生产提交号或在线状态的现场证明。该安装器**不更新、不接管现有生产目录或容器**。
 本次发行包固定内嵌 AstrBot v4.28.1 原始源码；QQ 原生独立重写仍处于实验阶段，
 未提供可登录的替代后端，不能作为开箱默认接入。
 
 ## 全新安装
 
-要求：Linux、Python 3.12+、Docker Engine 与 Compose v2；首次构建还需要联网获取
+要求：Linux（Windows 使用 WSL2）、宿主 Python 3.10+、Docker Engine 与支持 `up --wait` 的 Compose v2；容器自带 Python 3.12。首次构建还需要联网获取
 基础镜像、Python 依赖和前端依赖。AstrBot 后端与前端源码已在仓库内，不从运行时下载
 不匹配的 UI。Python 上游此版本没有依赖锁，因此不宣称构建完全离线或逐字节可复现。
 
 仓库根目录执行一条命令：
 
 ```bash
-python3 tools/bootstrap.py up
+bash ./install.sh
 ```
+
+Windows PowerShell 使用 `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1`。
+两者复用同一个安装核心；分别参见 [Linux 指南](LINUX.md)和 [Windows 指南](WINDOWS.md)。
+启动后默认等待本地运行时健康 300 秒，Linux 可传 `--wait-timeout 600`，Windows 可传
+`-WaitTimeout 600`（1–3600 秒）；这不是镜像构建的总时限，也不表示模型或 QQ 已验证。
 
 首次交互输入模型兼容端点、模型名、API Key，以及可选的 QQ 管理员 ID。
 API Key 使用隐藏输入；没有预设供应商、模型或 QQ 账号。之后创建隔离数据目录，
@@ -36,7 +40,7 @@ python3 tools/bootstrap.py logs
 可用 `--data-dir` 选择仓库之外的持久目录，用 `--runtime-name` 选择隔离项目名。
 使用相同目录重复运行不会重写密钥、人格、记忆或配置；陌生的非空目录或同名但不属于
 该安装的容器会被拒绝，而不是覆盖。未提供自动迁移、停止或删除旧实例的命令。
-旧实例占用 6185 时，先在外置 `compose.env` 中设置另一个 `BOT_WEB_PORT`，不要停止旧实例。
+旧实例占用 6185 时，在执行命令的 Linux 环境中导出另一个 `BOT_WEB_PORT`（必要时同时导出 `BOT_ONEBOT_PORT`）；两端口必须不同且在 1–65535。不要停止旧实例，也不要编辑安装器管理的 `compose.env`，否则完整性校验会拒绝。环境覆盖不是持久配置，每次管理同一实例时保持一致。
 
 默认数据目录由命令帮助列出；其中 `settings.json` 保存模型凭据、初始人格、管理员和
 随机生成的面板密码，权限为 0600；目录为 0700。面板用户名为 `astrbot`，密码查看这份
@@ -84,7 +88,10 @@ python3 tools/bootstrap.py chat --prompt '你的请求'
 
 ## 验证边界
 
-本次自动化测试覆盖安装器幂等、外置秘密、拒绝覆盖旧状态、容器归属、源声明哈希、
-初始化配置和插件回归。本地环境没有 Docker daemon，未将单元／配置测试冒称为完整
-镜像构建、真实扫码登录或生产迁移验收。首次构建失败时使用 `logs`／`doctor` 排查，
-不自动切换生产、不删除数据、不降级为不安全连接。
+自动化测试覆盖安装器幂等、外置秘密、拒绝覆盖旧状态、容器归属、源声明哈希、
+初始化配置和插件回归。已在专用测试 Docker daemon 上通过 Linux 初始化、重复初始化、
+预检与状态查询，并通过真实 Windows PowerShell → WSL → Docker 预检。整镜像构建已发起，
+但当前测试网络访问 Docker Hub 基础镜像元数据超时，因此镜像构建、容器健康启动尚未验收。
+详见 [双平台部署验证记录](QUICK_DEPLOY_VERIFICATION.md)。首次构建失败先用 `doctor` 检查
+Docker；容器存在时再查看 `status`／`logs`。不自动换不可信镜像源、不切换生产、不删除数据，
+也不将本地健康当作真实扫码登录或生产迁移验收。

@@ -1,0 +1,24 @@
+{
+  "actual_docker_daemon": true,
+  "actual_linux_launcher": true,
+  "build_failure_stage": "docker_hub_base_image_metadata_timeout",
+  "commands": [
+    "init",
+    "init_again",
+    "doctor",
+    "status"
+  ],
+  "container_started": false,
+  "exit_codes": [
+    0,
+    0,
+    0,
+    0
+  ],
+  "image_build_completed": false,
+  "model_request_sent": false,
+  "private_settings_mode": "0o600",
+  "qq_login_attempted": false,
+  "schema": 1,
+  "settings_unchanged": true
+}

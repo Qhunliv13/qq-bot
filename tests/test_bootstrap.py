@@ -20,6 +20,8 @@ def bootstrap(monkeypatch, tmp_path):
     repo.mkdir()
     monkeypatch.setattr(module, "REPO_ROOT", repo)
     monkeypatch.setenv("TEST_BOOTSTRAP_KEY", "secret-only-in-private-test-settings")
+    monkeypatch.delenv("BOT_WEB_PORT", raising=False)
+    monkeypatch.delenv("BOT_ONEBOT_PORT", raising=False)
     return module
 
 
@@ -183,7 +185,7 @@ def test_one_command_up_initializes_before_docker(bootstrap, tmp_path, monkeypat
     args[0] = "up"
     assert bootstrap.main(args) == 0
     assert calls[:2] == ["doctor", "ownership"]
-    assert calls[2][-3:] == ["up", "-d", "--build"]
+    assert calls[2][-6:] == ["up", "-d", "--build", "--wait", "--wait-timeout", "300"]
 
 
 def test_unconfigured_noninteractive_up_never_touches_docker(bootstrap, tmp_path, monkeypatch):
@@ -206,7 +208,7 @@ def test_up_preflight_then_build_only_owned_project(bootstrap, tmp_path, monkeyp
     monkeypatch.setattr(bootstrap, "run_docker", lambda command, data: calls.append(command))
     assert bootstrap.main(["up", "--data-dir", str(data)]) == 0
     assert calls[:2] == ["doctor", "ownership"]
-    assert calls[2][-3:] == ["up", "-d", "--build"]
+    assert calls[2][-6:] == ["up", "-d", "--build", "--wait", "--wait-timeout", "300"]
 
 
 def test_up_ownership_conflict_never_builds(bootstrap, tmp_path, monkeypatch):
@@ -231,9 +233,11 @@ def test_readonly_commands_remain_project_scoped(bootstrap, tmp_path, monkeypatc
     assert bootstrap.main(init_args(data, "--runtime-name", "chosen-runtime")) == 0
     calls = []
     monkeypatch.setattr(bootstrap, "run_docker", lambda command, data: calls.append(command))
+    monkeypatch.setattr(bootstrap, "check_project_ownership", lambda *args: calls.append("ownership"))
     assert bootstrap.main([verb, "--data-dir", str(data), "--runtime-name", "chosen-runtime"]) == 0
-    assert calls[0][2:4] == ["-p", "chosen-runtime"]
-    assert calls[0][-len(tail):] == tail
+    assert calls[0] == "ownership"
+    assert calls[1][2:4] == ["-p", "chosen-runtime"]
+    assert calls[1][-len(tail):] == tail
 
 
 @pytest.mark.parametrize("verb,flags,tail", [
@@ -290,6 +294,7 @@ def test_cli_failure_redacts_subprocess_output(bootstrap, tmp_path, monkeypatch,
         """Simulate Docker errors containing confidential diagnostic output."""
         raise subprocess.CalledProcessError(1, ["docker"], stderr="secret-do-not-print")
     monkeypatch.setattr(bootstrap, "run_docker", fail)
+    monkeypatch.setattr(bootstrap, "check_project_ownership", lambda *args: None)
     assert bootstrap.main(["status", "--data-dir", str(data)]) == 2
     assert "secret-do-not-print" not in capsys.readouterr().err
 
@@ -299,3 +304,106 @@ def test_global_flags_before_command(bootstrap, tmp_path):
     args = bootstrap.parse_args(["--data-dir", str(tmp_path), "status"])
     assert args.command == "status"
     assert args.data_dir == str(tmp_path)
+
+
+@pytest.mark.parametrize("value", ["0", "3601", "-1", "+1", "1.5", " 30", "30 ", "３００", "", "1e2"])
+def test_wait_timeout_rejects_nonexact_integers(bootstrap, value):
+    """Timeout CLI errors are argparse failures, before initialization or Docker."""
+    with pytest.raises(SystemExit) as error:
+        bootstrap.parse_args(["up", "--wait-timeout", value])
+    assert error.value.code == 2
+
+
+@pytest.mark.parametrize("value", ["1", "300", "3600"])
+def test_wait_timeout_accepts_bounds(bootstrap, value):
+    """All supported timeout bounds are passed through as integers."""
+    assert bootstrap.parse_args(["up", "--wait-timeout", value]).wait_timeout == int(value)
+    assert bootstrap.parse_args(["up"]).wait_timeout == 300
+
+
+@pytest.mark.parametrize("succeeds", [True, False])
+def test_up_wait_success_only_reports_actual_endpoint(bootstrap, tmp_path, monkeypatch, capsys, succeeds):
+    """A failed health wait never claims readiness; successful waits use the real port."""
+    data = tmp_path / "fresh"
+    assert bootstrap.main(init_args(data)) == 0
+    capsys.readouterr()
+    monkeypatch.setenv("BOT_WEB_PORT", "6290")
+    monkeypatch.setattr(bootstrap, "doctor", lambda *args: None)
+    monkeypatch.setattr(bootstrap, "check_project_ownership", lambda *args: None)
+    calls = []
+    def run(command, data):
+        """Represent a healthy runtime or a Compose health timeout without Docker."""
+        calls.append(command)
+        if not succeeds:
+            raise subprocess.CalledProcessError(1, command)
+    monkeypatch.setattr(bootstrap, "run_docker", run)
+    assert bootstrap.main(["up", "--data-dir", str(data), "--wait-timeout", "42"]) == (0 if succeeds else 2)
+    assert calls[0][-6:] == ["up", "-d", "--build", "--wait", "--wait-timeout", "42"]
+    output = capsys.readouterr().out
+    assert ("Local runtime ready" in output) == succeeds
+    assert ("http://127.0.0.1:6290" in output) == succeeds
+    assert "Started." not in output
+
+
+@pytest.mark.parametrize("name", ["BOT_WEB_PORT", "BOT_ONEBOT_PORT"])
+@pytest.mark.parametrize("value", ["", "0", "65536", "-1", "+80", " 80", "80 ", "８０", "80.0", "80:90"])
+def test_invalid_ports_fail_before_docker(bootstrap, tmp_path, monkeypatch, name, value):
+    """Doctor rejects malformed environment ports before even probing Docker."""
+    data = tmp_path / "fresh"
+    assert bootstrap.main(init_args(data)) == 0
+    original = (data / "settings.json").read_bytes()
+    prepare_runtime(bootstrap)
+    monkeypatch.setenv(name, value)
+    calls = []
+    monkeypatch.setattr(bootstrap.shutil, "which", lambda *args: calls.append("which"))
+    monkeypatch.setattr(bootstrap, "run_docker", lambda *args: calls.append("docker"))
+    assert bootstrap.main(["doctor", "--data-dir", str(data)]) == 2
+    assert calls == []
+    assert (data / "settings.json").read_bytes() == original
+
+
+@pytest.mark.parametrize("web,onebot", [("1", "65535"), ("65535", "1"), ("06185", "6199")])
+def test_valid_ports_are_normalized(bootstrap, tmp_path, monkeypatch, web, onebot):
+    """Port bounds are inclusive and Compose receives canonical decimal strings."""
+    monkeypatch.setenv("BOT_WEB_PORT", web)
+    monkeypatch.setenv("BOT_ONEBOT_PORT", onebot)
+    environment = bootstrap.docker_environment(tmp_path)
+    assert environment["BOT_WEB_PORT"] == str(int(web))
+    assert environment["BOT_ONEBOT_PORT"] == str(int(onebot))
+
+
+def test_duplicate_ports_rejected(bootstrap, tmp_path, monkeypatch):
+    """Numerically identical loopback bindings cannot both be allocated."""
+    monkeypatch.setenv("BOT_WEB_PORT", "06199")
+    with pytest.raises(ValueError, match="distinct"):
+        bootstrap.docker_environment(tmp_path)
+
+
+def test_missing_docker_instructions_are_actionable(bootstrap, tmp_path, monkeypatch, capsys):
+    """Missing prerequisites name both supported platforms and official install docs."""
+    data = tmp_path / "fresh"
+    assert bootstrap.main(init_args(data)) == 0
+    prepare_runtime(bootstrap)
+    monkeypatch.setattr(bootstrap.shutil, "which", lambda *args: None)
+    assert bootstrap.main(["doctor", "--data-dir", str(data)]) == 2
+    error = capsys.readouterr().err
+    for text in ("Docker Desktop", "WSL2", "Linux containers", "Docker Engine", "Compose v2",
+                 "https://docs.docker.com/desktop/setup/install/windows-install/",
+                 "https://docs.docker.com/engine/install/", "rerun doctor"):
+        assert text in error
+    assert "secret-only-in-private-test-settings" not in error
+
+
+@pytest.mark.parametrize("verb", ["status", "logs"])
+def test_readonly_ownership_conflict_hides_other_project(bootstrap, tmp_path, monkeypatch, verb):
+    """Unowned containers cannot expose status or private logs through our CLI."""
+    data = tmp_path / "fresh"
+    assert bootstrap.main(init_args(data)) == 0
+    calls = []
+    def conflict(*args):
+        """Represent a project owned by another data directory."""
+        raise ValueError("runtime name already used")
+    monkeypatch.setattr(bootstrap, "check_project_ownership", conflict)
+    monkeypatch.setattr(bootstrap, "run_docker", lambda *args: calls.append(args))
+    assert bootstrap.main([verb, "--data-dir", str(data)]) == 2
+    assert calls == []

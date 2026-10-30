@@ -2,8 +2,11 @@
 """Fresh-install helper: stdlib only, external state, no production migration.
 
 Run ``python tools/bootstrap.py up`` for a first-run model setup and startup.
-``init`` prepares state without Docker. A Linux Docker host and Compose v2 are
-runtime prerequisites; no NapCat installation is managed.
+``init`` prepares state without Docker. Docker Desktop (Windows, WSL2/Linux
+containers) or Docker Engine (Linux), with Compose v2 supporting --wait and
+--wait-timeout, is required. ``up`` waits for local runtime health, not model
+connectivity or QQ login; no NapCat installation is managed. Set BOT_WEB_PORT
+(default 6185) and BOT_ONEBOT_PORT (default 6199) to distinct host ports.
 """
 
 import argparse
@@ -143,10 +146,25 @@ def compose_command(data, name, *action):
             "--env-file", str(data / "compose.env"), *action]
 
 
+def validated_port(name, default):
+    """Accept only ASCII decimal host ports; never echo untrusted environment text."""
+    value = os.environ.get(name, str(default))
+    if not re.fullmatch(r"[0-9]{1,5}", value) or not 1 <= int(value) <= 65535:
+        raise ValueError(name + " must be an ASCII integer from 1 to 65535")
+    return int(value)
+
+
 def docker_environment(data):
-    """Prevent inherited deployment variables from overriding the chosen state."""
+    """Pin external state and validate distinct loopback ports before any Docker call."""
     environment = os.environ.copy()
     environment["BOT_DATA_DIR"] = data.as_posix()
+    # Normalize ports once here so Compose and the reported dashboard URL agree.
+    web_port = validated_port("BOT_WEB_PORT", 6185)
+    onebot_port = validated_port("BOT_ONEBOT_PORT", 6199)
+    if web_port == onebot_port:
+        raise ValueError("BOT_WEB_PORT and BOT_ONEBOT_PORT must be distinct")
+    environment["BOT_WEB_PORT"] = str(web_port)
+    environment["BOT_ONEBOT_PORT"] = str(onebot_port)
     return environment
 
 
@@ -173,12 +191,26 @@ def doctor(data, name):
     for relative in ("deploy/compose.yaml", "deploy/Dockerfile", "vendor/astrbot/LICENSE"):
         if not (REPO_ROOT / relative).is_file():
             raise ValueError("missing bundled runtime file: " + relative)
+    docker_environment(data)  # Fail on invalid ports before probing Docker.
     if not shutil.which("docker"):
-        raise ValueError("Docker CLI not found; install Docker Engine with Compose v2")
+        raise ValueError(
+            "Docker CLI not found. Windows: install/start Docker Desktop with the WSL2 "
+            "backend and Linux containers (https://docs.docker.com/desktop/setup/install/windows-install/). "
+            "Linux: install/start Docker Engine and the Compose v2 plugin "
+            "(https://docs.docker.com/engine/install/ and https://docs.docker.com/compose/install/linux/). "
+            "Use Compose v2 supporting up --wait --wait-timeout, reopen your terminal, then rerun doctor."
+        )
     run_docker(["docker", "compose", "version"], data)
     run_docker(["docker", "info", "--format", "{{.ServerVersion}}"], data)
     run_docker(compose_command(data, name, "config", "--quiet"), data)
     print("Prerequisites OK. This is not proof of model connectivity or QQ login.")
+
+
+def wait_timeout(value):
+    """Reject signs, whitespace, fractions and non-ASCII CLI timeout integers."""
+    if not re.fullmatch(r"[0-9]{1,4}", value) or not 1 <= int(value) <= 3600:
+        raise argparse.ArgumentTypeError("must be an ASCII integer from 1 to 3600 seconds")
+    return int(value)
 
 
 def parse_args(argv):
@@ -194,6 +226,8 @@ def parse_args(argv):
     parser.add_argument("--owner-qq", action="append")
     parser.add_argument("--persona-file")
     parser.add_argument("--prompt", help="chat request text; omit to read standard input")
+    parser.add_argument("--wait-timeout", type=wait_timeout, default=300, metavar="SECONDS",
+                        help="up: wait for local runtime health, 1-3600 seconds (default: 300); not QQ/model verification")
     args = parser.parse_args(argv)
     if args.prompt is not None and args.command != "chat":
         parser.error("--prompt is only supported by chat")
@@ -215,8 +249,11 @@ def main(argv=None):
             doctor(data, name)
             if args.command == "up":
                 check_project_ownership(data, name)
-                run_docker(compose_command(data, name, "up", "-d", "--build"), data)
-                print("Started. Open http://127.0.0.1:6185; read the private settings.json dashboard_password.")
+                run_docker(compose_command(data, name, "up", "-d", "--build", "--wait",
+                                           "--wait-timeout", str(args.wait_timeout)), data)
+                print("Local runtime ready. Open http://127.0.0.1:"
+                      + str(validated_port("BOT_WEB_PORT", 6185))
+                      + "; read the private settings.json dashboard_password.")
                 print("Model/QQ operation requires separate verification; no QQ login was performed.")
         else:
             load_install(data, name)
@@ -234,6 +271,8 @@ def main(argv=None):
                 check_project_ownership(data, name)
                 run_docker(compose_command(data, name, *client), data)
             else:
+                # Read-only output can disclose another installation's private logs.
+                check_project_ownership(data, name)
                 action = ["logs", "--tail", "100", "--follow"] if args.command == "logs" else ["ps"]
                 run_docker(compose_command(data, name, *action), data)
         return 0

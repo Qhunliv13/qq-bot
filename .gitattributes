@@ -2,3 +2,5 @@
 /trash export-ignore
 # Preserve the pinned upstream archive bytes on all checkout platforms.
 /vendor/astrbot/** -text
+# The Linux entry must remain executable shell text after Windows checkouts.
+/install.sh text eol=lf
