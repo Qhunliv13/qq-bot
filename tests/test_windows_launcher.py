@@ -22,7 +22,7 @@ def test_launcher_delegates_to_existing_linux_bootstrap():
     assert "--exec wslpath -a -u $repo" in script
     assert "'--cd', $linuxRepo, '--exec', 'python3', 'tools/bootstrap.py'" in script
     assert "$bootstrapArgs += @('--prompt'" not in script
-    for dangerous in ("Invoke-Expression", "cmd /c", "SetEnvironmentVariable"): 
+    for dangerous in ("Invoke-Expression", "cmd /c", "SetEnvironmentVariable"):
         assert dangerous not in script
     assert "& $wsl @distroArgs --exec bash" not in script
     bootstrap = BOOTSTRAP.read_text(encoding="utf-8")
