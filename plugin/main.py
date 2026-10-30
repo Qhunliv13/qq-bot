@@ -3222,13 +3222,37 @@ class HiganPlugin(Star):
                     raise ValueError("destination")
             except (TypeError, ValueError):
                 return {"ok": False, "error": "explicit_destination_required"}
-            destination = ("private:" if kind == "private" else "") + str(target)
+            # Policy, provenance and publication must use the same numeric target
+            # as the native transport, not a different key such as "042" or "42.0".
+            destination = ("private:" if kind == "private" else "") + str(int(target))
             if not self._policy_allows(event, destination):
                 return {"ok": False, "error": "destination_policy_denied"}
             options = {"mentions": args["mentions"]} if "mentions" in args else {}
-            return await self._qq_send(kind, str(args.get("text") or ""),
-                                       int(target) if kind == "private" else int(args.get("user_id") or 0),
-                                       int(target) if kind != "private" else 0, **options)
+            body = str(args.get("text") or "")
+            result = await self._qq_send(kind, body,
+                                         int(target) if kind == "private" else int(args.get("user_id") or 0),
+                                         int(target) if kind != "private" else 0, **options)
+            from .task_delivery import _message_id
+            message_id = _message_id(result.get("message_id")) if isinstance(result, dict) else None
+            if (message_id is not None and result.get("ok") is True
+                    and result.get("delivered") is True):
+                # Native sends bypass _send, but are the same public action.
+                # Preserve the actual destination/receipt before continuing,
+                # including mention-only sends without a plain text body.
+                mentions = [{"id": str(value), "display_name": ""}
+                            for value in (args.get("mentions") or [])]
+                # A temporary session routes privately through its source group;
+                # the group grants routing access but did not receive the message.
+                delivery_scope = "private:" + str(int(args.get("user_id"))) if kind == "temp" else destination
+                record = {"kind": "assistant_delivery", "id": message_id,
+                          "body": body, "mentions": mentions, "quote": None,
+                          "source": {"kind": "tool", "tool": "qq_send"},
+                          "delivery": {"status": "native_confirmed", "message_ids": [message_id],
+                                       "destination_scope": delivery_scope, "reply_to": [],
+                                       "sent_at": datetime.now(timezone.utc).isoformat()}}
+                visible = " ".join("[at:%s]" % item["id"] for item in mentions)
+                self._record_visible_reply(delivery_scope, (visible + " " + body).strip(), record=record)
+            return result
         if name in ("task_add", "task_add_script") and tasks is not None:
             if name == "task_add_script" and not str(args.get("trigger_script") or "").strip():
                 return {"ok": False, "error": "trigger_script_required"}

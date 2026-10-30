@@ -140,7 +140,9 @@ def system_prompt(persona: str) -> str:
                     "is an observation, not a new human message. Timing and number of updates are unspecified. "
                     "A later final reply is optional: new information, silence, or delivery=already_delivered "
                     "for an answer completed by an observed public receipt. Delivery acknowledgements need "
-                    "no additional public reply. Further substantive public messages remain available with delivery=new."
+                    "no additional public reply. A confirmed qq_send, including a mention-only send, is also "
+                    "public output in its actual destination: mentioning someone does not require a follow-up. "
+                    "Choose whether to say more. Further substantive public messages remain available with delivery=new."
                 ),
                 "silence": (
                     "An unquoted, unfenced standalone final line SILENT makes the entire completion silent; "
