@@ -7,7 +7,8 @@
 | 你要做什么 | 阅读 |
 |---|---|
 | 安装、找面板密码、排查常见错误 | [快速开始](QUICKSTART.md) |
-| Windows 双击向导或 PowerShell 管理 | [Windows](WINDOWS.md) |
+| 不用 WSL / Docker 的 Windows 原生网页和命令行 | [原生极轻量版](WINDOWS_LITE.md)，双击 `lite.cmd` |
+| 完整版 Windows 双击向导或 PowerShell 管理 | [Windows](WINDOWS.md) |
 | Linux 安装、私有目录、多实例端口 | [Linux](LINUX.md) |
 | 了解完整能力、具体限制与源码目录 | [功能细节](FEATURES.md)（原根 README 技术说明保留） |
 | 理解外部配置、账号授权和数据边界 | [配置与仓库边界](CONFIGURATION.md) |

@@ -1,5 +1,7 @@
 # Windows 安装与管理
 
+**只想极轻量、不装 WSL / Docker？** 选择新增的 [`lite.cmd` 原生轻量版](WINDOWS_LITE.md)：Windows Python 3.10+ 标准库即可网页和命令行聊天，不含 QQ/工具/持久记忆。以下仍是完整运行时，不自动改成轻量模式。
+
 ## 最简单：完整解压后双击 install.cmd
 
 1. 下载并**完整解压**仓库 ZIP，双击根目录 [`install.cmd`](../install.cmd)。不用先安装 Windows Python，也不用先打开 PowerShell。

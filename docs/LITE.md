@@ -1,5 +1,7 @@
 # Lite text chat (opt-in)
 
+**新增 Windows 原生双击版：**[`lite.cmd`](../lite.cmd) 默认打开极小本机网页，`lite.ps1 chat` 用命令行；首次配置和加密保存 Key 更简单，不需要 WSL / Docker。见[原生极轻量版](WINDOWS_LITE.md)。以下保留原来的无配置文件文字入口，二者复用同一 HTTP 传输与轻量回复实现。
+
 A small standalone text client, **not** AstrBot, QQ, a web server, or an account integration. It uses only Python 3.12+ standard library and the existing `bot_core.http_host.ChatCompletionHost` for the OpenAI-compatible HTTP request. Run from the repository root on Windows or Linux; no Docker, VM, QQ login, plugin config, or extra packages are needed. Nothing is deployed or activated by adding this file.
 
 ## Configure

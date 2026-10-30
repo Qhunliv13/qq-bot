@@ -2,6 +2,11 @@
 
 这些脚本依赖各自指定的环境、源码位置和权限。文件名不证明只读、幂等或适用于任意部署；执行前阅读源码和 `--help`。历史一次性补丁位于 [归档](../trash/20261027-repository-cleanup/tools/ops/)，不作为当前操作入口。
 
+## Windows 原生轻量入口
+
+- 根目录 [`lite.cmd`](../lite.cmd) / [`lite.ps1`](../lite.ps1) → [`windows-lite.ps1`](windows-lite.ps1) → [`lite_native.py`](lite_native.py)：原生 Python 3.10+ 标准库，无 WSL / Docker / pip；网页与命令行文字对话。首次写仓库外独立设置，Windows Key 用当前用户 DPAPI 加密；实际聊天才请求模型。不接 QQ、不执行工具、不保留磁盘聊天记录。
+- [`build_lite.py`](build_lite.py)：按固定源码允许清单生成新 ZIP，目标必须不存在且在仓库外；不下载、不打包设置或 Python 解释器。见[轻量使用说明](../docs/WINDOWS_LITE.md)。
+
 ## 离线检查
 
 在仓库根目录执行：

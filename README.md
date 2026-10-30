@@ -2,7 +2,13 @@
 
 开源、可自托管的聊天与工具助手，内嵌固定版本 AstrBot。用自己的模型 API，在本地面板或命令行使用；也可另外连接 QQ。包含持久记忆、工具调用、排队执行与后台任务，无需使用作者的账号、模型供应商或服务器。
 
-## 开始使用
+## Windows 原生极轻量版（新增）
+
+**不需要 WSL / Docker / pip**：安装 Windows Python 3.10+ 后，解压并双击根目录 [`lite.cmd`](lite.cmd)，填自己的模型地址、模型 ID 与隐藏输入的 Key，即可打开本机网页聊天；运行 `lite.ps1 chat` 可切换命令行。Windows Key 使用当前用户 DPAPI 加密，设置在仓库外；无需管理员权限。
+
+此模式只有文字多轮对话，**不含 QQ、工具、持久记忆与后台任务**，不替代下面的完整版。[原生轻量版说明与小包打包方法](docs/WINDOWS_LITE.md)
+
+## 开始使用（完整版，保留原入口）
 
 **Windows：**下载并完整解压仓库 ZIP，双击根目录 [`install.cmd`](install.cmd)。不用先装 Windows Python；向导检查 WSL2 与 Docker，缺依赖时先征求同意。Windows 提示重启或首次初始化 Ubuntu 时，完成后再次双击继续，不会强制重启。
 
