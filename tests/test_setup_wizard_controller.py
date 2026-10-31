@@ -340,6 +340,138 @@ def test_native_chat_sends_prompt_via_stdin_and_masks_saved_secrets(core, tmp_pa
     assert len(calls) == 1
 
 
+@pytest.mark.parametrize("mode", ["container", "windows-native"])
+@pytest.mark.parametrize("piece", ["a", "汉", "😀", "\x00", '"', "\\", "\n"])
+def test_chat_wire_boundary_uses_target_codec_before_admission(core, tmp_path, monkeypatch, mode, piece):
+    """Wire UTF-8, escaping and native token overhead reject before busy or a worker."""
+    from tools import local_runtime_client as client
+    from tools.setup_wizard import InputError
+
+    monkeypatch.setattr(core, "DEPLOYMENT_MODE", mode, raising=False)
+    controller = _controller(core, tmp_path)
+    _save(controller)
+    controller.state["runtime"] = "ready"
+    windows = mode == "windows-native"
+
+    def size(prompt):
+        """Observe production encoding, not a second hand-maintained wire format."""
+        payload = {"op": "run", "prompt": prompt}
+        document = client._authenticated_request(payload, "a" * 64) if windows else payload
+        return len(client.encode_request(document))
+
+    overhead = size("x")
+    unit = size("x" + piece) - overhead
+    count, padding = divmod(client.MAX_REQUEST_BYTES - overhead, unit)
+    boundary = "x" + piece * count + "a" * padding
+    # The nonspace prefix permits newline probes; the character ceiling remains
+    # independent of the byte ceiling and is not relaxed for short wire inputs.
+    if len(boundary) > 8000:
+        boundary = "x" + piece * 7999
+    else:
+        assert size(boundary) == client.MAX_REQUEST_BYTES
+        before = dict(controller.state)
+
+        def forbidden(*args, **kwargs):
+            """Invalid input must not even construct a thread or invoke local chat."""
+            raise AssertionError("oversized chat was admitted")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(threading, "Thread", forbidden)
+            patch.setattr(controller, "_local", forbidden)
+            with pytest.raises(InputError, match="编码后的大小.*本次未发送"):
+                controller.action("chat", {"prompt": boundary + "a", "confirm": True})
+        assert controller.busy is False and controller.thread is None
+        assert controller.state == before
+    calls = []
+
+    def local(prompt):
+        """One accepted boundary retains the complete original input without truncation."""
+        calls.append(prompt)
+        return "边界已接收"
+
+    monkeypatch.setattr(controller, "_local", local)
+    controller.action("chat", {"prompt": boundary, "confirm": True})
+    _wait(controller)
+    assert calls == [boundary]
+    assert controller.state["answer"] == "边界已接收"
+
+
+@pytest.mark.parametrize("mode", ["container", "windows-native"])
+def test_chat_preserves_legacy_8000_character_ceiling(core, tmp_path, monkeypatch, mode):
+    """A wire-short Latin prompt still cannot bypass the existing character ceiling."""
+    monkeypatch.setattr(core, "DEPLOYMENT_MODE", mode, raising=False)
+    controller = _controller(core, tmp_path)
+    _save(controller)
+    controller.state["runtime"] = "ready"
+
+    def forbidden(*args, **kwargs):
+        """The character ceiling must reject before scheduling or sending anything."""
+        raise AssertionError("character ceiling bypassed")
+
+    monkeypatch.setattr(threading, "Thread", forbidden)
+    with pytest.raises(ValueError, match="^invalid_chat$"):
+        controller.action("chat", {"prompt": "a" * 8001, "confirm": True})
+    assert controller.busy is False and controller.thread is None
+
+
+def test_native_chat_rejects_6000_chinese_locally_without_thread(core, tmp_path, monkeypatch):
+    """The reported 6000-character regression fails before any charged work exists."""
+    from tools.setup_wizard import InputError
+
+    monkeypatch.setattr(core, "DEPLOYMENT_MODE", "windows-native", raising=False)
+    controller = _controller(core, tmp_path)
+    _save(controller)
+    controller.state["runtime"] = "ready"
+
+    def forbidden(*args, **kwargs):
+        """No thread, subprocess or local/model execution may follow this rejection."""
+        raise AssertionError("unexpected charged work")
+
+    monkeypatch.setattr(threading, "Thread", forbidden)
+    monkeypatch.setattr(controller, "_local", forbidden)
+    with pytest.raises(InputError, match="本地请求上限.*本次未发送，不会计费"):
+        controller.action("chat", {"prompt": "汉" * 6000, "confirm": True})
+    assert controller.busy is False and controller.thread is None
+
+
+def test_chat_unencodable_input_is_local_input_error(core, tmp_path):
+    """Malformed Unicode is explained locally instead of becoming a generic worker error."""
+    from tools.setup_wizard import InputError
+
+    controller = _controller(core, tmp_path)
+    _save(controller)
+    controller.state["runtime"] = "ready"
+    with pytest.raises(InputError, match="无法发送的字符.*本次未发送"):
+        controller.action("chat", {"prompt": "bad\ud800", "confirm": True})
+    assert controller.busy is False and controller.thread is None
+
+
+@pytest.mark.parametrize("action,payload", [("chat", {"prompt": "next", "confirm": True}),
+                                            ("start", {}), ("stop", {"confirm": True}),
+                                            ("check", {})])
+def test_new_action_clears_reply_before_worker_starts(core, tmp_path, monkeypatch, action, payload):
+    """Polling cannot reuse a successful reply while a later accepted action is pending."""
+    controller = _controller(core, tmp_path)
+    _save(controller)
+    controller.state.update(runtime="ready", model="ready", answer="previous reply")
+    scheduled = []
+
+    class HeldThread:
+        """Keep the worker unstarted to expose the admission/worker race deterministically."""
+
+        def __init__(self, **kwargs):
+            scheduled.append(kwargs)
+
+        def start(self):
+            """Intentionally leave work pending without a real thread or runtime action."""
+
+    monkeypatch.setattr(threading, "Thread", HeldThread)
+    controller.action(action, payload)
+    assert len(scheduled) == 1
+    assert controller.snapshot()["busy"] is True
+    assert controller.snapshot()["answer"] == ""
+
+
 @pytest.mark.parametrize("milestone,expected", [
     ("venv creation: started", "创建原生 Python 独立环境"),
     ("venv creation: exit 0", "准备安装原生依赖"),

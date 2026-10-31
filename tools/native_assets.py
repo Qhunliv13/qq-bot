@@ -493,8 +493,13 @@ class _DeadlineHTTPSConnection(http.client.HTTPSConnection):
         _remaining(self.deadline)  # OS resolver latency is charged, never forgiven.
         last_error = OSError("No asset endpoint addresses were available.")
         for family, kind, protocol, _, target in candidates:
-            sock = socket.socket(family, kind, protocol)
+            sock = None
             try:
+                # Resolver candidates may include a family disabled by local OS
+                # policy. Construction failure must fall through just like a
+                # failed connect, without resetting the shared time budget.
+                _remaining(self.deadline)
+                sock = socket.socket(family, kind, protocol)
                 sock.settimeout(_remaining(self.deadline))
                 if source_address:
                     sock.bind(source_address)
@@ -503,10 +508,12 @@ class _DeadlineHTTPSConnection(http.client.HTTPSConnection):
                 return sock
             except OSError as error:
                 # A second address must not receive a fresh full TCP timeout.
-                sock.close()
+                if sock is not None:
+                    sock.close()
                 last_error = error
             except BaseException:
-                sock.close()
+                if sock is not None:
+                    sock.close()
                 raise
         raise last_error
 

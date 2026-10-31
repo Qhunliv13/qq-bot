@@ -917,6 +917,71 @@ def test_tcp_candidates_consume_one_deadline_and_close_failures(monkeypatch):
     assert sockets[1].timeouts == [1.5, 0.5]
 
 
+def test_tcp_socket_creation_failure_falls_back_without_resetting_deadline(monkeypatch):
+    """A disabled first address family cannot hide a reachable later candidate."""
+    elapsed = [0.0]
+    attempted = []
+    timeouts = []
+    target = []
+
+    class Socket:
+        """Model only the successfully constructed IPv4 socket without real traffic."""
+
+        def settimeout(self, timeout):
+            """Record the remaining budget consumed by the failed construction."""
+            timeouts.append(timeout)
+
+        def bind(self, address):
+            """Preserve source-address behavior across address-family fallback."""
+            assert address == ("source", 0)
+
+        def connect(self, address):
+            """Connect only to the second approved resolver candidate."""
+            target.append(address)
+
+        def close(self):
+            """The successful candidate must stay open for TLS ownership."""
+            pytest.fail("closed successful connection")
+
+    owned = Socket()
+
+    def create(family, kind, protocol):
+        """Simulate Windows WSAEAFNOSUPPORT before any socket handle exists."""
+        attempted.append(family)
+        if len(attempted) == 1:
+            elapsed[0] += 0.5
+            raise OSError(10047, "unsupported address family")
+        return owned
+
+    monkeypatch.setattr(assets.time, "monotonic", lambda: elapsed[0])
+    monkeypatch.setattr(assets.socket, "getaddrinfo", lambda *_args: [
+        (23, 1, 6, "", ("ipv6-fixture", 443)), (2, 1, 6, "", ("ipv4-fixture", 443))])
+    monkeypatch.setattr(assets.socket, "socket", create)
+    connection = assets._DeadlineHTTPSConnection("files.pythonhosted.org", deadline=2)
+    assert connection._connect_socket(("fixture", 443), 2, ("source", 0)) is owned
+    assert attempted == [23, 2] and target == [("ipv4-fixture", 443)]
+    assert timeouts == [1.5, 1.5]
+
+
+def test_tcp_all_constructor_failures_report_last_error_without_fake_close(monkeypatch):
+    """No created socket means nothing may be closed when every family is unavailable."""
+    attempted = []
+
+    def create(family, *_args):
+        """Fail both families with distinct errors so last-candidate reporting is clear."""
+        attempted.append(family)
+        raise OSError(10047 if family == 23 else 10050, "offline socket construction")
+
+    monkeypatch.setattr(assets.time, "monotonic", lambda: 0)
+    monkeypatch.setattr(assets.socket, "getaddrinfo", lambda *_args: [
+        (23, 1, 6, "", ("ipv6-fixture", 443)), (2, 1, 6, "", ("ipv4-fixture", 443))])
+    monkeypatch.setattr(assets.socket, "socket", create)
+    connection = assets._DeadlineHTTPSConnection("files.pythonhosted.org", deadline=2)
+    with pytest.raises(OSError) as failure:
+        connection._connect_socket(("fixture", 443), 2, None)
+    assert attempted == [23, 2] and failure.value.errno == 10050
+
+
 def test_tcp_rejects_late_dns_without_connecting(monkeypatch):
     """Document the OS-owned resolver exception but never continue its late result."""
     elapsed = [0.0]

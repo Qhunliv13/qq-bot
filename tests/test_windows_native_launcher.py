@@ -1,6 +1,7 @@
 """Offline native Windows launcher tests; no installers, browsers, models or runtime execute."""
 
 import ast
+import ctypes
 import json
 from pathlib import Path
 import shutil
@@ -29,7 +30,7 @@ def _invoke_mock_native(tmp_path, command="", *, versions=None, marker=None,
                         pipe=False, stdin=None, browser_fails=False,
                         real_probe=False, known_path=False, store_alias=False,
                         venv_cfg=None, native_marker=True, existing_state=False,
-                        known_minor="312"):
+                        known_minor="312", probe_cleanup_fails=False):
     """Run the real entry code with only OS/process functions replaced by offline stubs."""
     checkout = tmp_path / "checkout with spaces"
     tools = checkout / "tools"
@@ -81,10 +82,9 @@ def _invoke_mock_native(tmp_path, command="", *, versions=None, marker=None,
         "    $selector = if ($Kind -eq 'py') { $Words[0] } else { '' }\n"
         "    $key = $Kind + ':' + $selector\n"
         "    $version = $script:versions.PSObject.Properties[$key]\n"
-        + (f"    & {_ps_quote(sys.executable)} @Words\n" if real_probe else
-           "    if ($script:installed) { '3.12' }\n"
-           "    elseif ($version) { [string] $version.Value }\n"
-           "    else { $global:LASTEXITCODE = 1 }\n")
+        "    if ($script:installed) { '3.12' }\n"
+        "    elseif ($version) { [string] $version.Value }\n"
+        "    else { $global:LASTEXITCODE = 1 }\n"
         + "  } else {\n"
         "    if ($null -ne $script:mockMarker) { $script:mockMarker; $script:mockMarker }\n"
         "    'runtime output'\n"
@@ -120,6 +120,29 @@ def _invoke_mock_native(tmp_path, command="", *, versions=None, marker=None,
            f"  [IO.File]::AppendAllText({_ps_quote(browser_log)}, $FilePath + [Environment]::NewLine)\n")
         + "}\n"
     )
+    # Mock the single probe boundary, not its production containment or discovery logic.
+    # Real-probe coverage resolves a real executable and keeps its isolated Win32 execution intact.
+    if real_probe:
+        setup += (
+            "function Invoke-NativePythonProbe {\n"
+            "  param([string] $Executable, [string[]] $Prefix)\n"
+            "  Write-MockCall 'python' @('-I', '-S', '-B', '-c')\n"
+            f"  $result = [Qhunliv.NativePythonProbe]::Run({_ps_quote(sys.executable)}, '', 2000)\n"
+            "  if ($result -in @(312, 313)) { return '3.' + ($result - 300) }\n"
+            "}\n"
+        )
+        # Initialize the real helper once before installing this recording-only test adapter.
+        setup = f"Invoke-NativePythonProbe {_ps_quote(sys.executable)} @() | Out-Null\n" + setup
+    else:
+        setup += (
+            "function Invoke-NativePythonProbe {\n"
+            "  param([string] $Executable, [string[]] $Prefix)\n"
+            "  $kind = if ($Executable -eq 'mock_py') { 'py' } else { 'python' }\n"
+            + ("  Write-MockCall $kind @($Prefix + @('-I', '-S', '-B', '-c')); throw 'Uncertain cleanup.'\n"
+               if probe_cleanup_fails else
+               "  Invoke-MockPython $kind @($Prefix + @('-I', '-S', '-B', '-c'))\n")
+            + "}\n"
+        )
     # Override only process/desktop functions after their definitions, not entry control flow.
     source = LAUNCHER.read_text(encoding="utf-8")
     anchor = "# Native launcher entry point."
@@ -217,6 +240,205 @@ def _invoke_real_ps51_native(tmp_path, *, runtime_exit=0, missing_executable=Fal
     return result, state, output, raw_input, argv, data, text
 
 
+def _invoke_real_ps51_discovery(tmp_path, *, launcher_mode=None):
+    """Run actual isolated probes and normal stdin transport using only temporary, controlled programs."""
+    checkout = tmp_path / "real discovery checkout"
+    tools = checkout / "tools"
+    tools.mkdir(parents=True)
+    input_log = tmp_path / "runtime-input.bin"
+    startup_log = tmp_path / "startup.txt"
+    process_log = tmp_path / "owned-pids.txt"
+    argument_log = tmp_path / "probe-argv.txt"
+    result_log = tmp_path / "timing.json"
+    data = tmp_path / "untouched state"
+    chat = "发现探测不能吞输入 😀\r\n".encode("utf-8")
+    site = tmp_path / "startup site"
+    site.mkdir()
+    # This deliberately hostile startup hook reproduces inherited stdin consumption and a 3s hang.
+    # It is confined to PYTHONPATH in the test subprocess, not an interpreter/global site directory.
+    (site / "sitecustomize.py").write_text(
+        "from pathlib import Path\nimport sys\nimport time\n"
+        f"with Path({str(startup_log)!r}).open('a', encoding='utf-8') as stream:\n"
+        "    stream.write('probe\\n' if sys.argv[0] == '-c' else 'runtime\\n')\n"
+        "if sys.argv[0] == '-c':\n"
+        "    sys.stdin.buffer.read()\n    time.sleep(3)\n",
+        encoding="utf-8",
+    )
+    (tools / "native_runtime.py").write_text(
+        "from pathlib import Path\nimport sys\n"
+        f"Path({str(input_log)!r}).write_bytes(sys.stdin.buffer.read())\n",
+        encoding="utf-8",
+    )
+    controlled = tmp_path / "controlled launcher.exe"
+    child = tmp_path / "owned-child.py"
+    child.write_text(
+        "from pathlib import Path\nimport os\nimport time\n"
+        f"with Path({str(process_log)!r}).open('a') as stream:\n"
+        "    stream.write(str(os.getpid()) + '\\n')\n"
+        "time.sleep(3)\n",
+        encoding="utf-8",
+    )
+    compile_launcher = ""
+    if launcher_mode:
+        # The fake launcher uses a real descendant, as py.exe/venv redirectors can. It never runs a bot.
+        csharp = (
+            "using System; using System.Diagnostics; using System.IO; using System.Threading;\n"
+            "public static class ControlledProbeLauncher {\n"
+            "  public static int Main(string[] args) {\n"
+            f'    File.AppendAllText({json.dumps(str(process_log))}, Process.GetCurrentProcess().Id + "\\n");\n'
+            f"    File.WriteAllLines({json.dumps(str(argument_log))}, args);\n"
+            # A correct probe sees EOF even while the caller still owns an unread chat payload.
+            '    if (Console.In.ReadToEnd() != "") return 7;\n'
+            + (f"    if (args.Length > 0) return {int(launcher_mode[5:])};\n"
+               if launcher_mode.startswith("exit-") else "")
+            + "    var start = new ProcessStartInfo();\n"
+            f"    start.FileName = {json.dumps(sys.executable)};\n"
+            f"    start.Arguments = {json.dumps('-I -S -B "' + str(child) + '"')};\n"
+            "    start.UseShellExecute = false; Process.Start(start);\n"
+            + ("    return 312;\n" if launcher_mode == "root-exits" else
+               "    Thread.Sleep(3000); return 312;\n")
+            + "  }\n}\n"
+        )
+        # PS5.1 compiles only this test-owned local fixture; no downloaded/native external helper exists.
+        compile_launcher = (
+            "Add-Type -TypeDefinition @'\n" + csharp + "'@ -OutputType ConsoleApplication "
+            f"-OutputAssembly {_ps_quote(controlled)} -ErrorAction Stop\n"
+        )
+    override = (
+        "$script:probeSelectors = 0\n"
+        "function Get-Command {\n"
+        "  param([string] $Name, $ErrorAction)\n"
+        + ("  if ($Name -eq 'py.exe') { $script:probeSelectors++; "
+           f"if ($script:probeSelectors -eq 1) {{ return @{{Source={_ps_quote(controlled)}}} }} }}\n"
+           if launcher_mode else "")
+        + f"  if ($Name -eq 'python.exe') {{ return @{{Source={_ps_quote(sys.executable)}}} }}\n"
+        "  return $null\n}\n"
+    )
+    source = LAUNCHER.read_text(encoding="utf-8")
+    # A private, test-only deadline injection keeps the regression short; production exposes no knob.
+    source = source.replace("[int] $TimeoutMilliseconds = 5000", "[int] $TimeoutMilliseconds = 400")
+    entry = tools / "windows-native.ps1"
+    entry.write_text(source.replace("# Native launcher entry point.", override + "\n# Native launcher entry point."),
+                     encoding="utf-8-sig")
+    runner = tmp_path / "real-discovery.ps1"
+    runner.write_text(
+        "$ErrorActionPreference = 'Stop'\n"
+        "if ($PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -ne 1) { throw 'Requires PS5.1.' }\n"
+        + compile_launcher
+        + f"$env:PYTHONPATH = {_ps_quote(site)}\n"
+        # Include lazy binding compilation in a generous overall bound; each child uses only 400ms.
+        + "$clock = [Diagnostics.Stopwatch]::StartNew()\n"
+        + f"& {_ps_quote(entry)} chat -NonInteractive -DataDir {_ps_quote(data)}\n"
+        "$code = $LASTEXITCODE\n"
+        f"[IO.File]::WriteAllText({_ps_quote(result_log)}, (ConvertTo-Json -Compress @{{elapsed=$clock.ElapsedMilliseconds}}))\n"
+        "exit $code\n",
+        encoding="utf-8-sig",
+    )
+    result = subprocess.run(
+        [WINDOWS_POWERSHELL, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(runner)],
+        cwd=ROOT, input=chat, capture_output=True, timeout=15, check=False,
+    )
+    pids = [int(line) for line in process_log.read_text().splitlines()] if process_log.exists() else []
+    arguments = argument_log.read_text().splitlines() if argument_log.exists() else []
+    timing = json.loads(result_log.read_text()) if result_log.exists() else {}
+    raw_input = input_log.read_bytes() if input_log.exists() else None
+    startup = startup_log.read_text(encoding="utf-8").splitlines() if startup_log.exists() else []
+    return result, raw_input, chat, startup, pids, arguments, timing, data
+
+
+def _pid_is_running(pid):
+    """Inspect only a fixture-owned PID with Win32 synchronization rights, never process-name enumeration."""
+    api = ctypes.WinDLL("kernel32", use_last_error=True)
+    api.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
+    api.OpenProcess.restype = ctypes.c_void_p
+    api.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+    api.WaitForSingleObject.restype = ctypes.c_uint32
+    api.CloseHandle.argtypes = [ctypes.c_void_p]
+    api.CloseHandle.restype = ctypes.c_int
+    handle = api.OpenProcess(0x100000, False, pid)
+    if not handle:
+        # ERROR_INVALID_PARAMETER means this exact process no longer exists; access failures are not success.
+        assert ctypes.get_last_error() == 87
+        return False
+    try:
+        state = api.WaitForSingleObject(handle, 0)
+        assert state in (0, 258)
+        return state == 258
+    finally:
+        api.CloseHandle(handle)
+
+
+@pytest.mark.skipif(WINDOWS_POWERSHELL is None or sys.version_info[:2] not in ((3, 12), (3, 13)),
+                    reason="A supported Python and Windows PowerShell 5.1 are required")
+def test_real_ps51_probe_skips_startup_hook_without_consuming_chat(tmp_path):
+    """Isolation prevents startup's stdin read/3s sleep, while normal runtime still loads that same hook."""
+    result, raw_input, chat, startup, pids, arguments, timing, data = _invoke_real_ps51_discovery(tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert raw_input == chat
+    assert startup == ["runtime"]
+    assert not pids and not arguments
+    assert timing["elapsed"] < 3000
+    assert not data.exists()
+
+
+@pytest.mark.skipif(WINDOWS_POWERSHELL is None or sys.version_info[:2] not in ((3, 12), (3, 13)),
+                    reason="A supported Python and Windows PowerShell 5.1 are required")
+@pytest.mark.parametrize("launcher_mode", ["blocked-root", "root-exits"])
+def test_real_ps51_probe_timeout_reaps_owned_launcher_descendants_then_falls_back(tmp_path, launcher_mode):
+    """A blocked launcher or already-exited root cannot leave a child or prevent the next interpreter probe."""
+    result, raw_input, chat, startup, pids, arguments, timing, data = _invoke_real_ps51_discovery(
+        tmp_path, launcher_mode=launcher_mode,
+    )
+    assert result.returncode == 0, result.stderr
+    assert raw_input == chat and startup == ["runtime"]
+    assert len(pids) == 2 and all(not _pid_is_running(pid) for pid in pids)
+    assert arguments[:5] == ["-3.12", "-I", "-S", "-B", "-c"]
+    assert "import sys; sys.exit(" in arguments[5]
+    assert timing["elapsed"] < 3000
+    assert not data.exists()
+
+
+@pytest.mark.skipif(WINDOWS_POWERSHELL is None or sys.version_info[:2] not in ((3, 12), (3, 13)),
+                    reason="A supported Python and Windows PowerShell 5.1 are required")
+@pytest.mark.parametrize("code", [0, 1, 314])
+def test_real_ps51_probe_rejects_unknown_exit_status_then_falls_back(tmp_path, code):
+    """Only the exact supported-version protocol is accepted, never ordinary success or an unknown status."""
+    result, raw_input, chat, startup, pids, arguments, _, data = _invoke_real_ps51_discovery(
+        tmp_path, launcher_mode=f"exit-{code}",
+    )
+    assert result.returncode == 0, result.stderr
+    assert raw_input == chat and startup == ["runtime"]
+    assert len(pids) == 1 and not _pid_is_running(pids[0])
+    assert arguments[:5] == ["-3.12", "-I", "-S", "-B", "-c"]
+    assert not data.exists()
+
+
+@pytest.mark.skipif(POWERSHELL is None, reason="PowerShell is not installed")
+def test_uncertain_probe_cleanup_blocks_all_next_candidates_and_install(tmp_path):
+    """Cleanup uncertainty must escape discovery rather than authorize another process or installer."""
+    result, calls, browsers, _, _, _ = _invoke_mock_native(
+        tmp_path, consent=True, probe_cleanup_fails=True,
+    )
+    assert result.returncode == 2
+    assert len(calls) == 1 and "-c" in calls[0]["words"]
+    assert not browsers and not _runtime_calls(calls)
+    assert "Uncertain cleanup" not in result.stdout + result.stderr
+
+
+def test_probe_source_has_one_isolated_atomic_and_nonpersistent_transport():
+    """Keep discovery isolated, parent-death safe and independent from Python/bootstrap/global configuration."""
+    source = LAUNCHER.read_text(encoding="utf-8")
+    assert source.count("function Invoke-NativePythonProbe {") == 1
+    assert " -I -S -B -c " in source
+    assert "new IntPtr(0x2000D)" in source and "new IntPtr(0x20002)" in source
+    assert "startup.Info.Input = nul" in source
+    assert "limits.Basic.Flags = 0x2000" in source
+    assert "clock.ElapsedMilliseconds < milliseconds" in source
+    assert "if ($result -eq -2) { throw" in source
+    for forbidden in ("AssignProcessToJobObject", "Get-Process", "taskkill", "RedirectStandardInput", "ReadToEnd"):
+        assert forbidden not in source
+
+
 def test_native_launcher_is_only_a_transport_not_a_lite_runtime():
     """Keep capability/runtime behavior unified in Python and prohibit machine-changing shortcuts."""
     source = LAUNCHER.read_text(encoding="utf-8")
@@ -306,7 +528,7 @@ def test_existing_venv_selects_matching_system_minor_only(tmp_path, minor, expli
     assert result.returncode == 0, result.stderr
     assert _runtime_calls(calls)[0]["words"][0] == "-" + minor
     probes = [call["words"] for call in calls if "-c" in call["words"]]
-    assert probes == [["-" + minor, "-c", "import sys; print(str(sys.version_info.major) + chr(46) + str(sys.version_info.minor))"]]
+    assert probes == [["-" + minor, "-I", "-S", "-B", "-c"]]
     assert not any(call["kind"] in ("consent", "winget") for call in calls)
     assert (local / "QhunlivBot/Full/runtime/.venv/pyvenv.cfg").read_text(encoding="utf-8") == cfg
 

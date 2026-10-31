@@ -254,6 +254,68 @@ def test_real_browser_invalid_base_preserves_fields_and_creates_no_state(browser
     assert settings["persona"] == "保留这一段角色说明。"
 
 
+def test_real_browser_success_waiting_failure_never_displays_previous_answer(browser_session, monkeypatch):
+    """Real render clears a prior success while the next charged turn waits then fails."""
+    page, controller, server, calls = browser_session
+    _open(page, server)
+    _configure(page)
+    page.locator("#startBot").click()
+    playwright.expect(page.locator("#runtime")).to_have_text("已验证", timeout=10000)
+    page.locator("#charge").check()
+    page.locator('#chatForm button[type="submit"]').click()
+    playwright.expect(page.locator("#answer")).to_be_visible()
+    playwright.expect(page.locator("#answer")).to_have_text("离线浏览器测试回复：你好！", timeout=10000)
+    entered, release = threading.Event(), threading.Event()
+
+    def delayed_failure(prompt):
+        """Keep the pending DOM observable, then fail locally without contacting a model."""
+        calls.append(("chat", prompt))
+        entered.set()
+        assert release.wait(timeout=15)
+        raise RuntimeError("fictitious-private-error")
+
+    monkeypatch.setattr(controller, "_local", delayed_failure)
+    page.locator("#prompt").fill("第二次试聊只发送一次。")
+    page.locator("#charge").check()
+    try:
+        page.locator('#chatForm button[type="submit"]').click()
+        assert entered.wait(timeout=3)
+        playwright.expect(page.locator("#model")).to_have_text("正在检查…", timeout=10000)
+        playwright.expect(page.locator("#answer")).to_be_hidden()
+        playwright.expect(page.locator("#answer")).to_have_text("")
+        assert controller.snapshot()["answer"] == "" and controller.snapshot()["busy"]
+    finally:
+        release.set()
+        controller.thread.join(timeout=3)
+        assert not controller.thread.is_alive()
+    playwright.expect(page.locator("#model")).to_have_text("未通过，请检查", timeout=10000)
+    playwright.expect(page.locator("#answer")).to_be_hidden()
+    playwright.expect(page.locator("#answer")).to_have_text("")
+    playwright.expect(page.locator("#statusText")).to_contain_text("没有确认收到回复")
+    assert "fictitious-private-error" not in page.locator("body").inner_text()
+    assert len([value for value in calls if value[0] == "chat"]) == 2
+
+
+def test_real_browser_oversized_chat_is_local_input_error_without_busy(browser_session):
+    """The authoritative server rejects 6000 Chinese characters without a worker/model call."""
+    page, controller, server, calls = browser_session
+    _open(page, server)
+    _configure(page)
+    page.locator("#startBot").click()
+    playwright.expect(page.locator("#runtime")).to_have_text("已验证", timeout=10000)
+    page.locator("#prompt").fill("汉" * 6000)
+    page.locator("#charge").check()
+    page._setup_expected_console_errors.append("400 (Bad Request)")
+    page.locator('#chatForm button[type="submit"]').click()
+    playwright.expect(page.locator("#statusText")).to_contain_text("编码后的大小超过本地请求上限")
+    playwright.expect(page.locator("#statusText")).to_contain_text("本次未发送，不会计费")
+    assert controller.snapshot()["busy"] is False
+    assert controller.snapshot()["model"] == "unverified"
+    assert not [value for value in calls if value[0] == "chat"]
+    assert page.locator("#prompt").input_value() == "汉" * 6000
+    assert not page.locator("#charge").is_checked()
+
+
 def test_real_browser_synchronous_double_chat_submit_consumes_one_consent(browser_session):
     """Two immediate form events with one confirmation admit exactly one charged turn."""
     page, controller, server, calls = browser_session

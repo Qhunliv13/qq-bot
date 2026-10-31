@@ -134,7 +134,8 @@ def _load_production(root):
         "_to_plain", "_strip_tool_syntax", "_strip_internal", "_tool_schemas",
         "_task_tool_schemas", "_llm_tools", "_dispatch_tool", "_decide_tools_first", "_is_owner",
         "_send", "_deliver_media", "_at_components", "on_message", "_drain_previous_instances",
-        "_drain_pending", "_start_background",
+        "_drain_pending", "_start_background", "_owned_task_nodes", "_drain_owned_work",
+        "_describe_missing", "terminate",
         "_web_search", "_search_queries", "_run_task_once", "_task_loop", "_ensure_task_loop", "_vm_tool", "_qq_send",
     }
     original = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "HiganPlugin")
@@ -850,6 +851,57 @@ def test_reload_drains_only_old_owned_background_tasks_and_preserves_delivery_st
     asyncio.run(scenario())
 
 
+def test_reload_drains_legacy_class_without_new_owner_helpers(production):
+    """Hot reload must drain an old loaded plugin class that predates the shared helper."""
+    new = production()
+    legacy_class = type(type(new).__name__, (), {"__module__": type(new).__module__})
+    old = legacy_class()
+    old._stopping, old._background_tasks, old._busy = False, set(), {}
+    old._recent, old._last_sent = {}, {}
+    assert not hasattr(old, "_drain_owned_work") and not hasattr(old, "_owned_task_nodes")
+
+    async def _watch_members(self, entered, release):
+        """Represent an older active owner method that later reaches its idle sleep."""
+        entered.set()
+        await release.wait()
+        self._last_sent["42"] = ["legacy-active-finished"]
+        await asyncio.sleep(60)
+
+    async def on_message(self, entered, release):
+        """Keep old handler ownership visible before any busy flag has been set."""
+        entered.set()
+        await release.wait()
+        self._recent["42"] = ["legacy-handler-finished"]
+
+    async def scenario():
+        """Withhold both legacy operations until the new replacement has closed admission."""
+        entered, release, handler_entered, handler_release = (asyncio.Event() for _ in range(4))
+        background = asyncio.create_task(_watch_members(old, entered, release))
+        handler = asyncio.create_task(on_message(old, handler_entered, handler_release))
+        old._background_tasks.add(background)
+        await asyncio.gather(entered.wait(), handler_entered.wait())
+        drain = asyncio.create_task(new._drain_previous_instances())
+        try:
+            await asyncio.sleep(0.01)
+            assert old._stopping and not drain.done() and not background.done() and not handler.done()
+            release.set()
+            handler_release.set()
+            await asyncio.wait_for(drain, 2)
+            assert background.cancelled() and not handler.cancelled()
+            assert new._recent == {"42": ["legacy-handler-finished"]}
+            assert new._last_sent == {"42": ["legacy-active-finished"]}
+            assert not hasattr(old, "_drain_owned_work") and not hasattr(old, "_owned_task_nodes")
+        finally:
+            release.set()
+            handler_release.set()
+            for task in (background, handler, drain):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(background, handler, drain, return_exceptions=True)
+
+    asyncio.run(scenario())
+
+
 def test_reload_waits_wrapped_prebusy_message_and_active_background_work(production):
     """Framework-wrapped pre-busy handlers and active watcher actions finish before migration."""
     old, new = production(), production()
@@ -932,6 +984,128 @@ def test_reload_timeout_fails_closed_without_canceling_handler(production, monke
         finally:
             release.set()
             await task
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("registration", ["background", "scope-worker", "local-handler", "handler-frame"])
+def test_terminate_excludes_current_owner_task_and_its_lock(production, registration):
+    """Direct unload inside tracked work or an accepted handler cannot wait on itself."""
+    plugin = production()
+    saved, closed = [], []
+    plugin.manifest = []
+    plugin._save_manifest = lambda: saved.append("saved")
+
+    class Runtime:
+        """Keep the exact calling handler observable without opening any transport."""
+
+        def __init__(self):
+            self._handlers = set()
+
+        async def close_acceptor(self):
+            """Admission closes even when the current accepted task owns teardown."""
+            closed.append(True)
+
+        async def stop(self):
+            """This would await the calling handler in a real runtime, so must be skipped."""
+            pytest.fail("self handler must not call runtime.stop")
+
+    async def on_message(self):
+        """Keep the actual handler name visible while it owns the global lock and busy flag."""
+        async with self._execution_lock:
+            self._busy["42"] = True
+            self._task_executing = True
+            await self.terminate()
+            assert self._stopping
+        self._busy["42"] = False
+        self._task_executing = False
+
+    async def tracked_teardown(self):
+        """Use an unknown wrapper name to prove registry membership also excludes the caller."""
+        async with self._execution_lock:
+            self._busy["42"] = True
+            await self.terminate()
+        self._busy["42"] = False
+
+    async def scenario():
+        """Register the exact current task before it begins and enforce a short test deadline."""
+        plugin._execution_lock = asyncio.Lock()
+        plugin._local_runtime = Runtime()
+        plugin._scope_workers = {}
+        operation = on_message(plugin) if registration == "handler-frame" else tracked_teardown(plugin)
+        task = asyncio.create_task(operation)
+        if registration == "background":
+            plugin._background_tasks.add(task)
+        elif registration == "scope-worker":
+            plugin._scope_workers["42"] = task
+        elif registration == "local-handler":
+            plugin._local_runtime._handlers.add(task)
+        await asyncio.wait_for(task, 1)
+        assert not task.cancelled() and not plugin._execution_lock.locked()
+
+    asyncio.run(scenario())
+    assert closed == [True] and saved == ["saved"]
+
+
+@pytest.mark.parametrize("phase", ["tool", "send"])
+def test_owner_drain_waits_nested_active_loop_and_accepted_handler(production, phase):
+    """Only direct idle loop sleeps cancel; active nested tool/send and accepted handlers finish."""
+    plugin = production()
+    events = []
+
+    async def scenario():
+        """Start all owned work before closing intake, then release active work deliberately."""
+        entered, release = asyncio.Event(), asyncio.Event()
+        handler_entered, handler_release = asyncio.Event(), asyncio.Event()
+        plugin._execution_lock = asyncio.Lock()
+
+        async def action(self):
+            """A nested sleep stands for in-flight tool/send work outside the foreground lock."""
+            events.append(phase + "-started")
+            entered.set()
+            while not release.is_set():
+                await asyncio.sleep(0.002)
+            events.append(phase + "-finished")
+            return self
+
+        async def _watch_members(self):
+            """Once the active action completes, its next direct sleep becomes cancellable."""
+            await action(self)
+            await asyncio.sleep(60)
+            pytest.fail("stopping watcher cannot start another action")
+
+        async def on_message(self):
+            """An already accepted pre-busy handler is visible only below its framework wrapper."""
+            handler_entered.set()
+            await handler_release.wait()
+            events.append("accepted-handler-finished")
+            return self
+
+        async def wrapper(operation):
+            """Hide exact-owner frames under a realistic framework coroutine."""
+            await operation
+
+        background = plugin._start_background(wrapper(_watch_members(plugin)))
+        handler = asyncio.create_task(wrapper(on_message(plugin)))
+        await asyncio.gather(entered.wait(), handler_entered.wait())
+        drain = asyncio.create_task(plugin._drain_owned_work())
+        try:
+            await asyncio.sleep(0.01)
+            assert plugin._stopping and not drain.done() and not background.done()
+            release.set()
+            await asyncio.sleep(0.06)
+            assert not drain.done() and not handler.done()
+            handler_release.set()
+            await asyncio.wait_for(drain, 2)
+            assert background.cancelled() and not handler.cancelled()
+            assert events == [phase + "-started", phase + "-finished", "accepted-handler-finished"]
+        finally:
+            release.set()
+            handler_release.set()
+            for task in (background, handler, drain):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(background, handler, drain, return_exceptions=True)
 
     asyncio.run(scenario())
 

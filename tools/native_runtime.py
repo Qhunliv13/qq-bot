@@ -292,19 +292,9 @@ async def _drain_host_plugin(control, *, terminate=False):
     plugin = getattr(control, "plugin", None)
     if plugin is None:
         return
-    plugin._stopping = True
-    runtime = getattr(plugin, "_local_runtime", None)
-    if runtime is not None:
-        # Reuse the operator transport's existing close-and-drain API outside its
-        # handler tasks. Never cancel accepted model/tool work to finish cleanup.
-        await runtime.stop()
-    workers = list(getattr(plugin, "_scope_workers", {}).values())
-    if workers:
-        await asyncio.gather(*workers, return_exceptions=True)
-    lock = getattr(plugin, "_execution_lock", None)
-    if lock is not None:
-        async with lock:
-            pass
+    # Replacement, direct unload and native exit use one owner/await-chain drain.
+    # It also sees tracked visual work outside the foreground execution lock.
+    await plugin._drain_owned_work()
     if terminate:
         # An upstream initialization/main exception does not run its cancellation
         # teardown. Release first-party resources explicitly without vendor edits.

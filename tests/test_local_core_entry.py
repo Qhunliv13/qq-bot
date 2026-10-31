@@ -31,7 +31,8 @@ def core_class():
     """Extract production entry/security methods without AstrBot initialization."""
     tree = ast.parse(SOURCE.read_text(encoding="utf-8"))
     original = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "HiganPlugin")
-    names = {"_local_handle", "_is_owner", "_policy_allows", "_drain_previous_instances"}
+    names = {"_local_handle", "_is_owner", "_policy_allows", "_drain_previous_instances",
+             "_owned_task_nodes", "_drain_owned_work"}
     methods = [n for n in original.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name in names]
     module = ast.Module(body=[ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0),
         ast.ClassDef(name="Core", bases=[], keywords=[], body=methods, decorator_list=[])], type_ignores=[])

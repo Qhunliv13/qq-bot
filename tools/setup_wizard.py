@@ -15,6 +15,14 @@ import threading
 import webbrowser
 
 
+# Bootstrap also loads this module as a direct sibling script; both paths reuse
+# the one local client codec rather than maintaining a separate wire estimate.
+if __package__:
+    from .local_runtime_client import validate_request_size
+else:
+    from local_runtime_client import validate_request_size
+
+
 # Every route/body is bounded independently of Docker and model response size.
 _MAX_BODY = 96 * 1024
 _CSP = ("default-src 'none'; script-src 'nonce-{nonce}'; style-src 'nonce-{nonce}'; "
@@ -184,9 +192,22 @@ class Controller:
                 if (payload.get("confirm") is not True or not isinstance(prompt, str)
                         or not prompt.strip() or len(prompt) > 8000 or self.state["runtime"] != "ready"):
                     raise ValueError("invalid_chat")
+                try:
+                    # A Windows UI may target a Unix container. Validate the
+                    # selected deployment's actual envelope before busy/Thread.
+                    validate_request_size(
+                        {"op": "run", "prompt": prompt},
+                        windows=getattr(self.core, "DEPLOYMENT_MODE", "container") == "windows-native")
+                except UnicodeError:
+                    raise InputError("消息含有无法发送的字符，请重新输入；本次未发送，不会计费。") from None
+                except ValueError:
+                    raise InputError("消息编码后的大小超过本地请求上限，请缩短后重新确认发送；本次未发送，不会计费。") from None
             if action == "stop" and payload.get("confirm") is not True:
                 raise ValueError("confirmation_required")
             self.busy = True
+            # Clear at admission, not worker entry: a polling browser must never
+            # present a previous reply as the pending chat or lifecycle result.
+            self.state.update(answer="")
             self.state.update(stage=action, message={"check": "正在检查运行环境，不会发送模型或 QQ 消息。",
                 "start": "正在准备并启动完整 Bot；首次下载和构建可能较久，请保留此窗口。",
                 "stop": "正在停止这一个 Bot，配置与聊天记录会保留。",
@@ -220,7 +241,7 @@ class Controller:
                     message = "这一个 Bot 已接受停止请求，正在排空已接收工作；不强制中断模型或工具。数据已保留，进程退出后可重新启动。"
                 self._set(runtime="unverified", model="unverified", qq="unverified", message=message)
             elif action == "chat":
-                self._set(model="checking", answer="")
+                self._set(model="checking")
                 answer = self._local(payload["prompt"])
                 self._set(model="ready", answer=answer, message="已收到 Bot 的实际回复；这不代表 QQ 已连接。")
         except Exception:

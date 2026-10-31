@@ -44,7 +44,28 @@ Job `pwsh-279bd5995ad445da` exit 0：真实 PowerShell 5.1 `wizard -NoBrowser` �
 
 ## 最终回归
 
-Job `pwsh-e4231f61ac314153` exit 0：**5,527 passed、50 skipped、460 subtests passed，406.56s**；全范围 pyflakes、发布扫描 **156 文件、0 failures**、diff 检查通过。相比先前 5,424/50/460 新增 **103 项**回归；跳过项不算验收。
+首次复审修复历史基线：Job `pwsh-e4231f61ac314153` exit 0，**5,527 passed、50 skipped、460 subtests passed，406.56s**；全范围 pyflakes、发布扫描 **156 文件、0 failures**、diff 检查通过。相比先前 5,424/50/460 新增 **103 项**回归；跳过项不算验收。
+
+## 第二次复审修复（基线 429eca2）
+
+| 审查项 | 修复策略 | 验证范围 |
+|---|---|---|
+| C1 背景视觉排空遗漏 | replacement 与 native 自身排空共用按实例归属规则；在途视觉／工具／发送先完成，仅取消已识别空闲循环；停止后不启动下一个待描述项目 | 单元回归覆盖 normal stop／main 返回／异常、idle loop、active model、caller self-wait 与旧版已加载 owner 兼容；实际完整宿主在途视觉保存后退出通过（下述独立验收） |
+| C2 探针消耗 stdin | 版本发现用 `-I -S -B` 的 stdlib 启动、私有 NUL stdin/stdout/stderr；实际 runtime 的环境和聊天 stdin 契约不变 | 真实 PS5.1 的 startup customizer 读输入场景，不运行真实模型 |
+| C3 探针无截止 | 每候选独立 5s wall-clock，另有 1s 归属清理；Win10 Job 原子绑定覆盖 py/venv launcher 后代，结果只用固定版本退出码 | lazy Add-Type 不在子进程预算内；无法确认清理时停止整个发现，不继续下一个候选或 winget；不按进程名杀服务 |
+| C4 地址族创建失败 | socket 构造也纳入逐地址 try，失败继续后续候选，仍共用原 monotonic 下载预算 | 首个 IPv6 构造失败→IPv4 可用、全部构造失败及既有 connect/DNS/deadline；106 passed、4 skipped |
+| C5 字符／字节限制不一致 | UI 与实际 client 共用 JSONL 编码器和16 KiB限制，按目标部署选择 Windows认证外壳或Unix请求；Thread/busy之前明确拒绝，不截断不重试 | 中文／emoji／转义字符、native/container 边界；保留8000字符表单限制与协议安全限额 |
+| C6 失败试聊保留旧回复 | 新操作清空 answer，空状态在页面清空并隐藏旧显示 | 成功→等待→失败的真实隔离浏览器回归；不把上次结果冒充本次回复 |
+
+本轮仍不修改 vendor/global/生产/QQ，新增验证仅使用新私有 fixture 和合成 localhost 提供方，不重复完整资源网络安装。
+
+**二审最终全仓回归**（job `pwsh-6b4742ac1a594159` exit0）：**5,589 passed、50 skipped、460 subtests passed，430.76s**；比429eca2基线新增62项，全范围 pyflakes、发布扫描 **156文件／0 failures**、diff检查通过。专项计数有重叠，不相加。
+
+**二审实际完整宿主**（job `pwsh-b1f24ddfe9694f31` exit0）：新私有目录仅复用已验收不可变 venv／核心／前端；正常播种、新设置、面板登录和实际认证 health 后，通过现有上游插件 reload 入口触发两张合成图片待描述。localhost 提供方保持第一条实际视觉请求，认证 stop 后 OS HANDLE 证明尚未退出；释放后描述写入 manifest，第二张不再发起，随后精确进程退出、端点缺失。恰好 **1次本地合成视觉请求**，不调用外部模型／QQ，不重新下载或安装包。
+
+保留两次驱动准备失败作为边界证据，未改产品去绕过：（1）在首次播种前加入图片使数据非空，产品按预期拒绝接管，宿主未启动；（2）按正常播种后初次 plugin initialize 早于 provider 就绪，图片走无提供方回退，未达到在途条件，该实例认证停止。最终第三次新目录通过已就绪 Dashboard 的正常 reload 入口建立真实视觉在途，不改 vendor 加载顺序。单元覆盖 main返回／异常分支；完整宿主验收只证明正常认证 stop 分支。
+
+交付停止核查（job `pwsh-55209805b0234a96`）：4份本轮文档UTF-8、302条相对链接有效；新修复实例资产仍ready，端点／review guard／pip缓存缺失，Dashboard不监听；两次未通过驱动的自有目录均无端点／Dashboard监听。未删样本或用强杀替代认证排空。
 
 ## 使用与剩余边界
 

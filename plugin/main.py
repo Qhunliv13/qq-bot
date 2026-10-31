@@ -252,16 +252,14 @@ class HiganPlugin(Star):
         task.add_done_callback(self._background_tasks.discard)
         return task
 
-    async def _drain_previous_instances(self) -> None:
-        """按实例归属排空消息与任务，只取消该实例处于空闲等待的后台循环。
-
-        等待正在执行的模型、工具和发送完成，不按任务名取消框架任务。
-        """
-        known = {"_watch_members", "_poll_loop", "_free_tick", "_task_loop", "_describe_missing"}
-
-        def await_chain(awaitable):
-            """Inspect suspended coroutine/generator owners through framework await wrappers."""
-            seen = set()
+    @classmethod
+    def _owned_task_nodes(cls, excluded=()):
+        """Inspect same-plugin owners, including older loaded classes without drain helpers."""
+        found = {}
+        for task in asyncio.all_tasks():
+            if task in excluded or task.done():
+                continue
+            awaitable, seen = task.get_coro(), set()
             while awaitable is not None and id(awaitable) not in seen:
                 seen.add(id(awaitable))
                 frame = (getattr(awaitable, "cr_frame", None)
@@ -270,74 +268,114 @@ class HiganPlugin(Star):
                 code = (getattr(awaitable, "cr_code", None)
                         or getattr(awaitable, "ag_code", None)
                         or getattr(awaitable, "gi_code", None))
-                yield awaitable, frame.f_locals.get("self") if frame is not None else None, code
+                owner = frame.f_locals.get("self") if frame is not None else None
+                # A hot-reload predecessor need not have these new helpers. Match
+                # the established class/module identity, never helper presence.
+                if (owner is not None and owner.__class__.__name__ == cls.__name__
+                        and owner.__class__.__module__ == cls.__module__):
+                    found.setdefault(owner, {}).setdefault(task, []).append((awaitable, code))
                 awaitable = (getattr(awaitable, "cr_await", None)
                              or getattr(awaitable, "ag_await", None)
                              or getattr(awaitable, "gi_yieldfrom", None))
+        return found
 
-        def owned_tasks():
-            """Rescan live tasks so handlers awaiting before their busy flag cannot escape."""
-            found = {}
-            for task in asyncio.all_tasks():
-                if task is asyncio.current_task() or task.done():
-                    continue
-                for coroutine, owner, code in await_chain(task.get_coro()):
-                    if (owner is not None and owner is not self
-                            and owner.__class__.__name__ == self.__class__.__name__
-                            and owner.__class__.__module__ == self.__class__.__module__):
-                        found.setdefault(owner, {}).setdefault(task, []).append((coroutine, code))
-            return found
+    async def _drain_owned_work(self, owner=None, *, timeout=None) -> int:
+        """Close exact owner admission, finish accepted work and cancel only idle loops.
 
-        owners = set(owned_tasks())
-        canceled = []
+        Shared by replacement, native shutdown and terminate. A replacement runs
+        this one implementation for older owners without requiring new methods on
+        their class. Only replacement supplies its existing readiness deadline;
+        native/self teardown never imposes a model-generation deadline.
+        """
+        owner = self if owner is None else owner
+        known = {"_watch_members", "_poll_loop", "_free_tick", "_task_loop", "_describe_missing"}
+        handlers = {"on_message", "_drain_pending", "_local_handle"}
+        caller = asyncio.current_task()
+        runtime = getattr(owner, "_local_runtime", None)
+        caller_nodes = self._owned_task_nodes().get(owner, {}).get(caller, ())
+        # A handler/loop may initiate teardown while holding its own busy flag or
+        # execution lock. It must finish naturally after this call, not await itself.
+        caller_active = (caller in getattr(owner, "_background_tasks", ())
+                         or caller in getattr(owner, "_scope_workers", {}).values()
+                         or caller in getattr(runtime, "_handlers", ())
+                         or any(code is not None and code.co_name in handlers | known
+                                for _, code in caller_nodes))
+        owner._stopping = True
+        if runtime is not None:
+            await runtime.close_acceptor()
+        canceled = set()
 
         async def wait_quiet():
-            """Drain handlers and active background work; cancel only direct idle sleeps."""
+            """Rescan owner work; direct loop sleeps alone are safe cancellation points."""
             while True:
-                current = owned_tasks()
-                owners.update(current)
-                waiting = False
-                for owner in owners:
-                    owner._stopping = True
-                    # Closing admission never cancels a local turn already accepted.
-                    runtime = getattr(owner, "_local_runtime", None)
-                    if runtime is not None:
-                        await runtime.close_acceptor()
-                    if any(getattr(owner, "_busy", {}).values()) or getattr(owner, "_task_executing", False):
+                # wait_for owns a separate polling task: exclude both it and the
+                # original host/handler caller, including all their await wrappers.
+                excluded = {caller, asyncio.current_task()}
+                current = self._owned_task_nodes(excluded).get(owner, {})
+                tracked = set(getattr(owner, "_background_tasks", ()))
+                tracked.update(getattr(owner, "_scope_workers", {}).values())
+                tracked.update(getattr(runtime, "_handlers", ()))
+                for task in tracked - excluded:
+                    if not task.done():
+                        current.setdefault(task, [])
+                lock = getattr(owner, "_execution_lock", None)
+                waiting = not caller_active and (
+                    any(getattr(owner, "_busy", {}).values())
+                    or getattr(owner, "_task_executing", False)
+                    or (lock is not None and lock.locked()))
+                for task, nodes in current.items():
+                    # Handler precedence protects nested sleeps during model/send work.
+                    if any(code is not None and code.co_name in handlers for _, code in nodes):
                         waiting = True
-                    for task, nodes in current.get(owner, {}).items():
-                        # Handler precedence protects nested sleeps during model/send work.
-                        if any(code is not None and code.co_name in {"on_message", "_drain_pending", "_local_handle"}
-                               for _, code in nodes):
-                            waiting = True
-                            continue
-                        background = [(coroutine, code) for coroutine, code in nodes
-                                      if code is not None and code.co_name in known]
-                        if not background:
-                            continue
-                        # A sleep nested inside another method is active work, not loop idleness.
-                        idle = any(getattr(getattr(coroutine, "cr_await", None), "cr_code", None)
-                                   is asyncio.sleep.__code__ for coroutine, _ in background)
-                        if idle:
-                            task.cancel()
-                            canceled.append(task)
-                        else:
-                            waiting = True
+                        continue
+                    background = [(coroutine, code) for coroutine, code in nodes
+                                  if code is not None and code.co_name in known]
+                    if not background:
+                        # Tracked wrappers still belong to this exact owner; do
+                        # not wait arbitrary unrelated plugin helper tasks.
+                        waiting = waiting or task in tracked
+                        continue
+                    # A sleep nested inside another method is active work, not loop idleness.
+                    idle = any(getattr(getattr(coroutine, "cr_await", None), "cr_code", None)
+                               is asyncio.sleep.__code__ for coroutine, _ in background)
+                    if idle:
+                        task.cancel()
+                        canceled.add(task)
+                    else:
+                        waiting = True
                 if canceled:
                     await asyncio.gather(*canceled, return_exceptions=True)
                 if not waiting:
                     return
                 await asyncio.sleep(0.05)
 
-        # Timeout cancels only this polling coroutine, never the model/send tasks being observed.
-        # Propagate timeout so initialize cannot mark a replacement ready alongside active old work.
-        await asyncio.wait_for(wait_quiet(), timeout=(TOOL_TURN_TIMEOUT or 600) + 120)
+        # Replacement timeout cancels only this polling coroutine, never observed
+        # active work. Native/self teardown has no deadline: returning to asyncio.run
+        # on a deadline would cancel the same accepted model we must preserve.
+        if timeout is None:
+            await wait_quiet()
+        else:
+            await asyncio.wait_for(wait_quiet(), timeout=timeout)
+        if runtime is not None and not caller_active:
+            # All accepted handlers finished above; reuse transport resource cleanup.
+            await runtime.stop()
+        return len(canceled)
+
+    async def _drain_previous_instances(self) -> None:
+        """Drain exact old owners through the shared lifecycle helper before copying state."""
+        owners = {owner for owner in self._owned_task_nodes({asyncio.current_task()})
+                  if owner is not self}
+        # Close every old owner's admission before waiting on any one owner's work.
+        for owner in owners:
+            owner._stopping = True
+        canceled = await asyncio.gather(*(self._drain_owned_work(
+            owner, timeout=(TOOL_TURN_TIMEOUT or 600) + 120) for owner in owners))
         for owner in owners:
             for field in ("_recent", "_history_origins", "_last_reply_at", "_reply_times", "_last_sent", "_my_recent"):
                 old = getattr(owner, field, None)
                 if isinstance(old, dict):
                     setattr(self, field, old.copy())
-        logger.info("[higan] 旧插件实例已排空并清理 %d 个后台任务", len(canceled))
+        logger.info("[higan] 旧插件实例已排空并清理 %d 个后台任务", sum(canceled))
 
     async def _local_handle(self, event, prompt: str) -> dict:
         """Run an authenticated local turn on the live plugin's unchanged core."""
@@ -453,6 +491,10 @@ class HiganPlugin(Star):
     async def _describe_missing(self, items: list[dict]) -> None:
         """给还没有描述的表情包补一句中文描述（视觉模型），用于关键词匹配。"""
         for item in items[:20]:
+            # Preserve the in-flight description below, but never admit another
+            # model request after replacement/native shutdown has closed intake.
+            if self._stopping:
+                break
             path = STICKER_DIR / item["file"]
             if not path.exists():
                 continue
@@ -5030,16 +5072,11 @@ class HiganPlugin(Star):
         return (getattr(resp, "completion_text", "") or "").strip()[:60]
 
     async def terminate(self) -> None:
-        """Let the replacement instance drain work; do not cancel an active model/send here.
+        """Close admission and drain this owner's work without cancelling active models.
 
-        Framework calls terminate before unbinding old handlers. Waiting/canceling
-        here races new admission; the replacement initialize observes exact old
-        owners after unbind and drains every active handler/background operation.
+        Framework unload and native exit share replacement's exact owner/idle-loop
+        rules; a handler calling terminate is excluded to avoid awaiting itself.
         """
-        # Stop admission now; the replacement drains existing local handlers too.
-        self._stopping = True
-        runtime = getattr(self, "_local_runtime", None)
-        if runtime is not None:
-            await runtime.close_acceptor()
+        await self._drain_owned_work()
         self._save_manifest()
         logger.info("[higan] 插件已卸载，表情包库 %d 张" % len(self.manifest))

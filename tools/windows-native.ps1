@@ -63,6 +63,163 @@ function Get-NativeVenvVersion {
     } finally { $reader.Dispose() }
 }
 
+function Invoke-NativePythonProbe {
+    <# Probe only stdlib with private NUL stdin and an atomic, bounded process-tree owner; never run runtime here. #>
+    # Five seconds per child tolerates local antivirus/startup delay; lazy Add-Type runs once outside this budget.
+    param([string] $Executable, [string[]] $Prefix, [int] $TimeoutMilliseconds = 5000)
+    if (-not ('Qhunliv.NativePythonProbe' -as [type])) {
+        # No Python is needed to supervise discovery. Windows 10+ JOB_LIST prevents the create/assign
+        # orphan race, including py.exe and venv redirectors; HANDLE_LIST never passes chat handles.
+        # Win32 constants/structures follow processthreadsapi.h, winbase.h and jobapi2.h, matching
+        # native_setup_process.py's atomic ownership contract without requiring a discovered Python.
+        Add-Type -TypeDefinition @'
+using System;
+using System.Diagnostics;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Threading;
+namespace Qhunliv {
+    public static class NativePythonProbe {
+        [StructLayout(LayoutKind.Sequential)] struct Security {
+            public int Length; public IntPtr Descriptor; public int Inherit;
+        }
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)] struct Startup {
+            public int Size; public IntPtr Reserved, Desktop, Title;
+            public int X, Y, XSize, YSize, XCount, YCount, Fill, Flags;
+            public short Show, ReservedSize; public IntPtr ReservedBytes, Input, Output, Error;
+        }
+        [StructLayout(LayoutKind.Sequential)] struct StartupEx {
+            public Startup Info; public IntPtr Attributes;
+        }
+        [StructLayout(LayoutKind.Sequential)] struct ProcessInfo {
+            public IntPtr Process, Thread; public int ProcessId, ThreadId;
+        }
+        [StructLayout(LayoutKind.Sequential)] struct BasicLimit {
+            public long ProcessTime, JobTime; public uint Flags;
+            public UIntPtr Minimum, Maximum; public uint Active;
+            public UIntPtr Affinity; public uint Priority, Scheduling;
+        }
+        [StructLayout(LayoutKind.Sequential)] struct Limits {
+            public BasicLimit Basic;
+            public ulong ReadOps, WriteOps, OtherOps, ReadBytes, WriteBytes, OtherBytes;
+            public UIntPtr ProcessMemory, JobMemory, PeakProcess, PeakJob;
+        }
+        [StructLayout(LayoutKind.Sequential)] struct Accounting {
+            public long User, Kernel, PeriodUser, PeriodKernel;
+            public uint Faults, Total, Active, Terminated;
+        }
+        [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+        static extern IntPtr CreateJobObjectW(IntPtr security, string name);
+        [DllImport("kernel32.dll", SetLastError=true)]
+        static extern bool SetInformationJobObject(IntPtr job, int kind, ref Limits limits, int length);
+        [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+        static extern IntPtr CreateFileW(string path, uint access, uint share, ref Security security, uint creation, uint flags, IntPtr template);
+        [DllImport("kernel32.dll", SetLastError=true)]
+        static extern bool InitializeProcThreadAttributeList(IntPtr list, int count, int flags, ref IntPtr size);
+        [DllImport("kernel32.dll", SetLastError=true)]
+        static extern bool UpdateProcThreadAttribute(IntPtr list, uint flags, IntPtr attribute, IntPtr value, IntPtr size, IntPtr previous, IntPtr returned);
+        [DllImport("kernel32.dll")] static extern void DeleteProcThreadAttributeList(IntPtr list);
+        [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+        static extern bool CreateProcessW(string application, StringBuilder command, IntPtr processSecurity, IntPtr threadSecurity,
+            bool inherit, uint flags, IntPtr environment, string directory, ref StartupEx startup, out ProcessInfo process);
+        [DllImport("kernel32.dll", SetLastError=true)] static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
+        [DllImport("kernel32.dll", SetLastError=true)] static extern bool GetExitCodeProcess(IntPtr process, out uint code);
+        [DllImport("kernel32.dll", SetLastError=true)]
+        static extern bool QueryInformationJobObject(IntPtr job, int kind, out Accounting info, int length, IntPtr returned);
+        [DllImport("kernel32.dll", SetLastError=true)] static extern bool TerminateJobObject(IntPtr job, uint code);
+        [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
+
+        static void Check(bool success) {
+            // Fixed errors never disclose interpreter paths, environment values or input.
+            if (!success) throw new InvalidOperationException("Native Python probe failed.");
+        }
+        static bool Empty(IntPtr job, IntPtr process) {
+            // A root exit alone cannot certify that a launcher descendant has stopped.
+            Accounting info;
+            Check(QueryInformationJobObject(job, 1, out info, Marshal.SizeOf(typeof(Accounting)), IntPtr.Zero));
+            uint state = WaitForSingleObject(process, 0);
+            Check(state == 0 || state == 258);
+            return state == 0 && info.Active == 0;
+        }
+        static bool Cleanup(IntPtr job, IntPtr process) {
+            // Cleanup has a separate short bound; uncertain cleanup must stop discovery, not retry.
+            Stopwatch clock = Stopwatch.StartNew();
+            do {
+                TerminateJobObject(job, 1);
+                try { if (Empty(job, process)) return true; }
+                catch (InvalidOperationException) { }
+                Thread.Sleep(10);
+            } while (clock.ElapsedMilliseconds < 1000);
+            return false;
+        }
+        public static int Run(string executable, string selector, int milliseconds) {
+            // Only resolved executables and fixed selectors reach this private helper.
+            if (!Path.IsPathRooted(executable) || executable.IndexOfAny(new char[] {'"', '\0', '\r', '\n'}) >= 0 ||
+                (selector != "" && selector != "-3.12" && selector != "-3.13") || milliseconds < 1 || milliseconds > 5000) return -1;
+            IntPtr job = IntPtr.Zero, nul = IntPtr.Zero, attributes = IntPtr.Zero, jobs = IntPtr.Zero, handles = IntPtr.Zero;
+            ProcessInfo process = new ProcessInfo();
+            bool initialized = false;
+            int result = -1;
+            Stopwatch clock = Stopwatch.StartNew();
+            try {
+                job = CreateJobObjectW(IntPtr.Zero, null); Check(job != IntPtr.Zero);
+                Limits limits = new Limits(); limits.Basic.Flags = 0x2000; // KILL_ON_JOB_CLOSE; non-inheritable job handle.
+                Check(SetInformationJobObject(job, 9, ref limits, Marshal.SizeOf(typeof(Limits))));
+                Security security = new Security(); security.Length = Marshal.SizeOf(typeof(Security)); security.Inherit = 1;
+                nul = CreateFileW("NUL", 0xC0000000, 3, ref security, 3, 0, IntPtr.Zero);
+                Check(nul != IntPtr.Zero && nul != new IntPtr(-1));
+                IntPtr size = IntPtr.Zero;
+                InitializeProcThreadAttributeList(IntPtr.Zero, 2, 0, ref size); Check(size != IntPtr.Zero);
+                attributes = Marshal.AllocHGlobal(size);
+                Check(InitializeProcThreadAttributeList(attributes, 2, 0, ref size)); initialized = true;
+                jobs = Marshal.AllocHGlobal(IntPtr.Size); Marshal.WriteIntPtr(jobs, job);
+                handles = Marshal.AllocHGlobal(IntPtr.Size); Marshal.WriteIntPtr(handles, nul);
+                Check(UpdateProcThreadAttribute(attributes, 0, new IntPtr(0x2000D), jobs, new IntPtr(IntPtr.Size), IntPtr.Zero, IntPtr.Zero));
+                Check(UpdateProcThreadAttribute(attributes, 0, new IntPtr(0x20002), handles, new IntPtr(IntPtr.Size), IntPtr.Zero, IntPtr.Zero));
+                StartupEx startup = new StartupEx(); startup.Info.Size = Marshal.SizeOf(typeof(StartupEx));
+                startup.Info.Flags = 0x100; startup.Info.Input = nul; startup.Info.Output = nul; startup.Info.Error = nul;
+                startup.Attributes = attributes;
+                // Exit codes encode the two supported minors, avoiding unbounded capture pipes entirely.
+                string code = "import sys; sys.exit(300 + sys.version_info.minor if sys.version_info.major == 3 and sys.version_info.minor in (12, 13) else 1)";
+                StringBuilder command = new StringBuilder("\"" + executable + "\" " + selector + " -I -S -B -c \"" + code + "\"");
+                Check(CreateProcessW(executable, command, IntPtr.Zero, IntPtr.Zero, true, 0x08080000,
+                    IntPtr.Zero, null, ref startup, out process));
+                while (clock.ElapsedMilliseconds < milliseconds) {
+                    if (Empty(job, process.Process)) {
+                        uint exit; Check(GetExitCodeProcess(process.Process, out exit));
+                        if (clock.ElapsedMilliseconds < milliseconds && (exit == 312 || exit == 313)) result = (int)exit;
+                        break;
+                    }
+                    Thread.Sleep(10);
+                }
+            } catch (Exception) {
+                // Unsupported job APIs fail closed: never fall back to an uncontained process.
+                result = -1;
+            } finally {
+                // Even unexpected teardown exceptions cannot skip handle closure or authorize a retry.
+                if (process.Process != IntPtr.Zero) {
+                    try { if (!Cleanup(job, process.Process)) result = -2; }
+                    catch (Exception) { result = -2; }
+                }
+                if (initialized) DeleteProcThreadAttributeList(attributes);
+                foreach (IntPtr memory in new IntPtr[] {handles, jobs, attributes}) if (memory != IntPtr.Zero) Marshal.FreeHGlobal(memory);
+                foreach (IntPtr handle in new IntPtr[] {process.Thread, process.Process, nul, job})
+                    if (handle != IntPtr.Zero && handle != new IntPtr(-1)) CloseHandle(handle);
+            }
+            return result;
+        }
+    }
+}
+'@ -ErrorAction Stop
+    }
+    $selector = if ($Prefix.Count) { [string] $Prefix[0] } else { '' }
+    $result = [Qhunliv.NativePythonProbe]::Run($Executable, $selector, $TimeoutMilliseconds)
+    if ($result -eq -2) { throw 'Native Python probe cleanup could not be confirmed.' }
+    if ($result -in @(312, 313)) { return '3.' + ($result - 300) }
+    return $null
+}
+
 function Get-NativePython {
     <# Prefer 3.12 for new installs; existing venvs require a matching supported system interpreter. #>
     param([string] $RequiredVersion = '')
@@ -90,17 +247,17 @@ function Get-NativePython {
             # Store aliases can open an interactive installer; they are not existing interpreters.
             if ($executable -match '(?i)[\\/]Microsoft[\\/]WindowsApps[\\/]') { continue }
             $prefix = @($candidate.Prefix)
-            $global:LASTEXITCODE = $null
-            # This finite probe reads no stdin and never imports third-party modules.
-            $version = @(& $executable @prefix -c 'import sys; print(str(sys.version_info.major) + chr(46) + str(sys.version_info.minor))' 2>$null)
-            if ($LASTEXITCODE -eq 0 -and $version.Count -eq 1 -and [string] $version[0] -cmatch '^3\.(12|13)$') {
-                # Selector names and PATH may resolve to a different minor; the probe is authoritative.
-                if ($RequiredVersion -and [string] $version[0] -cne $RequiredVersion) { continue }
-                return @{ Executable = $executable; Prefix = $prefix }
-            }
         } catch {
-            # Discovery failures may contain executable paths; fall through without printing them.
+            # Resolution failures may contain executable paths; continue without printing them.
             continue
+        }
+        # One isolated probe is shared by every candidate. Cleanup uncertainty propagates to the
+        # entry failure handler, so it cannot start another candidate or authorize an installation.
+        $version = Invoke-NativePythonProbe $executable $prefix
+        if ($version -cmatch '^3\.(12|13)$') {
+            # Selector names and PATH may resolve to a different minor; the probe is authoritative.
+            if ($RequiredVersion -and $version -cne $RequiredVersion) { continue }
+            return @{ Executable = $executable; Prefix = $prefix }
         }
     }
     return $null

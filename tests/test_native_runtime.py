@@ -974,8 +974,27 @@ def test_native_cli_utf8_bytes_are_independent_of_inherited_locale(install, monk
             stream.detach()
 
 
+@pytest.fixture
+def lifecycle_plugin(tmp_path):
+    """Compile exact lifecycle methods only, never importing or starting AstrBot."""
+    source = Path(__file__).resolve().parents[1] / "plugin" / "main.py"
+    tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
+    original = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "HiganPlugin")
+    names = {"_owned_task_nodes", "_drain_owned_work", "_drain_previous_instances",
+             "_start_background", "_describe_missing", "terminate"}
+    methods = [copy.deepcopy(node) for node in original.body
+               if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in names]
+    assert {node.name for node in methods} == names
+    module = ast.Module(body=[ast.ClassDef(name="HiganPlugin", bases=[], keywords=[],
+                                          body=methods, decorator_list=[])], type_ignores=[])
+    namespace = {"asyncio": asyncio, "logger": Mock(), "STICKER_DIR": tmp_path,
+                 "TOOL_TURN_TIMEOUT": None}
+    exec(compile(ast.fix_missing_locations(module), str(source), "exec"), namespace)
+    return namespace["HiganPlugin"]
+
+
 @pytest.mark.parametrize("failure", [False, True])
-def test_main_exit_drains_accepted_work_before_terminating_plugin(install, failure):
+def test_main_exit_drains_accepted_work_before_terminating_plugin(install, failure, lifecycle_plugin):
     """A failed/returned main cannot let asyncio.run cancel already accepted local work."""
     events = []
 
@@ -993,14 +1012,19 @@ def test_main_exit_drains_accepted_work_before_terminating_plugin(install, failu
         class Runtime:
             """Reuse the runtime stop contract while observing ordered offline teardown."""
 
-            async def stop(self):
-                """Close admission and drain the held operation without cancelling it."""
+            _handlers = set()
+
+            async def close_acceptor(self):
+                """Close admission before allowing the already accepted operation to finish."""
                 events.append("intake-closed")
                 released.set()
-                await pending
+
+            async def stop(self):
+                """Confirm shared owner drain completed the accepted operation first."""
+                assert pending.done() and not pending.cancelled()
                 events.append("drained")
 
-        class Plugin:
+        class Plugin(lifecycle_plugin):
             """Expose only the actual host-facing lifecycle fields and cleanup hook."""
 
             _stopping = False
@@ -1014,6 +1038,7 @@ def test_main_exit_drains_accepted_work_before_terminating_plugin(install, failu
                 events.append("terminated")
 
         pending = asyncio.create_task(work())
+        Plugin._local_runtime._handlers.add(pending)
 
         async def main_async(_dashboard):
             """Initialize the owned plugin and exit only after work has been accepted."""
@@ -1032,6 +1057,135 @@ def test_main_exit_drains_accepted_work_before_terminating_plugin(install, failu
 
     asyncio.run(scenario())
     assert events == ["intake-closed", "reply", "drained", "terminated"]
+
+
+@pytest.mark.parametrize("mode", ["main-return", "main-failure", "normal-stop"])
+def test_host_drains_tracked_visual_work_and_only_idle_loops(install, tmp_path, lifecycle_plugin, mode, monkeypatch):
+    """Every host exit preserves a lock-free held visual model, without starting its next item."""
+    events = []
+    actual_wait_for = asyncio.wait_for
+
+    async def reject_drain_deadline(awaitable, timeout):
+        """Keep test bounds but fail if native/self teardown adds a model-generation deadline."""
+        assert getattr(getattr(awaitable, "cr_code", None), "co_name", None) != "wait_quiet"
+        return await actual_wait_for(awaitable, timeout)
+
+    monkeypatch.setattr(asyncio, "wait_for", reject_drain_deadline)
+    first, second = tmp_path / "first.png", tmp_path / "second.png"
+    first.write_bytes(b"inert fixture; never decoded")
+    second.write_bytes(b"inert fixture; never decoded")
+
+    async def scenario():
+        """Hold the real tracked description across host teardown and release it explicitly."""
+        entered, release, intake_closed = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        owner = lifecycle_plugin()
+        owner._stopping, owner._background_tasks, owner._scope_workers = False, set(), {}
+        owner._execution_lock = asyncio.Lock()
+        owner.manifest = [{"file": first.name, "desc": ""}, {"file": second.name, "desc": ""}]
+
+        class Runtime:
+            """Expose accepted-handler cleanup without opening any real transport."""
+
+            _handlers = set()
+
+            async def close_acceptor(self):
+                """Confirm admission closes while the in-flight model is still held."""
+                assert owner._stopping
+                intake_closed.set()
+
+            async def stop(self):
+                """Transport cleanup must follow the completed and saved visual result."""
+                assert owner.manifest[0]["desc"] == "视觉已完成"
+                events.append("transport-stopped")
+
+        async def describe(path):
+            """Nested sleep is active model work, not an idle background-loop sleep."""
+            assert Path(path) == first
+            events.append("visual-started")
+            entered.set()
+            try:
+                while not release.is_set():
+                    await asyncio.sleep(0.002)
+            except asyncio.CancelledError:
+                events.append("visual-cancelled")
+                raise
+            events.append("visual-finished")
+            return "视觉已完成"
+
+        def save_manifest():
+            """Observe durable-save intent without writing outside the temporary fixture."""
+            assert owner.manifest[0]["desc"] == "视觉已完成"
+            events.append("manifest-saved")
+
+        async def _watch_members(self):
+            """Model an idle owned watcher which must not hold native stop open."""
+            await asyncio.sleep(60)
+            pytest.fail("idle watcher must not resume new work")
+
+        async def _poll_loop(self):
+            """Model idle autonomy polling; draining must never start an opportunity."""
+            await asyncio.sleep(60)
+            pytest.fail("idle poll must not start new work")
+
+        async def _task_loop(self):
+            """Model an idle scheduler without claiming a persistent task during stop."""
+            await asyncio.sleep(60)
+            pytest.fail("idle scheduler must not claim work")
+
+        owner._local_runtime, owner._describe, owner._save_manifest = Runtime(), describe, save_manifest
+        tasks = []
+
+        async def main_async(_dashboard):
+            """Start exact production tracking, then return, fail, or request native stop."""
+            control = sys.modules["qhunliv_native_host_control"]
+            control.plugin = owner
+            tasks.append(owner._start_background(owner._describe_missing(owner.manifest)))
+            tasks.extend(owner._start_background(method(owner)) for method in
+                         (_watch_members, _poll_loop, _task_loop))
+            await entered.wait()
+            if mode == "main-failure":
+                raise ValueError("held-visual-main-failure")
+            if mode == "main-return":
+                return
+            control.request_stop()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                # Emulate upstream cancellation cleanup using the exact owner hook.
+                await owner.terminate()
+                events.append("host-cleaned")
+
+        host = asyncio.create_task(native.run_host(main_async, install / "dashboard", install))
+        try:
+            await asyncio.wait_for(intake_closed.wait(), 2)
+            await asyncio.sleep(0.01)
+            assert not host.done() and not tasks[0].done()
+            assert not owner._execution_lock.locked()
+            assert "visual-cancelled" not in events
+            release.set()
+            if mode == "main-failure":
+                with pytest.raises(ValueError, match="held-visual-main-failure"):
+                    await asyncio.wait_for(host, 2)
+            else:
+                await asyncio.wait_for(host, 2)
+            assert tasks[0].done() and not tasks[0].cancelled()
+            assert all(task.cancelled() for task in tasks[1:])
+            assert not owner._background_tasks
+            assert owner.manifest == [{"file": first.name, "desc": "视觉已完成"},
+                                      {"file": second.name, "desc": ""}]
+            assert events.index("visual-finished") < events.index("manifest-saved") < events.index("transport-stopped")
+            assert "visual-cancelled" not in events
+            assert "qhunliv_native_host_control" not in sys.modules
+        finally:
+            release.set()
+            if not host.done():
+                host.cancel()
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(host, *tasks, return_exceptions=True)
+
+    asyncio.run(scenario())
 
 
 def test_all_test_helpers_and_cases_have_docstrings():
