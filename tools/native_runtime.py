@@ -287,8 +287,32 @@ def serve(data, name):
         asyncio.run(run_host(host["main_async"], assets["dashboard"], data))
 
 
+async def _drain_host_plugin(control, *, terminate=False):
+    """Close owned intake and drain accepted work, including failed-start teardown."""
+    plugin = getattr(control, "plugin", None)
+    if plugin is None:
+        return
+    plugin._stopping = True
+    runtime = getattr(plugin, "_local_runtime", None)
+    if runtime is not None:
+        # Reuse the operator transport's existing close-and-drain API outside its
+        # handler tasks. Never cancel accepted model/tool work to finish cleanup.
+        await runtime.stop()
+    workers = list(getattr(plugin, "_scope_workers", {}).values())
+    if workers:
+        await asyncio.gather(*workers, return_exceptions=True)
+    lock = getattr(plugin, "_execution_lock", None)
+    if lock is not None:
+        async with lock:
+            pass
+    if terminate:
+        # An upstream initialization/main exception does not run its cancellation
+        # teardown. Release first-party resources explicitly without vendor edits.
+        await plugin.terminate()
+
+
 async def run_host(main_async, dashboard, data):
-    """Add a stop Event around the unchanged host; upstream owns teardown of its tasks."""
+    """Supervise the unchanged host, draining first-party work on stop or main exit."""
     stopped = asyncio.Event()
     control = SimpleNamespace(root=str(data / "higan"), pid=os.getpid(), request_stop=stopped.set)
     sys.modules["qhunliv_native_host_control"] = control
@@ -297,20 +321,18 @@ async def run_host(main_async, dashboard, data):
     try:
         done, _pending = await asyncio.wait({task, waiter}, return_when=asyncio.FIRST_COMPLETED)
         if task in done:
+            # main may fail after the plugin has opened its local listener. Drain
+            # first so asyncio.run does not silently cancel accepted work, then
+            # preserve the upstream result/exception for the caller.
+            try:
+                await _drain_host_plugin(control, terminate=True)
+            except Exception:
+                if task.cancelled() or task.exception() is not None:
+                    await task
+                raise
             await task
             return
-        # Close new native admission and allow already-owned QQ/tool workers
-        # to finish. Never cancel a model/send as a shortcut for a user stop.
-        plugin = getattr(control, "plugin", None)
-        if plugin is not None:
-            plugin._stopping = True
-            workers = list(getattr(plugin, "_scope_workers", {}).values())
-            if workers:
-                await asyncio.gather(*workers, return_exceptions=True)
-            lock = getattr(plugin, "_execution_lock", None)
-            if lock is not None:
-                async with lock:
-                    pass
+        await _drain_host_plugin(control)
         # LocalRuntime already drained accepted local requests before signalling;
         # InitialLoader cancellation invokes upstream core_lifecycle.stop().
         task.cancel()
@@ -349,17 +371,40 @@ def main(argv=None):
     parser.add_argument("--api-key-env")
     parser.add_argument("--persona-file")
     parser.add_argument("--owner-qq", action="append", default=[])
+    parser.add_argument("--print-setup-url", action="store_true",
+                        help="Explicitly emit the private loopback setup capability for a launcher or local manual use; do not share or log it")
     args = parser.parse_args(argv)
-    data = bootstrap.data_path(args.data_dir)
+    if args.json and (args.command != "info" or args.show_password):
+        parser.error("--json is only supported by info and cannot be combined with --show-password")
+    if args.show_password and args.command != "info":
+        parser.error("--show-password is only supported by info")
+    if (args.no_browser or args.print_setup_url) and args.command != "wizard":
+        parser.error("browser options are only supported by wizard")
+    # Both the setup subprocess protocol and direct native chat use UTF-8 bytes,
+    # independent of the Windows ANSI locale. Test/caller streams without a
+    # reconfigure API are already text streams and must remain usable as-is.
+    for stream, encoding in ((sys.stdin, "utf-8-sig"), (sys.stdout, "utf-8"), (sys.stderr, "utf-8")):
+        configure = getattr(stream, "reconfigure", None)
+        if callable(configure) and str(getattr(stream, "encoding", "")).lower().replace("-", "") != encoding.replace("-", ""):
+            # PS5.1 may prefix native stdin with one UTF-8 transport BOM; accept
+            # it without adding a BOM to JSON output or rewriting prompt text.
+            configure(encoding=encoding)
+    data = bootstrap.data_path(args.data_dir, compose_env=False)
     name = bootstrap.runtime_name(args.runtime_name, data)
     if args.command == "wizard":
         from tools.setup_wizard import serve as serve_setup
-        serve_setup(sys.modules[__name__], data, name, open_browser=not args.no_browser)
+        serve_setup(sys.modules[__name__], data, name, open_browser=not args.no_browser,
+                    print_url=args.print_setup_url or args.no_browser)
         return 0
-    if args.command in {"init", "up"} and not (data / MARKER).exists():
-        base, key, model, owners = collect_model_inputs(args)
-        persona = Path(args.persona_file).read_text(encoding="utf-8") if args.persona_file else ""
-        initialize_settings(data, name, {"base_url": base, "api_key": key, "model": model}, owners, persona)
+    if args.command in {"init", "up"}:
+        if (data / MARKER).exists():
+            # Idempotent success requires the same verified install, not merely
+            # a marker-shaped path. Do not prompt or reset broken saved state.
+            load_install(data, name)
+        else:
+            base, key, model, owners = collect_model_inputs(args)
+            persona = Path(args.persona_file).read_text(encoding="utf-8") if args.persona_file else ""
+            initialize_settings(data, name, {"base_url": base, "api_key": key, "model": model}, owners, persona)
     if args.command == "_serve":
         serve(data, name)
     elif args.command == "up":

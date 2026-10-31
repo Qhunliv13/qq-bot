@@ -12,6 +12,8 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 LAUNCHER = ROOT / "tools" / "windows-native.ps1"
 POWERSHELL = shutil.which("pwsh") or shutil.which("powershell")
+# Keep a separate Windows PowerShell executable: pwsh alone cannot reproduce the 5.1 ASCII pipe bug.
+WINDOWS_POWERSHELL = shutil.which("powershell.exe")
 # The exact marker matches setup_wizard; the capability is synthetic and never a real secret.
 TOKEN = "offline_test_capability_0123456789_abcdef"
 SETUP_URL = f"http://127.0.0.1:26185/#token={TOKEN}"
@@ -147,6 +149,74 @@ def _runtime_calls(calls):
     return [call for call in calls if call["kind"] in ("py", "python") and "-c" not in call["words"]]
 
 
+def _invoke_real_ps51_native(tmp_path, *, runtime_exit=0, missing_executable=False,
+                             no_console=False):
+    """Exercise real 5.1 native pipes using a stdlib byte sentinel, never the bot runtime or installers."""
+    checkout = tmp_path / "real pipe checkout"
+    tools = checkout / "tools"
+    tools.mkdir(parents=True)
+    byte_log = tmp_path / "stdin.bin"
+    argv_log = tmp_path / "argv.json"
+    output_log = tmp_path / "stdout.txt"
+    state_log = tmp_path / "encoding-state.json"
+    data = tmp_path / "private untouched data"
+    text = "中文输入与输出 😀🧪"
+    # Raw bytes deliberately avoid Python's platform stdio defaults: the wrapper transport is under test.
+    (tools / "native_runtime.py").write_text(
+        "import json\nfrom pathlib import Path\nimport sys\n"
+        f"Path({str(byte_log)!r}).write_bytes(sys.stdin.buffer.read())\n"
+        f"Path({str(argv_log)!r}).write_text(json.dumps(sys.argv[1:]), encoding='utf-8')\n"
+        f"sys.stdout.buffer.write({(text + chr(10)).encode('utf-8')!r})\n"
+        f"sys.stderr.buffer.write({('离线错误流 😀' + chr(10)).encode('utf-8')!r})\n"
+        f"raise SystemExit({runtime_exit})\n",
+        encoding="utf-8",
+    )
+    executable = tmp_path / "missing-python.exe" if missing_executable else Path(sys.executable)
+    # Only interpreter discovery is substituted; '& executable', native stdin and stdout decoding stay real.
+    override = (
+        "function Get-NativePython {\n"
+        "  <# Locate only the test interpreter; no probe, installer or actual runtime is allowed. #>\n"
+        "  param([string] $RequiredVersion = '')\n"
+        f"  return @{{ Executable = {_ps_quote(executable)}; Prefix = @() }}\n"
+        "}\n"
+    )
+    source = LAUNCHER.read_text(encoding="utf-8")
+    entry = tools / "windows-native.ps1"
+    entry.write_text(source.replace("# Native launcher entry point.", override + "\n# Native launcher entry point."),
+                     encoding="utf-8-sig")
+    runner = tmp_path / "real-ps51-runner.ps1"
+    runner.write_text(
+        "$ErrorActionPreference = 'Stop'\n"
+        "if ($PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -ne 1) { throw 'Requires Windows PowerShell 5.1.' }\n"
+        "$OutputEncoding = [System.Text.ASCIIEncoding]::new()\n"
+        "$beforeOutput = $OutputEncoding\n"
+        "[Console]::OutputEncoding = [System.Text.Encoding]::GetEncoding(1252)\n"
+        "$beforeConsole = [Console]::OutputEncoding\n"
+        f"$actual = @({_ps_quote(text)} | & {_ps_quote(entry)} chat -NonInteractive -DataDir {_ps_quote(data)})\n"
+        "$code = $LASTEXITCODE\n"
+        f"[IO.File]::WriteAllText({_ps_quote(output_log)}, ($actual -join [Environment]::NewLine), (New-Object System.Text.UTF8Encoding $false))\n"
+        "$state = @{ output_restored = [object]::ReferenceEquals($OutputEncoding, $beforeOutput); "
+        # Console's .NET setter clones Encoding; semantic equality, not object identity, proves restoration.
+        "console_restored = [Console]::OutputEncoding.Equals($beforeConsole); "
+        "output_codepage = $OutputEncoding.CodePage; console_codepage = [Console]::OutputEncoding.CodePage; "
+        "version = $PSVersionTable.PSVersion.ToString() }\n"
+        f"[IO.File]::WriteAllText({_ps_quote(state_log)}, (ConvertTo-Json -Compress $state))\n"
+        "exit $code\n",
+        # 5.1 treats a BOM-less file as legacy ANSI, so exercise Chinese literals from an explicit UTF-8 BOM.
+        encoding="utf-8-sig",
+    )
+    result = subprocess.run(
+        [WINDOWS_POWERSHELL, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(runner)],
+        cwd=ROOT, input=b"", capture_output=True, timeout=30, check=False,
+        creationflags=subprocess.CREATE_NO_WINDOW if no_console else 0,
+    )
+    state = json.loads(state_log.read_text(encoding="utf-8")) if state_log.exists() else None
+    output = output_log.read_text(encoding="utf-8") if output_log.exists() else None
+    raw_input = byte_log.read_bytes() if byte_log.exists() else None
+    argv = json.loads(argv_log.read_text(encoding="utf-8")) if argv_log.exists() else None
+    return result, state, output, raw_input, argv, data, text
+
+
 def test_native_launcher_is_only_a_transport_not_a_lite_runtime():
     """Keep capability/runtime behavior unified in Python and prohibit machine-changing shortcuts."""
     source = LAUNCHER.read_text(encoding="utf-8")
@@ -155,7 +225,7 @@ def test_native_launcher_is_only_a_transport_not_a_lite_runtime():
     assert "tools\\native_runtime.py" in source
     assert "QhunlivBot\\Full" in source
     assert "Get-Command 'winget.exe'" in source
-    assert "$runtimeArgs += '--no-browser'" in source
+    assert "$runtimeArgs += @('--no-browser', '--print-setup-url')" in source
     assert "& $executable @launchArgs | ForEach-Object" in source
     for forbidden in ("Invoke-Expression", "Set-ExecutionPolicy", "SetEnvironmentVariable", "RunAs", "wsl.exe", "docker.exe", "bootstrap.py", "--api-key'"):
         assert forbidden not in source
@@ -176,7 +246,8 @@ def test_default_wizard_opens_only_exact_marker_and_uses_full_data(tmp_path):
     launch = _runtime_calls(calls)
     assert len(launch) == 1
     assert launch[0]["words"] == ["-3.12", "-u", str(checkout / "tools" / "native_runtime.py"),
-                                   "wizard", "--data-dir", str(local / "QhunlivBot" / "Full"), "--no-browser"]
+                                   "wizard", "--data-dir", str(local / "QhunlivBot" / "Full"),
+                                   "--no-browser", "--print-setup-url"]
     assert browsers == [SETUP_URL]
     assert TOKEN not in result.stdout + result.stderr
     assert "runtime output" in result.stdout
@@ -353,7 +424,47 @@ def test_piped_chat_stays_on_stdin(tmp_path):
     assert inputs == "private chat text"
 
 
+@pytest.mark.skipif(WINDOWS_POWERSHELL is None, reason="Windows PowerShell 5.1 is not installed")
+@pytest.mark.parametrize("runtime_exit", [0, 19])
+@pytest.mark.parametrize("no_console", [False, True])
+def test_real_ps51_native_pipe_preserves_utf8_bytes_and_restores_encodings(tmp_path, runtime_exit, no_console):
+    """Reproduce 5.1's ASCII-default pipe with Chinese/emoji through a real native byte sentinel."""
+    result, state, output, raw_input, argv, data, text = _invoke_real_ps51_native(
+        tmp_path, runtime_exit=runtime_exit, no_console=no_console,
+    )
+    assert result.returncode == runtime_exit, result.stderr
+    assert state["version"].startswith("5.1.")
+    assert state["output_restored"] and state["console_restored"]
+    assert (state["output_codepage"], state["console_codepage"]) == (20127, 1252)
+    expected = (text + "\r\n").encode("utf-8")
+    # PS5.1 can prepend one transport BOM from its inherited input stream; native_runtime reads utf-8-sig.
+    # Allow only that exact optional prefix, never replacement characters, missing bytes or double BOMs.
+    assert raw_input in (expected, b"\xef\xbb\xbf" + expected)
+    assert output == text
+    assert text not in repr(argv)
+    assert argv == ["chat", "--data-dir", str(data), "--non-interactive"]
+    assert "离线错误流 😀".encode("utf-8") in result.stderr
+    assert not data.exists()
+
+
+@pytest.mark.skipif(WINDOWS_POWERSHELL is None, reason="Windows PowerShell 5.1 is not installed")
+def test_real_ps51_launch_failure_restores_encodings_without_runtime_side_effects(tmp_path):
+    """The finally cleanup also runs when a native executable cannot launch, without raw path disclosure."""
+    result, state, output, raw_input, argv, data, _ = _invoke_real_ps51_native(
+        tmp_path, missing_executable=True,
+    )
+    assert result.returncode == 2, result.stderr
+    assert state["output_restored"] and state["console_restored"]
+    assert (state["output_codepage"], state["console_codepage"]) == (20127, 1252)
+    assert raw_input is None and argv is None
+    assert output == ""
+    assert b"Native runtime launch failed" in result.stderr
+    assert b"missing-python" not in result.stderr
+    assert not data.exists()
+
+
 @pytest.mark.skipif(POWERSHELL is None, reason="PowerShell is not installed")
+@pytest.mark.parametrize("command", ["wizard", "wizard -NoBrowser"])
 @pytest.mark.parametrize("marker", [
     f"BOT_SETUP_URL=https://127.0.0.1:26185/#token={TOKEN}",
     f"BOT_SETUP_URL=http://localhost:26185/#token={TOKEN}",
@@ -365,9 +476,9 @@ def test_piped_chat_stays_on_stdin(tmp_path):
     f"BOT_SETUP_URL={SETUP_URL} ",
     "BOT_SETUP_URL=http://127.0.0.1:26185/#token=short",
 ])
-def test_browser_rejects_and_suppresses_untrusted_capability_markers(tmp_path, marker):
-    """Malformed markers must neither launch arbitrary destinations nor leak tokens to stdout/stderr."""
-    result, _, browsers, _, _, _ = _invoke_mock_native(tmp_path, marker=marker)
+def test_browser_rejects_and_suppresses_untrusted_capability_markers(tmp_path, command, marker):
+    """Malformed markers stay hidden even when deliberate manual display authorizes valid loopback URLs."""
+    result, _, browsers, _, _, _ = _invoke_mock_native(tmp_path, command, marker=marker)
     assert result.returncode == 0, result.stderr
     assert browsers == []
     assert "BOT_SETUP_URL=" not in result.stdout + result.stderr
@@ -376,12 +487,18 @@ def test_browser_rejects_and_suppresses_untrusted_capability_markers(tmp_path, m
 
 
 @pytest.mark.skipif(POWERSHELL is None, reason="PowerShell is not installed")
-def test_no_browser_and_browser_failure_do_not_leak_token(tmp_path):
-    """Explicit suppression and desktop failures retain fixed safe messages without capability values."""
-    result, _, browsers, _, _, _ = _invoke_mock_native(tmp_path, "wizard -NoBrowser", marker="BOT_SETUP_URL=" + SETUP_URL)
+def test_no_browser_displays_one_private_manual_capability_only_by_explicit_choice(tmp_path):
+    """Explicit NoBrowser authorizes one usable loopback URL and warns against sharing or public logs."""
+    result, calls, browsers, _, _, _ = _invoke_mock_native(tmp_path, "wizard -NoBrowser", marker="BOT_SETUP_URL=" + SETUP_URL)
     assert result.returncode == 0
     assert browsers == []
-    assert TOKEN not in result.stdout + result.stderr
+    assert result.stdout.count(SETUP_URL) == 1
+    assert "only on this computer" in result.stdout
+    assert "Do not share" in result.stdout
+    assert "public logs" in result.stdout
+    assert "BOT_SETUP_URL=" not in result.stdout
+    assert TOKEN not in result.stderr
+    assert _runtime_calls(calls)[0]["words"][-2:] == ["--no-browser", "--print-setup-url"]
 
 
 @pytest.mark.skipif(POWERSHELL is None, reason="PowerShell is not installed")
@@ -391,6 +508,8 @@ def test_browser_exception_text_is_not_reported(tmp_path):
     assert result.returncode == 0
     assert browsers == []
     assert "browser could not open" in result.stderr
+    assert "wizard -NoBrowser" in result.stderr
+    assert result.stderr.count("browser could not open") == 1
     assert TOKEN not in result.stdout + result.stderr
 
 
@@ -443,7 +562,7 @@ def test_failed_install_never_launches_python_runtime(tmp_path):
 @pytest.mark.parametrize("command", [
     "init -ApiKeyEnv 'BAD; secret'", "init -DataDir relative-state", "init -OwnerQQ '12x45'",
     "init -RuntimeName 'bad`nsecret'", "up -ShowPassword", "status -Json", "init -NoBrowser",
-    "init -ApiKey secret-value",
+    "init -ApiKey secret-value", "info -Json -ShowPassword",
 ])
 def test_invalid_arguments_fail_before_python_discovery(tmp_path, command):
     """Reject raw key flags, malformed transport values and unsupported switch combinations early."""

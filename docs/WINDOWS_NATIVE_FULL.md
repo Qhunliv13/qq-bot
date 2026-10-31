@@ -1,12 +1,12 @@
 # Windows 原生完整版：部署与管理
 
-> **实现 / 验收状态（2026-10-31）：**Windows Python 3.12 在全新私有目录中的默认资产安装已通过，未预置缓存、未修改下载传输：62 项适用依赖全部满足，`audioop-lts` 按版本条件跳过，`pip check` 与固定面板校验通过。实际完整宿主、面板 HTML / 初始登录、本地合成模型完整回复、在途排空 / 进程退出、父进程退出后续跑、重启及真实 PowerShell 5.1 启停均通过。先前 Python 3.13 的 63 项依赖、完整宿主与 Chromium 面板登录也已通过，其首次下载使用仓库外恢复，保留为独立历史记录。**当前主机的新目录默认安装通过，不等于全新电脑双击图形全流程或所有网络稳定性已验收**；缺 Python 时安装、真实外部模型 / QQ、面板全页、整个终端关闭 / 注销及外部桥接仍未验收。详情见 [部署验证记录](QUICK_DEPLOY_VERIFICATION.md)。
+> **实现 / 验收状态（2026-10-31）：**Windows Python 3.12 在全新私有目录中的默认资产安装已通过，未预置缓存、未修改下载传输：62 项适用依赖全部满足，`audioop-lts` 按版本条件跳过，`pip check` 与固定面板校验通过。实际完整宿主、面板 HTML / 初始登录、本地合成模型完整回复、在途排空 / 进程退出、父进程退出后续跑、重启及真实 PowerShell 5.1 启停均通过。先前 Python 3.13 的 63 项依赖、完整宿主与 Chromium 面板登录也已通过，其首次下载使用仓库外恢复，保留为独立历史记录。**当前主机的新目录默认安装通过，不等于全新电脑双击图形全流程或所有网络稳定性已验收**；缺 Python 时安装、真实外部模型 / QQ、面板全页、整个终端关闭 / 注销及外部桥接仍未验收。详情见 [部署验证记录](QUICK_DEPLOY_VERIFICATION.md)。后续复审的编码／失败恢复／路径等问题已修复，最终 **5,527 passed、50 skipped、460 subtests passed**；逐项证据和迁移边界见 [复审修复记录](WINDOWS_NATIVE_AUDIT_FIXES_20261031.md)。
 
 ## 这是完整运行时，不是 Lite
 
 - Windows 原生 Python **3.12 或 3.13**；新安装优先 3.12，已有私有 venv 沿用匹配的 Python 小版本。启动器不执行 `pyvenv.cfg` 中的任意路径；若原小版本基座缺失则停止并提示恢复，不自动重装或覆盖。无需 WSL、Docker、Node.js 或管理员权限，不修改系统执行策略，不通过管理员符号链接安装插件。
 - Python 核心仍来自仓库内固定的 **AstrBot 4.28.1**，复制到私有 `runtime/astrbot` 后运行；插件以文件复制方式安装，保留同一模型 / 工具回路、记忆、排队、自主观察与持久任务，不另造 Lite 引擎。
-- 完整核心依赖来自该版本 `pyproject.toml`，只装进私有 `runtime/.venv`，不做全局 pip 安装。依赖版本未完整锁定，不承诺逐字节可复现，也不保证每个外部能力已具备 Windows 依赖。
+- 完整核心依赖来自该版本 `pyproject.toml`，只装进私有 `runtime/.venv`，不做全局 pip 安装。资产复用前用该 venv 解释器进行有界、离线的适用 requirement / 传递依赖元数据检查，不再仅信任完成标记；不导入运行时业务模块，不执行 `.pth` / customizer，不等于全部 RECORD 哈希或二进制 ABI 审计。依赖版本未完整锁定，不承诺逐字节可复现，也不保证每个外部能力已具备 Windows 依赖。
 - Dashboard 只从官方 PyPI 的 **同版本 AstrBot wheel** 提取预构建前端，不用该 wheel 替换 Python 核心。下载须同时满足源码记录的 SHA256、HTTPS 版本元数据与实际文件摘要；不是作者签名或独立发布签名，不需要本机 Node 构建。
 - [Lite](WINDOWS_LITE.md) 仍是单独的纯文字入口，不含完整工具、QQ、持久记忆与任务；两者目录和标记不共享。
 
@@ -18,7 +18,7 @@
 4. 保存和启动分别确认。首次 `up` 会联网准备私有 venv、完整依赖、源码副本和固定前端；依赖下载可能较慢。`doctor` 的前置检查不能替代资产安装或本地就绪。
 5. 本地健康成功后，试聊仍需明确确认费用 / 工具执行。真实模型成功与 QQ 登录 / 送达分别验收，不能从环境正常推出。
 
-安装页使用随机 loopback 端口和临时令牌；它不是 Bot 控制台。授权链接只在本机浏览器传递，不应分享地址栏截图。保留安装窗口以使用该次向导；关闭窗口不会被当成停止命令。运行时以 detached 子进程启动的实现旨在允许关闭向导后继续运行，但该行为仍待真实 Windows smoke 验证。
+安装页使用随机 loopback 端口和临时令牌；它不是 Bot 控制台。默认入口在内存中把授权链接交给本机浏览器，不打印链接；不应分享地址栏截图。无法自动打开时，关闭该次向导后运行 `wizard -NoBrowser`，此显式选项会在当前终端显示仅供本机手动打开的完整授权地址；不要重定向到公共日志、截图或分享。保留安装窗口以使用该次向导；关闭窗口不会被当成停止命令。已实测启动 CLI 父进程退出后 detached 宿主仍能响应；整个终端关闭／用户注销仍需独立验收。
 
 ## 数据、账号与端口
 
@@ -61,11 +61,11 @@
 
 `stop` 的成功消息只表示同一实例接受关闭请求，不证明进程已退出；有在途请求时等待排空。当前实现先排空已接受本地请求及 QQ / 工具 worker，再交给上游核心取消和清理，不以按名称杀进程或强杀来模拟成功。已隔离实测本地在途回复排空及实际进程退出；真实 QQ / 外部工具排空仍未验收。
 
-支持的参数：`-DataDir`（**绝对 Windows 路径**）、`-RuntimeName`、`-ModelBase`、`-Model`、`-ApiKeyEnv`、`-PersonaFile`（Windows 文件路径）、`-OwnerQQ`、`-NoBrowser`、`-Json`、`-ShowPassword`、`-WaitTimeout`、`-NonInteractive`。`-NoBrowser` 仅供 `wizard`；`-Json` / `-ShowPassword` 仅供 `info`。`-WaitTimeout` 为 1–3600 秒，默认 300，只限制启动后的就绪等待，不是依赖下载总时限。超时不自动杀实例。
+支持的参数：`-DataDir`（**绝对 Windows 路径**）、`-RuntimeName`、`-ModelBase`、`-Model`、`-ApiKeyEnv`、`-PersonaFile`（Windows 文件路径）、`-OwnerQQ`、`-NoBrowser`、`-Json`、`-ShowPassword`、`-WaitTimeout`、`-NonInteractive`。`-NoBrowser` 仅供 `wizard`，明确选择在终端显示私有手动入口；`-Json` / `-ShowPassword` 仅供 `info`，两者不可组合，JSON 信息不含密码。`-WaitTimeout` 为 1–3600 秒，默认 300，只限制启动后的就绪等待，不是依赖下载总时限。超时不自动杀实例。
 
 ### 安装步骤总时限与重试
 
-Windows 10 / Windows Server 2016 及以上的原生安装步骤使用独立 Windows Job：创建 venv、完整依赖安装和 `pip check` **各默认最多 1800 秒**。可在当前 PowerShell 设置 `$env:BOT_NATIVE_SETUP_TIMEOUT = '3600'` 后启动，允许 **1–86400 秒整数**；不改系统环境变量。该设置不限制面板 HTTP 资源下载总时长，不替代 `-WaitTimeout`，也不限制已运行 Bot 的模型 / 工具。
+Windows 10 / Windows Server 2016 及以上的原生安装步骤使用独立 Windows Job：创建 venv、完整依赖安装和 `pip check` **各默认最多 1800 秒**。可在当前 PowerShell 设置 `$env:BOT_NATIVE_SETUP_TIMEOUT = '3600'` 后启动，允许 **1–86400 秒整数**；不改系统环境变量。该设置不替代 `-WaitTimeout`，也不限制已运行 Bot 的模型 / 工具。元数据与面板 wheel 的每次 HTTPS 下载另有 **默认 300 秒**的单次总预算，可在当前会话设置 `$env:BOT_NATIVE_DOWNLOAD_TIMEOUT = '600'`，允许 **1–3600 秒整数**；预算覆盖 TCP / TLS、响应头和正文每次底层接收，持续少量回包不会重置。系统 DNS 解析不可由 socket timeout 中断，解析时间计入预算并在返回后拒绝超额结果；不宣称 OS 解析一定能准时返回。无自动重试或后台下载线程。
 
 安装超时只收回该步骤的专属进程树（包括 venv 启动器与构建子进程），不按进程名杀服务、不终止已运行 Bot；不会自动重试。缓存与已有文件保留，但中断的 pip 不是事务，**不保证 venv 字节未变化或已经完整**。清理确认后可明确点击“启动”重试，仍安装完整原始依赖并执行 `pip check`，两者成功才写完成标记。每个步骤在启动前先写上述保护标记，确认清理后才移除；若进程意外退出、清理未确认或标记移除失败，保留保护并禁止再次安装；必须先核查归属，不要删除标记或另开安装器绕过。创建 Job／原子归属不受支持时安全失败，不退回无隔离安装。
 
@@ -74,7 +74,7 @@ Windows 10 / Windows Server 2016 及以上的原生安装步骤使用独立 Wind
 .\tools\windows-native.ps1 info -DataDir 'C:\BotData\MyFull' -RuntimeName 'my-full'
 ```
 
-示例 URL / 模型只是占位。`-ApiKeyEnv` 是当前 Windows 进程中**环境变量名称**，绝不是 Key 值；应由受保护的会话 / 秘密管理工具提供。不要在命令历史、脚本、argv 或聊天中写密钥。`chat` 正文仅从 stdin 读取；Windows PowerShell 5.1 的非 ASCII 管道编码需单独核对，精确中文输入优先网页。`-OwnerQQ` 只配置授权所有者，不启用适配器或登录。
+示例 URL / 模型只是占位。`-ApiKeyEnv` 是当前 Windows 进程中**环境变量名称**，绝不是 Key 值；应由受保护的会话 / 秘密管理工具提供。不要在命令历史、脚本、argv 或聊天中写密钥。`chat` 正文仅从 stdin 读取；原生 CLI 固定 UTF-8，PowerShell 5.1 启动器仅在本次调用期间设置并恢复原生管道与控制台输出编码，支持中文 / emoji，不把正文放到 argv。`-OwnerQQ` 只配置授权所有者，不启用适配器或登录。
 
 ## 权限、完整能力与外部依赖
 

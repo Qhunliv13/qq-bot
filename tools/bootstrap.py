@@ -41,12 +41,14 @@ DEFAULT_DATA_DIR = Path.home() / ".local" / "share" / "qhunliv-bot"
 MARKER = ".bootstrap.json"
 
 
-def data_path(raw):
-    """Resolve state outside the checkout, rejecting compose-env injection."""
+def data_path(raw, *, compose_env=True):
+    """Resolve external state; apply quote restrictions only for Compose serialization."""
     path = Path(raw).expanduser().resolve()
     if path == REPO_ROOT or REPO_ROOT in path.parents or path in REPO_ROOT.parents:
         raise ValueError("data directory must be outside (not an ancestor of) this repository")
-    if any(ord(c) < 32 for c in str(path)) or "'" in str(path):
+    if any(ord(c) < 32 for c in str(path)) or (compose_env and "'" in str(path)):
+        # Native argv accepts apostrophes; only the single-quoted Compose env file
+        # requires this extra restriction. Controls stay invalid in both modes.
         raise ValueError("data directory contains unsupported control or quote characters")
     return path
 

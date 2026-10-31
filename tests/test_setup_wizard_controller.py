@@ -463,3 +463,37 @@ def test_native_log_tail_read_is_bounded(core, tmp_path, monkeypatch):
     monkeypatch.setattr(type(controller.data), "open", open_log)
     assert "下载并安装原生依赖" in controller.snapshot()["message"]
     assert reads == [4096]
+
+
+@pytest.mark.parametrize("print_url,opened", [(False, True), (False, False), (True, False)])
+def test_setup_browser_output_is_explicit_and_failure_has_safe_manual_hint(core, tmp_path, monkeypatch, capsys, print_url, opened):
+    """A failed automatic open never reveals a capability without explicit output consent."""
+    from tools import setup_wizard as wizard
+
+    url = "http://127.0.0.1:26185/#token=synthetic-local-capability-only"
+
+    class Server:
+        """Provide only a fixed private tab URL and inert context/lifecycle behavior."""
+
+        def __init__(self, _controller):
+            self.url = url
+
+        def __enter__(self):
+            """Return the inert server without binding a real socket."""
+            return self
+
+        def __exit__(self, *_args):
+            """Leave no live server or resources after the controlled interrupt."""
+
+        def serve_forever(self, **_kwargs):
+            """End only the current synthetic tab loop."""
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(wizard, "Server", Server)
+    monkeypatch.setattr(wizard.webbrowser, "open", lambda _url: opened)
+    wizard.serve(core, tmp_path / "uncreated", "test-wizard", print_url=print_url)
+    output = capsys.readouterr().out
+    assert (url in output) is print_url
+    assert ("BOT_SETUP_URL=" in output) is print_url
+    if not opened:
+        assert ("完整链接" if print_url else "wizard --no-browser") in output

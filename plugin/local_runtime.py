@@ -161,18 +161,70 @@ def ensure_private_windows_path(path, *, create=True):
     return _require_private_windows_path(path, directory=True)
 
 
-def _write_private_windows_json(path, value):
-    """Publish credentials exclusively after a new file has a verified private DACL."""
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+def _unlink_owned_windows_json(path, identity, *, require_private=True):
+    """Remove only the captured regular file, including a failed unpublished write.
+
+    ACL failure can leave an empty, not-yet-private file, so rollback may skip its
+    DACL check but never its handle-derived identity or reparse-point checks.
+    """
+    if identity is None:
+        return
     try:
-        _protect_new_windows_path(path, directory=False)
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            descriptor = None
-            json.dump(value, stream, ensure_ascii=False, allow_nan=False)
-            stream.write("\n")
-    finally:
-        if descriptor is not None:
-            os.close(descriptor)
+        if require_private:
+            _require_private_windows_path(path)
+        # Recheck after ACL inspection: a replacement must never inherit ownership.
+        info = path.lstat()
+        if (stat.S_ISREG(info.st_mode)
+                and not getattr(info, "st_file_attributes", 0) & 0x400
+                and (info.st_dev, info.st_ino) == identity):
+            path.unlink()
+    except (OSError, RuntimeError):
+        # Missing, inaccessible or foreign paths remain untouched on every retry.
+        return
+
+
+def _write_private_windows_json(path, value):
+    """Write exclusively after private ACL verification; roll back only our own file.
+
+    Capture identity from the live descriptor before protection or serialization.
+    A stream never owns that descriptor, so even flush/close failure retains the
+    identity needed for rollback; success returns it without adopting a new path.
+    """
+    path = Path(path)
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    identity = None
+    try:
+        try:
+            info = os.fstat(descriptor)
+            identity = (info.st_dev, info.st_ino)
+            _protect_new_windows_path(path, directory=False)
+            current = path.lstat()
+            if (not stat.S_ISREG(current.st_mode)
+                    or getattr(current, "st_file_attributes", 0) & 0x400
+                    or (current.st_dev, current.st_ino) != identity):
+                raise RuntimeError("local_windows_endpoint_changed")
+            with os.fdopen(descriptor, "w", encoding="utf-8", closefd=False) as stream:
+                json.dump(value, stream, ensure_ascii=False, allow_nan=False)
+                stream.write("\n")
+        finally:
+            # Keep the descriptor through stream close. A close error can mean
+            # either released or still-open: never blindly retry a recycled fd.
+            try:
+                os.close(descriptor)
+            except OSError:
+                try:
+                    current = os.fstat(descriptor)
+                    if identity is not None and (current.st_dev, current.st_ino) == identity:
+                        os.close(descriptor)
+                except OSError:
+                    # Retry only once and only for the same still-open file.
+                    pass
+                raise
+    except BaseException:
+        # Cancellation also rolls back; no failure may be mistaken for publication.
+        _unlink_owned_windows_json(path, identity, require_private=False)
+        raise
+    return identity
 
 
 def windows_instance_hash(root):
@@ -395,9 +447,9 @@ class LocalRuntime:
                       "port": self._server.sockets[0].getsockname()[1], "pid": os.getpid(),
                       "nonce": self._nonce, "instance": str(self.root.resolve()),
                       "token": self._token}
-            _write_private_windows_json(self.endpoint_path, record)
-            info = self.endpoint_path.lstat()
-            self._endpoint_identity = (info.st_dev, info.st_ino)
+            # The writer owns rollback until success and returns the original
+            # descriptor's identity; never adopt a replacement via a fresh lstat.
+            self._endpoint_identity = _write_private_windows_json(self.endpoint_path, record)
             await self._server.start_serving()
         except BaseException:
             if self._server is not None:
@@ -550,16 +602,7 @@ class LocalRuntime:
 
     def _unlink_owned_endpoint(self):
         """Delete only this boot's still-private locator, never another instance's file."""
-        if self._endpoint_identity is None:
-            return
-        try:
-            _require_private_windows_path(self.endpoint_path)
-            info = self.endpoint_path.lstat()
-            if (info.st_dev, info.st_ino) == self._endpoint_identity:
-                self.endpoint_path.unlink()
-        except (OSError, RuntimeError):
-            # An untrusted replacement remains untouched even during shutdown.
-            return
+        _unlink_owned_windows_json(self.endpoint_path, self._endpoint_identity)
 
     async def close_acceptor(self):
         """Reject new work but preserve accepted model operations and their output sink."""

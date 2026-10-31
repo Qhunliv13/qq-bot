@@ -1,7 +1,9 @@
 """Offline native-asset tests: no real pip installs, models, servers, or vendor edits."""
 
 import ast
+from collections import deque
 import hashlib
+import importlib.util
 import io
 import json
 import os
@@ -12,11 +14,15 @@ import subprocess
 import sys
 from types import SimpleNamespace
 import urllib.error
+import venv
 import zipfile
 
 import pytest
 
 from tools import native_assets as assets
+
+# Keep the real read-only probe available when provisioning fixtures stub readiness.
+_REAL_DEPENDENCY_PROBE = assets._dependencies_valid
 
 
 @pytest.fixture
@@ -60,6 +66,9 @@ def fake_run(monkeypatch):
             (venv / "pyvenv.cfg").write_text("include-system-site-packages = false\nversion = " + ".".join(map(str, sys.version_info[:3])) + "\n", encoding="utf-8")
 
     monkeypatch.setattr(assets, "_run", run)
+    # Ordinary provisioning tests use a synthetic interpreter. Dedicated probe
+    # tests below execute the real isolated Python against metadata fixtures.
+    monkeypatch.setattr(assets, "_dependencies_valid", lambda *args: True)
     if os.name == "nt":
         from plugin import local_runtime
 
@@ -685,6 +694,490 @@ def test_missing_vendor_and_raw_network_failures_are_safe(tmp_path, monkeypatch)
     with pytest.raises(assets.AssetError) as caught:
         assets._download(assets.PYPI_JSON_URL, assets.MAX_METADATA_BYTES, "pypi.org")
     assert "proxy-private-secret" not in str(caught.value)
+
+
+@pytest.mark.parametrize("configuration", [
+    "include-system-site-packages = false\ninclude-system-site-packages = true\n",
+    "include-system-site-packages = true\ninclude-system-site-packages = false\n",
+    "include-system-site-packages = false\nINCLUDE-SYSTEM-SITE-PACKAGES = false\n",
+    "include-system-site-packages = false\nversion = 3.13.12\n",
+])
+def test_duplicate_venv_fields_are_never_accepted(tmp_path, configuration):
+    """Any repeated critical field is ambiguous, including equal-value duplicates."""
+    python = tmp_path / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    python.parent.mkdir(parents=True)
+    python.write_bytes(b"isolated fixture")
+    (python.parent.parent / "pyvenv.cfg").write_text(
+        configuration + "version = " + ".".join(map(str, sys.version_info[:3])) + "\n", encoding="utf-8")
+    assert not assets._venv_valid(python)
+
+
+@pytest.mark.parametrize("version", ["3.13.", "3.13.12garbage", "3.13.12.1", "3.13.12 #comment", "3.12.1", "3.14.0"])
+def test_venv_version_requires_complete_matching_release(tmp_path, monkeypatch, version):
+    """A matching regex prefix cannot authorize malformed or different-minor configs."""
+    monkeypatch.setattr(assets.sys, "version_info", (3, 13, 12))
+    python = tmp_path / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    python.parent.mkdir(parents=True)
+    python.write_bytes(b"fixture")
+    (python.parent.parent / "pyvenv.cfg").write_text(
+        "include-system-site-packages = false\nversion = " + version + "\n", encoding="utf-8")
+    assert not assets._venv_valid(python)
+
+
+def test_venv_unique_isolation_fields_allow_ordinary_spacing(tmp_path):
+    """Keep normal venv-generated configuration compatible without weakening duplicates."""
+    python = tmp_path / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    python.parent.mkdir(parents=True)
+    python.write_bytes(b"fixture")
+    (python.parent.parent / "pyvenv.cfg").write_text(
+        "home = safe fixture\n Include-System-Site-Packages = FALSE \n version = "
+        + ".".join(map(str, sys.version_info[:3])) + "\n", encoding="utf-8")
+    assert assets._venv_valid(python)
+
+
+@pytest.mark.parametrize("value", ["", "0", "3601", "-1", "1.5", "secret", "9999999999"])
+def test_download_budget_invalid_never_opens(monkeypatch, value):
+    """Validate explicit budget before making even an allowlisted connection."""
+    monkeypatch.setenv(assets.DOWNLOAD_TIMEOUT_ENV, value)
+
+    def forbidden(*args, **kwargs):
+        """Any opener construction would violate early configuration validation."""
+        raise AssertionError("unexpected open")
+
+    monkeypatch.setattr(assets.urllib.request, "build_opener", forbidden)
+    with pytest.raises(assets.AssetError, match="1 to 3600"):
+        assets._download(assets.PYPI_JSON_URL, 100, "pypi.org")
+
+
+@pytest.mark.parametrize("framing", ["length", "chunked", "header", "chunk-header"])
+def test_actual_http_response_drip_shares_single_budget(monkeypatch, framing):
+    """Real http.client read/header/chunk loops cannot hide slow raw receives."""
+    elapsed = [0.0]
+    timeouts = []
+    streams = []
+    url = "https://files.pythonhosted.org/a.whl"
+    if framing == "length":
+        fragments = [b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\n", b"a", b"b", b"c", b"d"]
+    elif framing == "chunked":
+        fragments = [b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n",
+                     b"4\r\n", b"a", b"b", b"c", b"d", b"\r\n0\r\n\r\n"]
+    elif framing == "chunk-header":
+        fragments = [b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n", b"0", b"0", b"0", b"0", b"4\r\n"]
+    else:
+        fragments = [b"HTTP/1.1 200 OK\r\nX-Slow: ", b"a", b"b", b"c", b"d", b"\r\n\r\n"]
+    pieces = deque(fragments)
+
+    class Drip(io.RawIOBase):
+        """Model successful socket receives that each finish before the idle timeout."""
+
+        def readable(self):
+            """Allow the genuine HTTP parser's BufferedReader to consume fragments."""
+            return True
+
+        def readinto(self, buffer):
+            """Advance virtual time while honoring the current dynamic socket timeout."""
+            if not pieces:
+                return 0
+            wait = 0.3
+            if timeouts[-1] < wait:
+                elapsed[0] += timeouts[-1]
+                raise TimeoutError("private-secret timeout")
+            elapsed[0] += wait
+            fragment = pieces.popleft()
+            buffer[:len(fragment)] = fragment
+            return len(fragment)
+
+    class Socket:
+        """Expose only the ordinary socket APIs needed by the guarded HTTP reader."""
+
+        def settimeout(self, timeout):
+            """Capture shrinking timeouts rather than forgiving the last received byte."""
+            timeouts.append(timeout)
+
+        def makefile(self, mode, buffering):
+            """Require unbuffered raw access so every underlying receive is guarded."""
+            assert buffering == 0
+            raw = Drip()
+            streams.append(raw)
+            return raw
+
+    def open_response(request, timeout):
+        """Build the same response factory used by the real HTTPS connection offline."""
+        assert timeout == 1
+        connection = assets._DeadlineHTTPSConnection("files.pythonhosted.org", deadline=1)
+        response = connection._response(Socket())
+        try:
+            response.begin()
+        except BaseException:
+            response.close()
+            raise
+        response.url = url
+        return response
+
+    monkeypatch.setenv(assets.DOWNLOAD_TIMEOUT_ENV, "1")
+    monkeypatch.setattr(assets.time, "monotonic", lambda: elapsed[0])
+    monkeypatch.setattr(assets.urllib.request, "build_opener", lambda *args: SimpleNamespace(open=open_response))
+    with pytest.raises(assets.AssetError) as caught:
+        assets._download(url, 100, "files.pythonhosted.org")
+    assert "private-secret" not in str(caught.value)
+    assert elapsed[0] == pytest.approx(1)
+    assert timeouts == sorted(timeouts, reverse=True)
+    assert all(stream.closed for stream in streams)
+    assert pieces  # The over-budget body/line was not drained after failure.
+
+
+def test_download_budgets_reset_only_between_distinct_requests(monkeypatch):
+    """Metadata and wheel each get a finite budget, never an unbounded aggregate retry."""
+    elapsed = [0.0]
+    deadlines = []
+    url = assets.PYPI_JSON_URL
+
+    class Response(io.BytesIO):
+        """Return a small complete response without any actual transport."""
+        headers = {}
+
+        def geturl(self):
+            """Keep endpoint allowlisting active in the normal download path."""
+            return url
+
+    def opener(*handlers):
+        """Inspect only per-opener deadlines; never mutate the global urllib opener."""
+        deadline = next(handler.deadline for handler in handlers if isinstance(handler, assets._DeadlineHTTPSHandler))
+        deadlines.append(deadline)
+        return SimpleNamespace(open=lambda *args, **kwargs: Response(b"ok"))
+
+    monkeypatch.setenv(assets.DOWNLOAD_TIMEOUT_ENV, "2")
+    monkeypatch.setattr(assets.time, "monotonic", lambda: elapsed[0])
+    monkeypatch.setattr(assets.urllib.request, "build_opener", opener)
+    before = assets.urllib.request._opener
+    assert assets._download(url, 100, "pypi.org") == b"ok"
+    elapsed[0] = 5
+    assert assets._download(url, 100, "pypi.org") == b"ok"
+    assert deadlines == [2, 7]
+    assert assets.urllib.request._opener is before
+
+
+def test_download_rejects_budget_consumed_during_open(monkeypatch):
+    """Header/connect time is not forgiven when the opener finally returns a body."""
+    elapsed = [0.0]
+    response = io.BytesIO(b"should not be consumed")
+
+    def open_response(*args, **kwargs):
+        """Model an OS resolver returning after its uninterruptible budget boundary."""
+        elapsed[0] = 3
+        return response
+
+    monkeypatch.setenv(assets.DOWNLOAD_TIMEOUT_ENV, "2")
+    monkeypatch.setattr(assets.time, "monotonic", lambda: elapsed[0])
+    monkeypatch.setattr(assets.urllib.request, "build_opener", lambda *args: SimpleNamespace(open=open_response))
+    with pytest.raises(assets.AssetError, match="total time budget"):
+        assets._download(assets.PYPI_JSON_URL, 100, "pypi.org")
+    assert response.closed
+
+
+def test_tcp_candidates_consume_one_deadline_and_close_failures(monkeypatch):
+    """DNS plus multiple address attempts cannot each receive a fresh full budget."""
+    elapsed = [0.0]
+    sockets = []
+
+    class Socket:
+        """Provide deterministic offline connect latency without opening real sockets."""
+
+        def __init__(self):
+            self.timeouts = []
+            self.closed = False
+            sockets.append(self)
+
+        def settimeout(self, timeout):
+            """Record per-attempt remaining budgets before and after connection."""
+            self.timeouts.append(timeout)
+
+        def connect(self, target):
+            """Fail the first candidate after spending half of the shared budget."""
+            elapsed[0] += 1
+            if len(sockets) == 1:
+                raise OSError("private-secret connect")
+
+        def close(self):
+            """Record closure of only sockets owned by the failed attempt."""
+            self.closed = True
+
+    def resolve(*args):
+        """Charge resolver latency while returning ordinary address candidates."""
+        elapsed[0] += 0.5
+        return [(2, 1, 6, "", ("fixture", 443))] * 2
+
+    monkeypatch.setattr(assets.time, "monotonic", lambda: elapsed[0])
+    monkeypatch.setattr(assets.socket, "getaddrinfo", resolve)
+    monkeypatch.setattr(assets.socket, "socket", lambda *args: Socket())
+    connection = assets._DeadlineHTTPSConnection("files.pythonhosted.org", deadline=3)
+    assert connection._connect_socket(("fixture", 443), 3, None) is sockets[1]
+    assert sockets[0].closed and not sockets[1].closed
+    assert sockets[0].timeouts == [2.5]
+    assert sockets[1].timeouts == [1.5, 0.5]
+
+
+def test_tcp_rejects_late_dns_without_connecting(monkeypatch):
+    """Document the OS-owned resolver exception but never continue its late result."""
+    elapsed = [0.0]
+
+    def resolve(*args):
+        """Represent an OS resolver which cannot be interrupted by socket timeouts."""
+        elapsed[0] = 5
+        return [(2, 1, 6, "", ("fixture", 443))]
+
+    def forbidden(*args):
+        """No TCP socket may open after the resolver has exhausted the budget."""
+        raise AssertionError("late socket creation")
+
+    monkeypatch.setattr(assets.time, "monotonic", lambda: elapsed[0])
+    monkeypatch.setattr(assets.socket, "getaddrinfo", resolve)
+    monkeypatch.setattr(assets.socket, "socket", forbidden)
+    connection = assets._DeadlineHTTPSConnection("files.pythonhosted.org", deadline=3)
+    with pytest.raises(assets.AssetError, match="total time budget"):
+        connection._connect_socket(("fixture", 443), 3, None)
+
+
+@pytest.fixture
+def metadata_venv(tmp_path):
+    """Create no-pip stdlib venv and copy only the existing packaging parser fixture."""
+    environment = tmp_path / "metadata-venv"
+    venv.EnvBuilder(with_pip=False).create(environment)
+    python = environment / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    site = environment / ("Lib/site-packages" if os.name == "nt" else
+                          "lib/python%d.%d/site-packages" % sys.version_info[:2])
+    spec = importlib.util.find_spec("pip._vendor.packaging")
+    assert spec and spec.origin
+    packaging = site / "pip" / "_vendor" / "packaging"
+    packaging.parent.mkdir(parents=True)
+    shutil.copytree(Path(spec.origin).parent, packaging, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    return python, site
+
+
+def _distribution(site, name, version, requirements=()):
+    """Write only metadata fixtures, never install an actual runtime dependency."""
+    directory = site / (name.replace("-", "_") + "-" + version + ".dist-info")
+    directory.mkdir()
+    (directory / "METADATA").write_text(
+        "Metadata-Version: 2.1\nName: " + name + "\nVersion: " + version + "\n"
+        + "".join("Requires-Dist: " + item + "\n" for item in requirements), encoding="utf-8")
+    package = site / name.replace("-", "_")
+    package.mkdir(exist_ok=True)
+    (package / "__init__.py").write_text("# Metadata-only fixture; never imported.\n", encoding="utf-8")
+    (directory / "RECORD").write_text(package.name + "/__init__.py,,\n", encoding="utf-8")
+    return directory
+
+
+def test_real_metadata_probe_handles_markers_extras_versions_and_missing(metadata_venv):
+    """Actual venv Python checks the entire applicable closure, not just import names."""
+    python, site = metadata_venv
+    _distribution(site, "root", "2.0", ["child>=3; extra == 'async'", "ignored; python_version < '3.0'"])
+    _distribution(site, "child", "3.1", ["leaf~=1.0"])
+    leaf = _distribution(site, "leaf", "1.2")
+    assert assets._dependencies_valid(python, ["root[async]>=2", "missing; python_version < '3.0'"])
+    assert not assets._dependencies_valid(python, ["root[async]>2"])
+    shutil.rmtree(leaf)
+    assert not assets._dependencies_valid(python, ["root[async]>=2"])
+    assert assets._dependencies_valid(python, ["root>=2"])
+
+
+@pytest.mark.parametrize("failure", ["empty", "duplicate", "malformed", "parser-missing", "direct-url", "record-missing", "package-missing"])
+def test_real_metadata_probe_rejects_broken_environment(metadata_venv, failure):
+    """Missing metadata/parser, duplicate installs and ambiguous requirement sources fail closed."""
+    python, site = metadata_venv
+    if failure != "empty":
+        info = _distribution(site, "root", "1.0", ["bad requirement ; invalid === marker"] if failure == "malformed" else [])
+        if failure == "record-missing":
+            (info / "RECORD").unlink()
+        elif failure == "package-missing":
+            shutil.rmtree(site / "root")
+    if failure == "duplicate":
+        _distribution(site, "root", "2.0")
+    if failure == "parser-missing":
+        shutil.rmtree(site / "pip")
+    requirement = "root @ https://private-secret.invalid/root.whl" if failure == "direct-url" else "root"
+    assert not assets._dependencies_valid(python, [requirement])
+
+
+def test_real_probe_does_not_load_pth_customizers_or_write_bytecode(metadata_venv, monkeypatch):
+    """The read-only probe ignores global/python-path injection and executable site hooks."""
+    python, site = metadata_venv
+    _distribution(site, "root", "1.0")
+    (site / "sitecustomize.py").write_text("raise SystemExit(33)\n", encoding="utf-8")
+    (site / "evil.pth").write_text("import sys; sys.exit(34)\n", encoding="utf-8")
+    monkeypatch.setenv("PYTHONPATH", str(site))
+    before = {str(path): (path.read_bytes(), path.stat().st_mtime_ns) for path in site.rglob("*") if path.is_file()}
+    assert assets._dependencies_valid(python, ["root"])
+    after = {str(path): (path.read_bytes(), path.stat().st_mtime_ns) for path in site.rglob("*") if path.is_file()}
+    assert before == after
+
+
+def test_metadata_probe_has_fixed_finite_timeout_and_secret_safe_failure(tmp_path, monkeypatch):
+    """A stalled trusted metadata child is reaped by subprocess, never reported ready."""
+    calls = []
+
+    def timeout(arguments, **kwargs):
+        """Capture a bounded owner timeout without starting or orphaning any process."""
+        calls.append((arguments, kwargs))
+        raise subprocess.TimeoutExpired("private-secret", kwargs["timeout"])
+
+    monkeypatch.setattr(assets.subprocess, "run", timeout)
+    monkeypatch.setattr(assets, "run_setup_step", timeout)
+    assert not assets._dependencies_valid(tmp_path / ".venv/Scripts/python.exe", ["root"])
+    arguments, options = calls[0]
+    assert arguments[1:5] == ["-I", "-S", "-B", "-c"]
+    assert options["timeout"] == 20
+    if os.name != "nt":
+        assert not options["shell"]
+        assert options["stdout"] is subprocess.DEVNULL and options["stderr"] is subprocess.DEVNULL
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows venv redirector process containment")
+def test_metadata_probe_cleanup_uncertainty_never_starts_repair(vendor_repo, tmp_path, fake_run, official_download, monkeypatch):
+    """Unknown probe teardown must propagate failure, never become an install trigger."""
+    data = tmp_path / "state"
+    assets.prepare_assets(data, vendor_repo)
+    monkeypatch.setattr(assets, "_dependencies_valid", _REAL_DEPENDENCY_PROBE)
+    original_calls = len(fake_run)
+
+    def uncertain(*args, **kwargs):
+        """Model supervisor uncertainty without leaving any real child process."""
+        raise assets.SetupCleanupError("private-secret")
+
+    def forbidden(*args, **kwargs):
+        """Neither pip repair nor download is safe while ownership remains unknown."""
+        raise AssertionError("unexpected install/download")
+
+    monkeypatch.setattr(assets, "run_setup_step", uncertain)
+    monkeypatch.setattr(assets, "_run", forbidden)
+    monkeypatch.setattr(assets, "_download", forbidden)
+    marker = data / "runtime" / assets.DEPENDENCY_MARKER
+    before = marker.read_bytes()
+    with pytest.raises(assets.AssetError, match="cleanup could not be confirmed") as caught:
+        assets.inspect_assets(data, vendor_repo)
+    assert "private-secret" not in str(caught.value)
+    guard = data / "runtime" / assets.SETUP_REVIEW_MARKER
+    assert json.loads(guard.read_text(encoding="utf-8")) == {"schema": 1, "review_required": True}
+    report = assets.inspect_assets(data, vendor_repo)
+    assert not report["checks"]["setup_cleanup"] and not report["checks"]["dependencies"]
+    with pytest.raises(assets.AssetError, match="ownership review"):
+        assets.prepare_assets(data, vendor_repo)
+    assert marker.read_bytes() == before and len(fake_run) == original_calls
+    with pytest.raises(assets.AssetError, match="ownership review"):
+        assets._dependencies_valid(assets._paths(data, vendor_repo)["python"], ["root"])
+
+
+@pytest.mark.parametrize("failure", ["replaced", "missing", "incompatible"])
+def test_stale_marker_is_checked_and_dependencies_repaired(vendor_repo, tmp_path, fake_run, official_download, monkeypatch, failure):
+    """A same-minor empty/reduced venv can never be ready just because its marker survived."""
+    data = tmp_path / "state"
+    paths = assets.prepare_assets(data, vendor_repo)
+    marker = data / "runtime" / assets.DEPENDENCY_MARKER
+    states = [False]
+    original_run = assets._run
+    if failure == "replaced":
+        environment = paths["python"].parent.parent
+        shutil.rmtree(environment)
+        original_run([sys.executable, "-m", "venv", str(environment)], environment.parent, "venv creation")
+
+    def valid(python, dependencies):
+        """Model actual package loss/version mismatch until a complete install succeeds."""
+        assert python == paths["python"]
+        assert dependencies == assets._source(vendor_repo)[2]
+        return states[0]
+
+    def repair(arguments, cwd, label):
+        """The old completion must be invalidated before any repairing pip invocation."""
+        if label == "dependency installation":
+            assert not marker.exists()
+            states[0] = True
+        original_run(arguments, cwd, label)
+
+    monkeypatch.setattr(assets, "_dependencies_valid", valid)
+    assert not assets.inspect_assets(data, vendor_repo)["checks"]["dependencies"]
+    monkeypatch.setattr(assets, "_run", repair)
+    count = len(fake_run)
+    assert assets.prepare_assets(data, vendor_repo) == paths
+    assert [label for _, _, label in fake_run[count:]] == ["dependency installation", "dependency verification"]
+    assert assets.inspect_assets(data, vendor_repo)["ready"]
+
+
+def test_actual_empty_same_minor_venv_invalidates_existing_completion(vendor_repo, tmp_path, official_download, monkeypatch):
+    """A real stdlib empty venv replacing a successful same-minor install is not ready."""
+    data = tmp_path / "state"
+    actual_probe = assets._dependencies_valid
+    completed = [True]
+    calls = []
+
+    def setup(arguments, cwd, label):
+        """Only create a genuine no-pip fixture venv; never run installation tools."""
+        calls.append(label)
+        if label == "venv creation":
+            venv.EnvBuilder(with_pip=False).create(Path(arguments[-1]))
+        elif label == "dependency installation" and not completed[0]:
+            raise assets.AssetError("fixture repair intentionally stopped before pip")
+
+    def valid(python, dependencies):
+        """First model the old completed install, then inspect the real empty replacement."""
+        return completed[0] or actual_probe(python, dependencies)
+
+    monkeypatch.setattr(assets, "_run", setup)
+    monkeypatch.setattr(assets, "_dependencies_valid", valid)
+    if os.name == "nt":
+        from plugin import local_runtime
+
+        def private_cache(path, *, create=True):
+            """Create fixture cache without changing any real Windows ACL."""
+            path.mkdir(exist_ok=True)
+            return path
+
+        monkeypatch.setattr(local_runtime, "ensure_private_windows_path", private_cache)
+    paths = assets.prepare_assets(data, vendor_repo)
+    environment = paths["python"].parent.parent
+    shutil.rmtree(environment)
+    venv.EnvBuilder(with_pip=False).create(environment)
+    completed[0] = False
+    assert assets._venv_valid(paths["python"])
+    assert not assets.inspect_assets(data, vendor_repo)["checks"]["dependencies"]
+    with pytest.raises(assets.AssetError, match="intentionally stopped"):
+        assets.prepare_assets(data, vendor_repo)
+    assert calls[-1] == "dependency installation"
+    assert not (data / "runtime" / assets.DEPENDENCY_MARKER).exists()
+
+
+def test_legacy_marker_is_readable_then_upgrades_without_pip(vendor_repo, tmp_path, fake_run, official_download, monkeypatch):
+    """Existing healthy schema-1 installations remain usable and need no dependency reinstall."""
+    data = tmp_path / "state"
+    paths = assets.prepare_assets(data, vendor_repo)
+    marker = data / "runtime" / assets.DEPENDENCY_MARKER
+    legacy = json.loads(marker.read_text(encoding="utf-8"))
+    legacy.pop("verification")
+    legacy["schema"] = 1
+    assets._write_json(marker, legacy)
+    original = marker.read_bytes()
+    assert assets.inspect_assets(data, vendor_repo)["ready"]
+    assert marker.read_bytes() == original
+
+    def forbidden(*args, **kwargs):
+        """A healthy legacy install must not invoke pip or fetch dashboard assets."""
+        raise AssertionError("unexpected installation")
+
+    monkeypatch.setattr(assets, "_run", forbidden)
+    monkeypatch.setattr(assets, "_download", forbidden)
+    assert assets.prepare_assets(data, vendor_repo) == paths
+    assert json.loads(marker.read_text(encoding="utf-8"))["schema"] == 2
+    assert assets.inspect_assets(data, vendor_repo)["ready"]
+
+
+def test_failed_dependency_repair_never_retains_old_completion(vendor_repo, tmp_path, fake_run, official_download, monkeypatch):
+    """Even a successful pip exit cannot publish completion if actual metadata is incomplete."""
+    data = tmp_path / "state"
+    assets.prepare_assets(data, vendor_repo)
+    monkeypatch.setattr(assets, "_dependencies_valid", lambda *args: False)
+    with pytest.raises(assets.AssetError, match="metadata verification"):
+        assets.prepare_assets(data, vendor_repo)
+    assert not (data / "runtime" / assets.DEPENDENCY_MARKER).exists()
+    assert not assets.inspect_assets(data, vendor_repo)["ready"]
 
 
 def test_module_and_tests_parse_and_have_documented_functions():

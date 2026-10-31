@@ -743,7 +743,7 @@ def test_cli_info_hides_model_key_and_password_unless_explicit(install, capsys):
     assert value["dashboard_url"] == "http://127.0.0.1:6185"
     assert value["readiness_checked"] is False
     assert MODEL["api_key"] not in output and PASSWORD not in output
-    assert native.main(base + ["--show-password"]) == 0
+    assert native.main([word for word in base if word != "--json"] + ["--show-password"]) == 0
     output = capsys.readouterr().out
     assert json.loads(output)["initial_dashboard_password"] == PASSWORD
     assert MODEL["api_key"] not in output
@@ -766,7 +766,7 @@ def test_cli_wizard_delegates_native_core_and_no_browser(tmp_path, monkeypatch):
     monkeypatch.setattr(setup_wizard, "serve", serve)
     data = tmp_path / "external wizard"
     assert native.main(["wizard", "--data-dir", str(data), "--runtime-name", NAME, "--no-browser"]) == 0
-    serve.assert_called_once_with(native, data, NAME, open_browser=False)
+    serve.assert_called_once_with(native, data, NAME, open_browser=False, print_url=True)
     assert not data.exists()
 
 
@@ -882,6 +882,156 @@ def test_instance_lock_refuses_nonallowlisted_names_before_writing(tmp_path, loc
         with native.instance_lock(data, lock_name=lock_name):
             pytest.fail("an untrusted lock path was accepted")
     assert not data.exists()
+
+
+@pytest.mark.parametrize("damage", ["bad-marker", "missing-settings", "bad-settings", "wrong-name"])
+def test_cli_existing_init_validates_without_prompt_or_reset(install, monkeypatch, damage):
+    """An existing marker cannot turn damaged or mismatched saved state into success."""
+    if damage == "bad-marker":
+        (install / native.MARKER).write_text("{invalid", encoding="utf-8")
+    elif damage == "missing-settings":
+        (install / "settings.json").unlink()
+    elif damage == "bad-settings":
+        (install / "settings.json").write_text("{}", encoding="utf-8")
+    before = _snapshot(install)
+    monkeypatch.setattr(native, "collect_model_inputs", Mock(side_effect=AssertionError("must not prompt")))
+    name = "another-name" if damage == "wrong-name" else NAME
+    with pytest.raises((ValueError, OSError)):
+        native.main(["init", "--data-dir", str(install), "--runtime-name", name, "--non-interactive"])
+    assert _snapshot(install) == before
+
+
+def test_cli_existing_init_success_is_verified_and_read_only(install, monkeypatch):
+    """A valid existing install remains idempotent without asking for model inputs."""
+    before = _snapshot(install)
+    monkeypatch.setattr(native, "collect_model_inputs", Mock(side_effect=AssertionError("must not prompt")))
+    assert native.main(["init", "--data-dir", str(install), "--runtime-name", NAME, "--non-interactive"]) == 0
+    assert _snapshot(install) == before
+
+
+def test_native_cli_accepts_apostrophe_without_loosening_compose_paths(tmp_path, monkeypatch):
+    """Native argv supports ordinary usernames while Compose keeps serialization safety."""
+    data = tmp_path / "O'Neil" / "Full"
+    doctor = Mock()
+    monkeypatch.setattr(native, "check_engine", doctor)
+    assert native.main(["doctor", "--data-dir", str(data)]) == 0
+    doctor.assert_called_once_with(data.resolve())
+    assert not data.exists()
+    with pytest.raises(ValueError, match="quote"):
+        native.bootstrap.data_path(str(data))
+
+
+@pytest.mark.parametrize("flags", [
+    ["info", "--json", "--show-password"], ["doctor", "--json"],
+    ["health", "--show-password"], ["info", "--no-browser"], ["up", "--print-setup-url"],
+])
+def test_cli_rejects_conflicting_options_before_state_or_requests(tmp_path, monkeypatch, flags):
+    """Machine-readable metadata never includes passwords and flags stay command-specific."""
+    data = tmp_path / "uncreated"
+    monkeypatch.setattr(native, "load_install", Mock(side_effect=AssertionError("must not read")))
+    with pytest.raises(SystemExit) as failure:
+        native.main([*flags, "--data-dir", str(data)])
+    assert failure.value.code == 2
+    assert not data.exists()
+
+
+@pytest.mark.parametrize("options,expected", [([], False), (["--no-browser"], True), (["--print-setup-url"], True)])
+def test_cli_setup_capability_output_requires_explicit_request(tmp_path, monkeypatch, options, expected):
+    """Automatic native mode is quiet; manual use and launcher protocol are explicit."""
+    serve = Mock()
+    monkeypatch.setattr(setup_wizard, "serve", serve)
+    data = tmp_path / "uncreated"
+    assert native.main(["wizard", "--data-dir", str(data), "--runtime-name", NAME, *options]) == 0
+    serve.assert_called_once_with(native, data, NAME, open_browser="--no-browser" not in options, print_url=expected)
+
+
+@pytest.mark.parametrize("bom", [b"", b"\xef\xbb\xbf"])
+@pytest.mark.parametrize("encoding", ["cp936", "cp1252", "utf-8"])
+def test_native_cli_utf8_bytes_are_independent_of_inherited_locale(install, monkeypatch, encoding, bom):
+    """Use actual text wrappers to preserve Chinese and emoji in both directions."""
+    prompt = "你好，原生聊天 🐍"
+    reply = {"ok": True, "outputs": [{"components": [{"text": "实际中文回复 🐍"}]}]}
+    source = io.BytesIO(bom + prompt.encode("utf-8"))
+    output = io.BytesIO()
+    error = io.BytesIO()
+    streams = [io.TextIOWrapper(source, encoding=encoding), io.TextIOWrapper(output, encoding=encoding),
+               io.TextIOWrapper(error, encoding=encoding)]
+    request = Mock(return_value=reply)
+    monkeypatch.setattr(native, "local_request", request)
+    try:
+        # print resolves the interpreter's actual sys.stdout, not a replacement
+        # namespace on native. Restore pytest streams before detaching buffers.
+        with monkeypatch.context() as channels:
+            channels.setattr(sys, "stdin", streams[0])
+            channels.setattr(sys, "stdout", streams[1])
+            channels.setattr(sys, "stderr", streams[2])
+            assert native.main(["chat", "--data-dir", str(install), "--runtime-name", NAME]) == 0
+            streams[1].flush()
+            assert json.loads(output.getvalue().decode("utf-8")) == reply
+            request.assert_called_once_with(install, {"op": "run", "prompt": prompt}, timeout=None)
+    finally:
+        for stream in streams:
+            stream.detach()
+
+
+@pytest.mark.parametrize("failure", [False, True])
+def test_main_exit_drains_accepted_work_before_terminating_plugin(install, failure):
+    """A failed/returned main cannot let asyncio.run cancel already accepted local work."""
+    events = []
+
+    async def scenario():
+        """Hold accepted work until intake closes, then require an orderly failure exit."""
+        released = asyncio.Event()
+        accepted = asyncio.Event()
+
+        async def work():
+            """Represent a model operation that must finish rather than be cancelled."""
+            accepted.set()
+            await released.wait()
+            events.append("reply")
+
+        class Runtime:
+            """Reuse the runtime stop contract while observing ordered offline teardown."""
+
+            async def stop(self):
+                """Close admission and drain the held operation without cancelling it."""
+                events.append("intake-closed")
+                released.set()
+                await pending
+                events.append("drained")
+
+        class Plugin:
+            """Expose only the actual host-facing lifecycle fields and cleanup hook."""
+
+            _stopping = False
+            _local_runtime = Runtime()
+            _scope_workers = {}
+            _execution_lock = asyncio.Lock()
+
+            async def terminate(self):
+                """Record explicit first-party cleanup missing from upstream failure paths."""
+                assert self._stopping
+                events.append("terminated")
+
+        pending = asyncio.create_task(work())
+
+        async def main_async(_dashboard):
+            """Initialize the owned plugin and exit only after work has been accepted."""
+            sys.modules["qhunliv_native_host_control"].plugin = Plugin()
+            await accepted.wait()
+            if failure:
+                raise ValueError("synthetic startup failure")
+
+        if failure:
+            with pytest.raises(ValueError, match="synthetic startup failure"):
+                await native.run_host(main_async, install / "dashboard", install)
+        else:
+            await native.run_host(main_async, install / "dashboard", install)
+        assert pending.done() and not pending.cancelled()
+        assert "qhunliv_native_host_control" not in sys.modules
+
+    asyncio.run(scenario())
+    assert events == ["intake-closed", "reply", "drained", "terminated"]
 
 
 def test_all_test_helpers_and_cases_have_docstrings():

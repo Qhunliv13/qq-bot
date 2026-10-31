@@ -6,25 +6,30 @@ code. Its recorded SHA256 pin must agree with the exact-version PyPI JSON over
 HTTPS and with the downloaded bytes before extraction. This is transport-backed integrity, not an author
 signature or an independently authenticated release signature.
 
-Public entry points return pathlib paths. ``inspect_assets`` is strictly
-read-only/offline; ``prepare_assets`` installs only into data/runtime/.venv.
+Public entry points return pathlib paths. ``inspect_assets`` is offline and
+normally read-only; uncertain probe cleanup alone persists the retry guard.
+``prepare_assets`` installs only into data/runtime/.venv.
 Persistent AstrBot state belongs in the returned astrbot_root / "data".
 """
 
 from __future__ import annotations
 
+from functools import partial
 import hashlib
 from html.parser import HTMLParser
+import http.client
 import io
 import json
 import os
 from pathlib import Path, PurePosixPath
 import re
 import shutil
+import socket
 import stat
 import subprocess
 import sys
 import tempfile
+import time
 import tomllib
 from urllib.parse import unquote, urlsplit
 import urllib.request
@@ -53,6 +58,13 @@ DASHBOARD_MARKER = ".native-dashboard.json"
 SETUP_TIMEOUT_ENV = "BOT_NATIVE_SETUP_TIMEOUT"
 DEFAULT_SETUP_TIMEOUT = 1800
 SETUP_REVIEW_MARKER = "setup-review-required.json"
+# Each metadata/wheel request receives its own budget, with no redirect/retry reset.
+# DNS resolution is OS-owned and not interruptible here; the budget is enforced
+# after it returns, and on every socket receive (headers, chunks and body alike).
+DOWNLOAD_TIMEOUT_ENV = "BOT_NATIVE_DOWNLOAD_TIMEOUT"
+DEFAULT_DOWNLOAD_TIMEOUT = 300
+# Read-only metadata probes are local, short-lived trusted code, not pip installs.
+DEPENDENCY_PROBE_TIMEOUT = 20
 _EXCLUDED_DIRS = {".git", "tests", "node_modules", "__pycache__", ".venv", ".pytest_cache", ".ruff_cache"}
 
 
@@ -183,16 +195,145 @@ def _source_matches(root, manifest):
 
 
 def _venv_valid(python):
-    """Require a dedicated venv that explicitly excludes global site-packages."""
+    """Parse unique isolation/version fields, rejecting ambiguity before any child."""
     venv = python.parent.parent
     try:
-        configuration = (venv / "pyvenv.cfg").read_text(encoding="utf-8")
-        version = re.search(r"(?mi)^version\s*=\s*(\d+)\.(\d+)\.", configuration)
+        fields = {}
+        for line in (venv / "pyvenv.cfg").read_text(encoding="utf-8").splitlines():
+            key, separator, value = line.partition("=")
+            key = key.strip().lower()
+            if separator and key in {"version", "include-system-site-packages"}:
+                # site.py uses the final duplicate, so an earlier false is not proof.
+                if key in fields:
+                    return False
+                fields[key] = value.strip()
+        version = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", fields.get("version", ""))
         return (python.is_file() and version is not None
-                and tuple(map(int, version.groups())) == sys.version_info[:2]
-                and bool(re.search(r"(?mi)^include-system-site-packages\s*=\s*false\s*$", configuration)))
+                and tuple(map(int, version.groups()[:2])) == sys.version_info[:2]
+                and fields.get("include-system-site-packages", "").lower() == "false")
     except (OSError, UnicodeError):
         return False
+
+
+# -I -S avoids user/global sites and executable .pth/customizer code. Python 3.12
+# does not set sys.prefix for a venv under -S, so select only its owned site path.
+# pip already supplies packaging in supported venvs; no host dependency is needed.
+_DEPENDENCY_PROBE = r'''
+import csv
+import importlib.metadata as metadata
+import io
+import json
+import os
+from pathlib import Path
+import sys
+
+python, expected_version, requirements = json.loads(sys.argv[1])
+assert os.path.abspath(sys.executable) == os.path.abspath(python)
+assert list(sys.version_info[:2]) == expected_version
+venv = Path(python).parent.parent
+site = venv / ("Lib/site-packages" if os.name == "nt" else
+               "lib/python%d.%d/site-packages" % tuple(expected_version))
+sys.path.insert(0, str(site))
+from pip._vendor.packaging.requirements import Requirement
+from pip._vendor.packaging.utils import canonicalize_name
+from pip._vendor.packaging.version import Version
+
+installed = {}
+for distribution in metadata.distributions(path=[str(site)]):
+    name = canonicalize_name(distribution.metadata["Name"])
+    assert name and name not in installed
+    installed[name] = distribution
+pending = [(Requirement(item), frozenset({""})) for item in requirements]
+visited = set()
+checked_files = set()
+while pending:
+    requirement, parent_extras = pending.pop()
+    if requirement.marker and not any(requirement.marker.evaluate({"extra": extra})
+                                      for extra in parent_extras):
+        continue
+    name = canonicalize_name(requirement.name)
+    distribution = installed[name]
+    assert not requirement.url
+    version = Version(distribution.version)
+    assert requirement.specifier.contains(version, prereleases=True)
+    if name not in checked_files:
+        checked_files.add(name)
+        # Check one recorded importable file per top-level package. This catches
+        # retained dist-info with deleted package roots without an expensive full
+        # RECORD hash/data-file audit or importing dependency code/binary modules.
+        record = distribution.read_text("RECORD")
+        assert record
+        roots = set()
+        for row in csv.reader(io.StringIO(record)):
+            relative = Path(row[0])
+            if (relative.parts and relative.parts[0] not in roots
+                    and relative.parts[0] != ".." and not relative.is_absolute()
+                    and relative.suffix.lower() in {".py", ".pyd", ".so"}):
+                roots.add(relative.parts[0])
+                assert distribution.locate_file(relative).is_file()
+    extras = frozenset({"", *requirement.extras})
+    key = (name, extras)
+    if key not in visited:
+        visited.add(key)
+        pending.extend((Requirement(item), extras) for item in distribution.requires or ())
+'''
+
+
+def _dependencies_valid(python, dependencies):
+    """Check all applicable requirement/extras closures in the actual interpreter.
+
+    This is a read-only, offline metadata/recorded-entrypoint check, not an
+    install, import smoke test or full RECORD hash audit. Run on every readiness
+    decision (no TTL), so a replaced venv or removed distribution cannot reuse a
+    stale marker. The -S probe imports only stdlib and pip's packaging parser,
+    never runtime dependencies/.pth/customizers. Windows uses the existing owned
+    job because even a venv python.exe redirector can start a base-Python child.
+    Normal probes write no files/logs/markers and perform no installation.
+    Unconfirmed Windows cleanup persists the existing fail-closed review guard.
+    """
+    review_marker = python.parent.parent.parent / SETUP_REVIEW_MARKER
+    if review_marker.exists():
+        raise AssetError("Native setup cleanup needs ownership review before dependency probing.")
+    try:
+        arguments = [str(python), "-I", "-S", "-B", "-c", _DEPENDENCY_PROBE,
+                     json.dumps([str(python), list(sys.version_info[:2]), dependencies])]
+        if os.name == "nt":
+            environment = {key: value for key, value in os.environ.items()
+                           if not key.upper().startswith(("PIP_", "PYTHON")) and key.upper() != "VIRTUAL_ENV"}
+            status = run_setup_step(arguments, cwd=str(python.parent.parent), environment=environment,
+                                    timeout=DEPENDENCY_PROBE_TIMEOUT)
+        else:
+            status = subprocess.run(
+                arguments, cwd=str(python.parent.parent), stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                shell=False, check=False, timeout=DEPENDENCY_PROBE_TIMEOUT).returncode
+        return status == 0
+    except SetupCleanupError:
+        # Uncertain ownership cleanup is not ordinary missing metadata. Persist
+        # the same retry barrier used by installs, even on an inspection path.
+        try:
+            _write_json(review_marker, {"schema": 1, "review_required": True})
+        except OSError:
+            raise AssetError("Native dependency probe cleanup could not be confirmed and its review guard could not be saved; "
+                             "do not retry before ownership review.") from None
+        raise AssetError("Native dependency probe cleanup could not be confirmed; installation was not started.") from None
+    except (OSError, subprocess.SubprocessError):
+        # A missing/broken interpreter, metadata parser or timeout is not ready.
+        return False
+
+
+def _dependency_completion(manifest):
+    """Record the new verification contract; actual interpreter checks stay mandatory."""
+    return {"schema": 2, "source_sha256": manifest["source_sha256"],
+            "python": list(sys.version_info[:2]), "complete": True,
+            "verification": "isolated-metadata-v1"}
+
+
+def _dependency_marker_matches(marker, completion):
+    """Accept legacy completion only when the caller also checks actual packages."""
+    legacy = {key: value for key, value in completion.items() if key != "verification"}
+    legacy["schema"] = 1
+    return marker in (completion, legacy)
 
 
 def _run(arguments, cwd, label):
@@ -270,16 +411,141 @@ def _run(arguments, cwd, label):
             raise AssetError("Native setup failed during " + label + "; see runtime/setup.log.")
 
 
+def _remaining(deadline):
+    """Return the shrinking socket budget; never reset it when bytes drip in."""
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise AssetError("The official asset download exceeded its total time budget.")
+    return remaining
+
+
+class _DeadlineReader(io.RawIOBase):
+    """Bound every raw receive, including HTTP header and chunk-framing loops."""
+
+    def __init__(self, stream, sock, deadline):
+        super().__init__()
+        self.stream, self.sock, self.deadline = stream, sock, deadline
+
+    def readable(self):
+        """Allow http.client's BufferedReader to consume this guarded transport."""
+        return True
+
+    def readinto(self, buffer):
+        """Limit a single receive to the remaining total, not a fresh idle timeout."""
+        self.sock.settimeout(_remaining(self.deadline))
+        count = self.stream.readinto(buffer)
+        _remaining(self.deadline)
+        return count
+
+    def close(self):
+        """Close the owning socket file even when parsing or the deadline fails."""
+        try:
+            self.stream.close()
+        finally:
+            super().close()
+
+
+class _DeadlineSocket:
+    """Preserve the real socket lifetime while wrapping only its response reader."""
+
+    def __init__(self, sock, deadline):
+        self.sock, self.deadline = sock, deadline
+
+    def makefile(self, mode):
+        """Wrap unbuffered socket reads, not HTTPResponse.read's multi-recv loop."""
+        raw = self.sock.makefile(mode, buffering=0)
+        return io.BufferedReader(_DeadlineReader(raw, self.sock, self.deadline))
+
+
+class _DeadlineHTTPSConnection(http.client.HTTPSConnection):
+    """Keep standard TLS/proxy policy while budgeting each HTTP response receive."""
+
+    def __init__(self, *args, deadline, **kwargs):
+        self.deadline = deadline
+        super().__init__(*args, **kwargs)
+        # A bound factory also covers proxy CONNECT responses before TLS starts.
+        self.response_class = self._response
+
+    def _response(self, sock, *args, **kwargs):
+        """Use the same absolute deadline for CONNECT, headers and response body."""
+        return http.client.HTTPResponse(_DeadlineSocket(sock, self.deadline), *args, **kwargs)
+
+    def connect(self):
+        """Charge DNS/TCP/TLS time to the budget and bound TLS after TCP returns."""
+        self.timeout = _remaining(self.deadline)
+        original = self._create_connection
+        self._create_connection = self._connect_socket
+        try:
+            super().connect()
+            self.sock.settimeout(_remaining(self.deadline))
+        finally:
+            self._create_connection = original
+
+    def _tunnel(self):
+        """Shrink TLS's timeout after a proxy CONNECT has consumed its budget."""
+        super()._tunnel()
+        self.sock.settimeout(_remaining(self.deadline))
+
+    def _connect_socket(self, address, _timeout, source_address):
+        """Resolve once and charge every candidate TCP connection to one budget."""
+        host, port = address
+        candidates = socket.getaddrinfo(host, port, 0, socket.SOCK_STREAM)
+        _remaining(self.deadline)  # OS resolver latency is charged, never forgiven.
+        last_error = OSError("No asset endpoint addresses were available.")
+        for family, kind, protocol, _, target in candidates:
+            sock = socket.socket(family, kind, protocol)
+            try:
+                sock.settimeout(_remaining(self.deadline))
+                if source_address:
+                    sock.bind(source_address)
+                sock.connect(target)
+                sock.settimeout(_remaining(self.deadline))
+                return sock
+            except OSError as error:
+                # A second address must not receive a fresh full TCP timeout.
+                sock.close()
+                last_error = error
+            except BaseException:
+                sock.close()
+                raise
+        raise last_error
+
+
+class _DeadlineHTTPSHandler(urllib.request.HTTPSHandler):
+    """Install a deadline only on this opener; never patch global urllib state."""
+
+    def __init__(self, deadline):
+        super().__init__()
+        self.deadline = deadline
+
+    def https_open(self, request):
+        """Retain urllib proxy handling and default certificate/hostname validation."""
+        return self.do_open(partial(_DeadlineHTTPSConnection, deadline=self.deadline),
+                            request, context=self._context)
+
+
 def _download(url, maximum, hostname):
-    """Fetch one allowlisted HTTPS endpoint with no redirects and bounded memory."""
+    """Fetch pinned HTTPS with bounded bytes and a configurable monotonic budget.
+
+    Every raw socket receive uses the shrinking budget, so even a single body
+    read, header line or chunk header cannot drip forever. OS DNS resolution is
+    the explicit exception: it cannot be interrupted by socket.settimeout, but
+    an over-budget resolver result is rejected before TLS or body consumption.
+    No background download worker, automatic retry or global opener is used.
+    """
     parsed = urlsplit(url)
     if (parsed.scheme != "https" or parsed.hostname != hostname or parsed.port not in (None, 443)
             or parsed.username or parsed.password or parsed.fragment or parsed.query):
         raise AssetError("The official asset URL is invalid.")
+    raw_timeout = os.environ.get(DOWNLOAD_TIMEOUT_ENV, str(DEFAULT_DOWNLOAD_TIMEOUT))
+    if not re.fullmatch(r"[0-9]{1,4}", raw_timeout) or not 1 <= int(raw_timeout) <= 3600:
+        raise AssetError("BOT_NATIVE_DOWNLOAD_TIMEOUT must be an integer from 1 to 3600 seconds.")
+    deadline = time.monotonic() + int(raw_timeout)
     request = urllib.request.Request(url, headers={"User-Agent": "qhunliv-native-assets/1"})
-    opener = urllib.request.build_opener(_NoRedirect())
+    opener = urllib.request.build_opener(_NoRedirect(), _DeadlineHTTPSHandler(deadline))
     try:
-        with opener.open(request, timeout=60) as response:
+        with opener.open(request, timeout=_remaining(deadline)) as response:
+            _remaining(deadline)
             final = urlsplit(response.geturl())
             if final.scheme != "https" or final.hostname != hostname or response.geturl() != url:
                 raise AssetError("The official asset endpoint unexpectedly changed.")
@@ -289,7 +555,9 @@ def _download(url, maximum, hostname):
             chunks = []
             total = 0
             while True:
+                _remaining(deadline)
                 chunk = response.read(min(1024 * 1024, maximum - total + 1))
+                _remaining(deadline)
                 if not chunk:
                     break
                 total += len(chunk)
@@ -418,7 +686,12 @@ def _dashboard_matches(dashboard):
 
 
 def inspect_assets(data, repo):
-    """Report local readiness only; never download, spawn, create, or repair files.
+    """Report local readiness without download, install or ordinary file writes.
+
+    A bounded isolated interpreter probe checks installed metadata, including
+    applicable transitive requirements/extras, without importing runtime modules.
+    Only uncertain Windows probe cleanup writes the existing review guard to
+    block unsafe retries; normal inspections never create or upgrade markers.
 
     Returns:
         The three path keys plus ``ready``, boolean ``checks``, and fixed ``issues``.
@@ -426,14 +699,17 @@ def inspect_assets(data, repo):
     """
     try:
         paths = _paths(data, repo)
-        _, manifest, _ = _source(repo)
+        _, manifest, dependencies = _source(repo)
         runtime = paths["astrbot_root"].parent
         dependency = _json_file(runtime / DEPENDENCY_MARKER)
-        checks = {"setup_cleanup": not (runtime / SETUP_REVIEW_MARKER).exists(),
+        venv_valid = _venv_valid(paths["python"])
+        completion = _dependency_completion(manifest)
+        cleanup_valid = not (runtime / SETUP_REVIEW_MARKER).exists()
+        checks = {"setup_cleanup": cleanup_valid,
                   "source": _source_matches(paths["astrbot_root"], manifest),
-                  "venv": _venv_valid(paths["python"]),
-                  "dependencies": dependency == {"schema": 1, "source_sha256": manifest["source_sha256"],
-                                                   "python": list(sys.version_info[:2]), "complete": True},
+                  "venv": venv_valid,
+                  "dependencies": (cleanup_valid and venv_valid and _dependency_marker_matches(dependency, completion)
+                                   and _dependencies_valid(paths["python"], dependencies)),
                   "dashboard": _dashboard_matches(paths["dashboard"])}
         return {**paths, "ready": all(checks.values()), "checks": checks,
                 "issues": [name + " is not prepared or does not match the pinned runtime" for name, valid in checks.items() if not valid]}
@@ -486,9 +762,13 @@ def prepare_assets(data, repo):
             _run([sys.executable, "-m", "venv", str(venv)], runtime, "venv creation")
             if not _venv_valid(python):
                 raise AssetError("The dedicated native virtual environment was not created correctly.")
-        completion = {"schema": 1, "source_sha256": manifest["source_sha256"],
-                      "python": list(sys.version_info[:2]), "complete": True}
-        if _json_file(runtime / DEPENDENCY_MARKER) != completion:
+        completion = _dependency_completion(manifest)
+        previous = _json_file(runtime / DEPENDENCY_MARKER)
+        if not (_dependency_marker_matches(previous, completion) and _dependencies_valid(python, dependencies)):
+            # Invalidate stale proof before repair; a failed retry must stay not-ready.
+            marker_path = runtime / DEPENDENCY_MARKER
+            if marker_path.exists():
+                marker_path.unlink()
             cache = runtime / "pip-cache"
             # Reuse the owned-leaf ACL helper; never repair an existing foreign cache.
             if os.name == "nt":
@@ -501,6 +781,11 @@ def prepare_assets(data, repo):
                   "--no-input", "--cache-dir", str(cache), "--index-url", "https://pypi.org/simple",
                   *dependencies], root, "dependency installation")
             _run([python, "-m", "pip", "--isolated", "check"], root, "dependency verification")
+            if not _dependencies_valid(python, dependencies):
+                raise AssetError("Native dependency metadata verification did not complete.")
+            _write_json(runtime / DEPENDENCY_MARKER, completion)
+        elif previous != completion:
+            # Healthy schema-1 installs upgrade their proof without reinstalling.
             _write_json(runtime / DEPENDENCY_MARKER, completion)
         dashboard = paths["dashboard"]
         if dashboard.exists():

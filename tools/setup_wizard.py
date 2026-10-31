@@ -376,16 +376,21 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(400, {"ok": False, "message": _ERROR})
 
 
-def serve(core, data, name, *, open_browser=True):
-    """Keep setup visible until closed; closing it never stops an existing Bot."""
+def serve(core, data, name, *, open_browser=True, print_url=True):
+    """Serve one setup tab; capability output is explicit for native/manual callers."""
     with Server(Controller(core, data, name)) as server:
-        # Windows consumes this exact prefix and opens the host browser in memory.
-        print("BOT_SETUP_URL=" + server.url, flush=True)
+        # Keep the established launcher marker; native automatic browser mode
+        # explicitly disables it so private capabilities do not reach raw logs.
+        if print_url:
+            print("BOT_SETUP_URL=" + server.url, flush=True)
         if open_browser:
             try:
-                webbrowser.open(server.url)
+                if not webbrowser.open(server.url):
+                    raise OSError("browser_open_unavailable")
             except Exception:
-                print("浏览器未能自动打开，请在本机使用上方的完整链接。", flush=True)
+                hint = ("浏览器未能自动打开，请在本机使用上方的完整链接。" if print_url else
+                        "浏览器未能自动打开。关闭本向导后，使用 wizard --no-browser 在本机手动打开；不要分享授权链接。")
+                print(hint, flush=True)
         try:
             server.serve_forever(poll_interval=0.5)
         except KeyboardInterrupt:

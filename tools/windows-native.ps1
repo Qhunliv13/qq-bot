@@ -131,7 +131,7 @@ function Install-NativePython {
 }
 
 function Get-NativeSetupBrowserUrl {
-    <# Accept only the established exact loopback marker; its capability token must never reach logs. #>
+    <# Validate the loopback capability; only an explicit NoBrowser choice authorizes terminal display. #>
     param([string] $Line)
     $match = [regex]::Match($Line, '\ABOT_SETUP_URL=(http://127\.0\.0\.1:([0-9]{1,5})/#token=[A-Za-z0-9_-]{32,})\z')
     if (-not $match.Success) { return $null }
@@ -140,12 +140,29 @@ function Get-NativeSetupBrowserUrl {
     return $match.Groups[1].Value
 }
 
-# Native launcher entry point. Keep failure text fixed: paths, keys and capability tokens are never echoed.
+# Native launcher entry point. Fixed failures never echo raw errors, paths, keys or capabilities.
 $failureHint = 'Invalid option. Use a supported native command and Windows paths; keys belong in the setup form or a named environment variable.'
+# PowerShell 5.1 encodes native stdin with OutputEncoding and decodes native stdout with Console.OutputEncoding.
+# Preserve both per invocation; never modify a profile, environment variable, registry or persistent code page.
+$previousOutputEncoding = $OutputEncoding
+$previousConsoleOutputEncoding = $null
+$consoleOutputEncodingChanged = $false
 try {
     if ($ShowPassword -and $Command -ne 'info') { throw 'ShowPassword requires info.' }
     if ($Json -and $Command -ne 'info') { throw 'Json requires info.' }
+    if ($ShowPassword -and $Json) { throw 'ShowPassword cannot be combined with Json.' }
     if ($NoBrowser -and $Command -ne 'wizard') { throw 'NoBrowser requires wizard.' }
+    # A constructor expression avoids PSObject wrapping: the PS5.1 native writer must receive an Encoding instance.
+    $utf8 = [System.Text.UTF8Encoding]::new($false)
+    $OutputEncoding = $utf8
+    try {
+        $previousConsoleOutputEncoding = [Console]::OutputEncoding
+        [Console]::OutputEncoding = $utf8
+        $consoleOutputEncodingChanged = $true
+    } catch [System.IO.IOException] {
+        # A host without a console can reject SetConsoleOutputCP; do not attach/allocate a console as a side effect.
+        # Its redirected handles remain host-owned; continue without exposing the exception or changing host state.
+    }
     $repo = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).ProviderPath
     $entry = Join-Path $repo 'tools\native_runtime.py'
     if (-not (Test-Path -LiteralPath $entry -PathType Leaf)) {
@@ -179,8 +196,8 @@ try {
         if ($owner -cnotmatch '^[0-9]{5,20}$') { throw 'Invalid OwnerQQ.' }
         $runtimeArgs += @('--owner-qq', $owner)
     }
-    # The launcher consumes the existing marker; never let Python launch a second browser.
-    if ($Command -eq 'wizard') { $runtimeArgs += '--no-browser' }
+    # Request the private transport marker explicitly; Python must not open a second browser.
+    if ($Command -eq 'wizard') { $runtimeArgs += @('--no-browser', '--print-setup-url') }
 
     $failureHint = 'Existing native state could not be inspected. Restore the original private data directory; no files were changed.'
     # Existing/foreign/incomplete state must never trigger an automatic Python installation.
@@ -208,23 +225,31 @@ try {
     $global:LASTEXITCODE = $null
     if ($Command -eq 'wizard') {
         # Stream a single redirected stdout pipe. Stderr stays inherited, so neither pipe can fill while waiting.
-        $browserOpened = $false
+        $setupAddressHandled = $false
         & $executable @launchArgs | ForEach-Object {
             $line = [string] $_
             if ($line.Contains('BOT_SETUP_URL=')) {
                 $setupUrl = Get-NativeSetupBrowserUrl $line
                 if (-not $setupUrl) {
                     [Console]::Error.WriteLine('Setup returned an invalid local browser address; no browser was opened.')
-                } elseif (-not $NoBrowser -and -not $browserOpened) {
-                    try {
-                        Start-Process -FilePath $setupUrl -ErrorAction Stop | Out-Null
-                        $browserOpened = $true
-                        Write-Host 'The local setup page is open. Keep this window open while using it.'
-                    } catch {
-                        [Console]::Error.WriteLine('The setup browser could not open. Check your default Windows browser, close setup and retry.')
+                } elseif (-not $setupAddressHandled) {
+                    # A repeated marker cannot open extra tabs or duplicate a manually displayed capability.
+                    $setupAddressHandled = $true
+                    if ($NoBrowser) {
+                        # Explicit NoBrowser is the user's authorization to display this local-only capability.
+                        Write-Host 'Manual setup: open the following address only on this computer. Do not share it or copy it to public logs.'
+                        Write-Output $setupUrl
+                    } else {
+                        try {
+                            Start-Process -FilePath $setupUrl -ErrorAction Stop | Out-Null
+                            Write-Host 'The local setup page is open. Keep this window open while using it.'
+                        } catch {
+                            # Browser errors may contain the URL: retain a fixed message and require deliberate disclosure.
+                            [Console]::Error.WriteLine('The setup browser could not open. Close setup, then run wizard -NoBrowser to display a private manual setup address on this computer. Do not share that address.')
+                        }
                     }
                 }
-                # Valid, invalid and repeated capability markers are all consumed, never printed.
+                # Default, malformed and repeated capability markers never reach routine terminal output.
             } else { Write-Output $line }
         }
     } elseif ($hasPipelineInput) { $pipelineInput | & $executable @launchArgs }
@@ -234,5 +259,13 @@ try {
 } catch {
     [Console]::Error.WriteLine('Windows native launcher: ' + $failureHint)
     exit 2
+} finally {
+    $OutputEncoding = $previousOutputEncoding
+    if ($consoleOutputEncodingChanged) {
+        try { [Console]::OutputEncoding = $previousConsoleOutputEncoding }
+        catch [System.IO.IOException] {
+            # A detached/closed console cannot be repaired here without a new global host side effect.
+        }
+    }
 }
 } # end: preserve a live console or forward pipeline input exactly once
